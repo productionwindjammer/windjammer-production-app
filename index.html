@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Windjammer Production App</title>
+    <link rel="stylesheet" href="css/styles.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     LOGIN SCREEN
+════════════════════════════════════════════════════════════════ -->
+<div id="loginScreen" class="login-screen">
+    <div class="login-card">
+        <div class="login-logo">
+            <i class="fas fa-wind"></i>
+            <h1>Windjammer</h1>
+            <p>Production App</p>
+        </div>
+        <form id="loginForm" class="login-form">
+            <div class="form-group">
+                <label for="loginName">Name</label>
+                <input type="text" id="loginName" placeholder="Your name" autocomplete="name" required>
+            </div>
+            <div class="form-group">
+                <label for="loginPin">PIN</label>
+                <input type="password" id="loginPin" placeholder="PIN" autocomplete="current-password" required>
+            </div>
+            <div id="loginError" class="login-error" style="display:none;">
+                <i class="fas fa-exclamation-circle"></i>
+                <span id="loginErrorText"></span>
+            </div>
+            <button type="submit" id="loginBtn" class="btn-primary">
+                <i class="fas fa-sign-in-alt"></i> Sign In
+            </button>
+        </form>
+    </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     APP CONTAINER
+════════════════════════════════════════════════════════════════ -->
+<div id="appContainer" style="display:none;">
+
+    <!-- Top Nav -->
+    <header class="topnav">
+        <div class="topnav-left">
+            <button class="nav-hamburger" id="navToggle"><i class="fas fa-bars"></i></button>
+            <span class="nav-brand"><i class="fas fa-wind"></i> Windjammer</span>
+        </div>
+        <div class="topnav-center" id="stageTabBar">
+            <!-- Stage tabs injected by JS -->
+        </div>
+        <div class="topnav-right">
+            <span id="navUserName" class="nav-user"></span>
+            <button class="nav-icon-btn" id="logoutBtn" title="Logout"><i class="fas fa-sign-out-alt"></i></button>
+        </div>
+    </header>
+
+    <!-- Sidebar -->
+    <nav class="sidebar" id="sidebar">
+        <ul class="sidebar-menu" id="sidebarMenu">
+            <li data-page="dashboard" class="active"><i class="fas fa-th-large"></i><span>Dashboard</span></li>
+            <li data-page="productions"><i class="fas fa-ticket-alt"></i><span>Productions</span></li>
+            <li data-page="crew"><i class="fas fa-users"></i><span>Crew</span></li>
+            <li data-page="tasks"><i class="fas fa-tasks"></i><span>Tasks</span></li>
+            <li data-page="equipment"><i class="fas fa-tools"></i><span>Equipment</span></li>
+            <li data-page="settings" id="navSettings"><i class="fas fa-cog"></i><span>Settings</span></li>
+        </ul>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="main-content" id="mainContent">
+
+        <!-- ── DASHBOARD ─────────────────────────────────────────── -->
+        <section id="dashboardView" class="page-view active">
+            <div class="page-header">
+                <h2 id="dashboardTitle"><i class="fas fa-th-large"></i> Dashboard</h2>
+            </div>
+
+            <!-- Stage tabs content -->
+            <div id="stageDashboards">
+                <!-- Inside Stage Dashboard -->
+                <div id="dash-inside" class="stage-dashboard">
+                    <div class="stage-badge inside">Inside Stage</div>
+                    <div class="stat-cards" id="insideStatCards">
+                        <div class="stat-card">
+                            <div class="stat-icon"><i class="fas fa-calendar-check"></i></div>
+                            <div class="stat-info"><div class="stat-num" id="inside-statProductions">—</div><div class="stat-label">Upcoming Productions</div></div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-icon"><i class="fas fa-tasks"></i></div>
+                            <div class="stat-info"><div class="stat-num" id="inside-statTasks">—</div><div class="stat-label">Pending Tasks</div></div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-icon"><i class="fas fa-users"></i></div>
+                            <div class="stat-info"><div class="stat-num" id="inside-statCrew">—</div><div class="stat-label">Crew Assigned</div></div>
+                        </div>
+                    </div>
+                    <div class="dashboard-widgets">
+                        <div class="widget" id="inside-widgetProductions">
+                            <div class="widget-header"><i class="fas fa-ticket-alt"></i> <span>Upcoming Productions</span></div>
+                            <div class="widget-body" id="inside-widgetProductionsBody"><div class="widget-loading"><i class="fas fa-spinner fa-spin"></i></div></div>
+                        </div>
+                        <div class="widget" id="inside-widgetTasks">
+                            <div class="widget-header"><i class="fas fa-tasks"></i> <span>Open Tasks</span></div>
+                            <div class="widget-body" id="inside-widgetTasksBody"><div class="widget-loading"><i class="fas fa-spinner fa-spin"></i></div></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Beach Stage Dashboard -->
+                <div id="dash-beach" class="stage-dashboard" style="display:none;">
+                    <div class="stage-badge beach">Beach Stage</div>
+                    <div class="stat-cards" id="beachStatCards">
+                        <div class="stat-card">
+                            <div class="stat-icon"><i class="fas fa-calendar-check"></i></div>
+                            <div class="stat-info"><div class="stat-num" id="beach-statProductions">—</div><div class="stat-label">Upcoming Productions</div></div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-icon"><i class="fas fa-tasks"></i></div>
+                            <div class="stat-info"><div class="stat-num" id="beach-statTasks">—</div><div class="stat-label">Pending Tasks</div></div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-icon"><i class="fas fa-users"></i></div>
+                            <div class="stat-info"><div class="stat-num" id="beach-statCrew">—</div><div class="stat-label">Crew Assigned</div></div>
+                        </div>
+                    </div>
+                    <div class="dashboard-widgets">
+                        <div class="widget" id="beach-widgetProductions">
+                            <div class="widget-header"><i class="fas fa-ticket-alt"></i> <span>Upcoming Productions</span></div>
+                            <div class="widget-body" id="beach-widgetProductionsBody"><div class="widget-loading"><i class="fas fa-spinner fa-spin"></i></div></div>
+                        </div>
+                        <div class="widget" id="beach-widgetTasks">
+                            <div class="widget-header"><i class="fas fa-tasks"></i> <span>Open Tasks</span></div>
+                            <div class="widget-body" id="beach-widgetTasksBody"><div class="widget-loading"><i class="fas fa-spinner fa-spin"></i></div></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ── PRODUCTIONS ───────────────────────────────────────── -->
+        <section id="productionsView" class="page-view" style="display:none;">
+            <div class="page-header">
+                <h2><i class="fas fa-ticket-alt"></i> Productions</h2>
+                <div class="page-header-actions">
+                    <div class="stage-filter-tabs" id="prodStageTabs">
+                        <button class="stage-tab active" data-stage="all">All</button>
+                        <button class="stage-tab" data-stage="inside">Inside Stage</button>
+                        <button class="stage-tab" data-stage="beach">Beach Stage</button>
+                    </div>
+                </div>
+            </div>
+            <div id="productionsList" class="cards-grid">
+                <div class="loading-state"><i class="fas fa-spinner fa-spin"></i> Loading productions…</div>
+            </div>
+        </section>
+
+        <!-- ── CREW ──────────────────────────────────────────────── -->
+        <section id="crewView" class="page-view" style="display:none;">
+            <div class="page-header">
+                <h2><i class="fas fa-users"></i> Crew</h2>
+                <p class="page-subtitle">Shared crew available for both stages</p>
+            </div>
+            <div id="crewList" class="cards-grid">
+                <div class="loading-state"><i class="fas fa-spinner fa-spin"></i> Loading crew…</div>
+            </div>
+        </section>
+
+        <!-- ── TASKS ─────────────────────────────────────────────── -->
+        <section id="tasksView" class="page-view" style="display:none;">
+            <div class="page-header">
+                <h2><i class="fas fa-tasks"></i> Tasks</h2>
+                <div class="page-header-actions">
+                    <div class="stage-filter-tabs" id="taskStageTabs">
+                        <button class="stage-tab active" data-stage="all">All</button>
+                        <button class="stage-tab" data-stage="inside">Inside Stage</button>
+                        <button class="stage-tab" data-stage="beach">Beach Stage</button>
+                    </div>
+                    <select id="taskStatusFilter" class="filter-select">
+                        <option value="">All Statuses</option>
+                        <option value="Pending">Pending</option>
+                        <option value="In Progress">In Progress</option>
+                        <option value="Completed">Completed</option>
+                        <option value="On Hold">On Hold</option>
+                    </select>
+                    <select id="taskSortSelect" class="filter-select">
+                        <option value="status-date">Status, then Date</option>
+                        <option value="date">Date (newest first)</option>
+                        <option value="status">Status only</option>
+                    </select>
+                </div>
+            </div>
+            <div id="tasksList" class="tasks-grid">
+                <div class="loading-state"><i class="fas fa-spinner fa-spin"></i> Loading tasks…</div>
+            </div>
+        </section>
+
+        <!-- ── EQUIPMENT ─────────────────────────────────────────── -->
+        <section id="equipmentView" class="page-view" style="display:none;">
+            <div class="page-header">
+                <h2><i class="fas fa-tools"></i> Equipment</h2>
+                <div class="page-header-actions">
+                    <div class="stage-filter-tabs" id="equipStageTabs">
+                        <button class="stage-tab active" data-stage="all">All</button>
+                        <button class="stage-tab" data-stage="inside">Inside Stage</button>
+                        <button class="stage-tab" data-stage="beach">Beach Stage</button>
+                    </div>
+                </div>
+            </div>
+            <div id="equipmentList" class="cards-grid">
+                <div class="loading-state"><i class="fas fa-spinner fa-spin"></i> Loading equipment…</div>
+            </div>
+        </section>
+
+        <!-- ── SETTINGS ──────────────────────────────────────────── -->
+        <section id="settingsView" class="page-view" style="display:none;">
+            <div class="page-header">
+                <h2><i class="fas fa-cog"></i> Settings</h2>
+            </div>
+            <div class="settings-panel">
+                <div class="settings-section">
+                    <h3>My Account</h3>
+                    <p id="settingsUserInfo"></p>
+                </div>
+            </div>
+        </section>
+
+    </main>
+</div>
+
+<script src="js/app.js?v=1"></script>
+</body>
+</html>
