@@ -1,4 +1,26 @@
 .env
+.env.*
+!.env.example
+
+# Secrets / credentials — must never be committed
 config/google-service-account.json
+windjammer-production-*.json
+client_secret_*.json
+secret.txt
+*.pem
+*.key
+
+# Node
 node_modules/
+client/node_modules/
+
+# Build outputs
+client/dist/
+
+# Local data
 data/*.json
+
+# Editor / OS
+.DS_Store
+.vscode/
+*.log
