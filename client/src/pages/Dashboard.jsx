@@ -7,6 +7,49 @@ import { useAuth } from '../context/AuthContext'
 const parseDate = d => d ? new Date(d + 'T12:00:00') : null
 const startOfToday = () => { const d = new Date(); d.setHours(0,0,0,0); return d }
 
+// Group shows so a multi-night run by the same artist on the same stage
+// counts as ONE event. The earliest dated row becomes the representative
+// (its id is used for navigation); extra dates are kept on `._dates`.
+function groupShowRuns(shows) {
+  const buckets = new Map()
+  for (const s of shows) {
+    const artistKey = (s.artist || s.eventName || '').trim().toLowerCase()
+    if (!artistKey) {
+      // No artist name — treat as its own event (use id as key)
+      buckets.set(`__id__${s.id}`, [s]); continue
+    }
+    const key = `${artistKey}|${(s.stage || '').toLowerCase()}`
+    if (!buckets.has(key)) buckets.set(key, [])
+    buckets.get(key).push(s)
+  }
+  const groups = []
+  for (const rows of buckets.values()) {
+    rows.sort((a, b) => (parseDate(a.date) || 0) - (parseDate(b.date) || 0))
+    const rep = rows[0]
+    groups.push({
+      ...rep,
+      _dates: rows.map(r => r.date).filter(Boolean),
+      _allShowIds: rows.map(r => r.id),
+      _nights: rows.length,
+    })
+  }
+  return groups
+}
+
+function dateRangeLabel(dates) {
+  if (!dates || dates.length === 0) return ''
+  const ds = dates.map(parseDate).filter(Boolean).sort((a, b) => a - b)
+  if (ds.length === 0) return ''
+  const fmt = d => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+  if (ds.length === 1) return fmt(ds[0])
+  // Same month? Show "Jun 12–14"
+  const first = ds[0], last = ds[ds.length - 1]
+  if (first.getMonth() === last.getMonth()) {
+    return `${first.toLocaleDateString('en-US', { month: 'short' })} ${first.getDate()}–${last.getDate()}`
+  }
+  return `${fmt(first)} – ${fmt(last)}`
+}
+
 export default function Dashboard() {
   const { user } = useAuth()
   const navigate = useNavigate()
@@ -40,9 +83,11 @@ export default function Dashboard() {
 
 function ManagerDashboard({ user, shows, labor, navigate, isManager }) {
   const today = startOfToday()
-  const upcoming = shows.filter(s => {
+  const upcomingRaw = shows.filter(s => {
     const d = parseDate(s.date); return d && d >= today && s.status !== 'cancelled'
   })
+  // Collapse multi-night runs (same artist + stage) into a single event
+  const upcoming = useMemo(() => groupShowRuns(upcomingRaw), [shows])
   const thisWeek = upcoming.filter(s => (parseDate(s.date) - today) / 86400000 <= 7)
   const insideShows = upcoming.filter(s => s.stage === 'inside')
   const beachShows  = upcoming.filter(s => s.stage === 'beach')
@@ -136,7 +181,9 @@ function buildTodoList(upcomingShows, laborRows) {
     const days = showDate ? Math.round((showDate - now) / 86400000) : null
     const dateLabel = days == null ? '' : days === 0 ? 'Today' : days === 1 ? 'Tomorrow' : `${days}d`
     const severity = days != null && days <= 3 ? 'high' : days != null && days <= 10 ? 'med' : 'low'
-    const title = s.artist || s.eventName || 'Untitled show'
+    const runSuffix = s._nights > 1 ? ` (${s._nights} nights)` : ''
+    const title = (s.artist || s.eventName || 'Untitled show') + runSuffix
+    const showIds = s._allShowIds || [s.id]
 
     if (s.advancingComplete !== 'true' && s.advancingComplete !== true) {
       const hasContact = s.tourManager || s.promoter || s.advanceEmail
@@ -162,7 +209,8 @@ function buildTodoList(upcomingShows, laborRows) {
     }
 
     if (days != null && days <= 14) {
-      const crewCount = laborRows.filter(l => l.showId === s.id).length
+      // A run is "crewed" if ANY of its dates has labor entries
+      const crewCount = laborRows.filter(l => showIds.includes(l.showId)).length
       if (crewCount === 0) {
         items.push({
           showId: s.id, kind: 'crew',
@@ -179,6 +227,7 @@ function buildTodoList(upcomingShows, laborRows) {
 }
 
 function ShowRow({ show, onClick }) {
+  const isRun = (show._nights || 1) > 1
   const d = parseDate(show.date)
   return (
     <div onClick={onClick} className="week-row">
@@ -187,7 +236,12 @@ function ShowRow({ show, onClick }) {
         <div>{d ? d.toLocaleDateString('en-US', { month: 'short' }) : ''}</div>
       </div>
       <div style={{ flex: 1 }}>
-        <div style={{ fontWeight: 600, fontSize: '0.875rem' }}>{show.artist || show.eventName || '—'}</div>
+        <div style={{ fontWeight: 600, fontSize: '0.875rem' }}>
+          {show.artist || show.eventName || '—'}
+          {isRun && <span style={{ marginLeft: 6, fontSize: '0.7rem', color: 'var(--text-muted)', fontWeight: 500 }}>
+            · {show._nights} nights ({dateRangeLabel(show._dates)})
+          </span>}
+        </div>
         <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: 2 }}>
           {show.showTime || show.doorsTime || show.venue || ''}
         </div>
