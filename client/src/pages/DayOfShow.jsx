@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import api from '../api'
 import Modal from '../components/Modal'
+import { filterShowList } from '../utils/showFilters'
 
 const BLANK = {
   showId: '', showName: '', stage: 'inside', date: '',
@@ -17,6 +18,7 @@ export default function DayOfShow() {
   const [form, setForm]       = useState(BLANK)
   const [saving, setSaving]   = useState(false)
   const [selectedShow, setSelectedShow] = useState('')
+  const [showPastShows, setShowPastShows] = useState(false)
 
   useEffect(() => {
     Promise.all([api.get('/schedule'), api.get('/shows')]).then(([sc, s]) => {
@@ -53,7 +55,7 @@ export default function DayOfShow() {
   const set = k => e => setForm(v => ({ ...v, [k]: e.target.value }))
   const f = form
 
-  const upcomingShows = [...shows].sort((a, b) => new Date(a.date) - new Date(b.date))
+  const upcomingShows = filterShowList(shows, { showPast: showPastShows })
   const filtered = items
     .filter(i => !selectedShow || i.showId === selectedShow)
     .sort((a, b) => (a.time || '').localeCompare(b.time || ''))
@@ -75,6 +77,10 @@ export default function DayOfShow() {
             <option key={s.id} value={s.id}>{s.date} — {s.artist || s.eventName} ({s.stage})</option>
           ))}
         </select>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'rgba(255,255,255,0.7)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+          <input type="checkbox" checked={showPastShows} onChange={e => setShowPastShows(e.target.checked)} />
+          Show all (incl. past)
+        </label>
       </div>
 
       <div className="card">

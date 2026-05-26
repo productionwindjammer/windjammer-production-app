@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import api from '../api'
 import Modal from '../components/Modal'
+import { filterShowList } from '../utils/showFilters'
 
 const BLANK_VENDOR = {
   company: '', contactName: '', phone: '', email: '',
@@ -22,6 +23,7 @@ export default function Vendors() {
   const [editing, setEditing]   = useState(null)
   const [form, setForm]         = useState(BLANK_VENDOR)
   const [saving, setSaving]     = useState(false)
+  const [showPastShows, setShowPastShows] = useState(false)
 
   useEffect(() => { load() }, [])
 
@@ -251,13 +253,19 @@ export default function Vendors() {
         >
           <div className="form-grid">
             <div className="form-group">
-              <label>Show</label>
+              <label>
+                Show
+                <label style={{ float: 'right', fontSize: 11, fontWeight: 400, color: 'var(--text-muted)', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={showPastShows} onChange={e => setShowPastShows(e.target.checked)} style={{ marginRight: 4, verticalAlign: 'middle' }} />
+                  Show all (incl. past)
+                </label>
+              </label>
               <select value={f.showId} onChange={e => {
                 const s = shows.find(s => s.id === e.target.value)
                 setForm(v => ({ ...v, showId: e.target.value, showName: s ? `${s.date} — ${s.artist || s.eventName}` : '' }))
               }}>
                 <option value="">Select show…</option>
-                {shows.map(s => (
+                {filterShowList(shows, { showPast: showPastShows }).map(s => (
                   <option key={s.id} value={s.id}>{s.date} — {s.artist || s.eventName}</option>
                 ))}
               </select>

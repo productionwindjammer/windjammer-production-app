@@ -1050,6 +1050,10 @@ function EmailAssignControl({ email, advances, shows, open, onToggle, onAssign, 
         <option value="">-- pick a show --</option>
         {options.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
       </select>
+      <label style={{ fontSize: 11, display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer', color: 'rgba(255,255,255,0.55)' }}>
+        <input type="checkbox" checked={showPast} onChange={e => setShowPast(e.target.checked)} />
+        Show all
+      </label>
       <label style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer' }}>
         <input type="checkbox" checked={setAdv} onChange={e => setSetAdv(e.target.checked)} />
         Also set sender as advance contact

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import api from '../api'
 import Modal from '../components/Modal'
+import { filterShowList } from '../utils/showFilters'
 
 const BLANK = {
   showId: '', showName: '', stage: 'inside',
@@ -19,6 +20,7 @@ export default function Labor() {
   const [form, setForm]       = useState(BLANK)
   const [saving, setSaving]   = useState(false)
   const [filter, setFilter]   = useState({ show: '', stage: '' })
+  const [showPastShows, setShowPastShows] = useState(false)
 
   useEffect(() => {
     Promise.all([api.get('/labor'), api.get('/shows'), api.get('/staff')]).then(([l, s, st]) => {
@@ -143,7 +145,7 @@ export default function Labor() {
       <div className="filter-bar">
         <select value={filter.show} onChange={e => setFilter(f => ({ ...f, show: e.target.value }))}>
           <option value="">All Shows</option>
-          {shows.map(s => (
+          {filterShowList(shows, { showPast: showPastShows }).map(s => (
             <option key={s.id} value={s.id}>{s.date} — {s.artist || s.eventName}</option>
           ))}
         </select>
@@ -152,6 +154,10 @@ export default function Labor() {
           <option value="inside">Inside Stage</option>
           <option value="beach">Beach Stage</option>
         </select>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'rgba(255,255,255,0.7)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+          <input type="checkbox" checked={showPastShows} onChange={e => setShowPastShows(e.target.checked)} />
+          Show all (incl. past)
+        </label>
         {filtered.length > 0 && (
           <span style={{ marginLeft: 'auto', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
             Total: <strong style={{ color: 'var(--text)' }}>${totalCost.toFixed(2)}</strong>
@@ -230,7 +236,7 @@ export default function Labor() {
                   setForm(v => ({ ...v, showId: e.target.value, showName: s ? `${s.date} — ${s.artist || s.eventName}` : '', stage: s?.stage || v.stage }))
                 }}>
                   <option value="">Select show…</option>
-                  {shows.map(s => (
+                  {filterShowList(shows, { showPast: showPastShows }).map(s => (
                     <option key={s.id} value={s.id}>{s.date} — {s.artist || s.eventName}</option>
                   ))}
                 </select>
