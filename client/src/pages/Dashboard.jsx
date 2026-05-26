@@ -1,42 +1,61 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import api from '../api'
+import { useAuth } from '../context/AuthContext'
+
+// Parse YYYY-MM-DD dates as local noon to avoid UTC timezone shifts
+const parseDate = d => d ? new Date(d + 'T12:00:00') : null
+const startOfToday = () => { const d = new Date(); d.setHours(0,0,0,0); return d }
 
 export default function Dashboard() {
-  const [shows, setShows]     = useState([])
-  const [loading, setLoading] = useState(true)
+  const { user } = useAuth()
   const navigate = useNavigate()
+  const role = user?.role || ''
+  const isCrew = role === 'crew' || role === 'staff' || role === 'tech'
+  const isManager = role === 'admin' || role === 'production_manager'
+
+  const [shows, setShows] = useState([])
+  const [labor, setLabor] = useState([])
+  const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    api.get('/shows').then(s => {
-      setShows(s.data.data || [])
-    }).finally(() => setLoading(false))
-  }, [])
+    const requests = [api.get('/shows')]
+    if (isCrew || isManager) requests.push(api.get('/labor'))
+    Promise.all(requests)
+      .then(results => {
+        setShows(results[0].data.data || [])
+        if (results[1]) setLabor(results[1].data.data || [])
+      })
+      .finally(() => setLoading(false))
+  }, [isCrew, isManager])
 
   if (loading) return <div className="loading">Loading dashboard…</div>
 
-  const today = new Date()
-  // Parse YYYY-MM-DD dates as local noon to avoid UTC midnight timezone shifts
-  const parseDate = d => d ? new Date(d + 'T12:00:00') : new Date(0)
-  const upcoming = shows.filter(s => parseDate(s.date) >= today && s.status !== 'cancelled')
-  const thisWeek = upcoming.filter(s => {
-    const diff = (parseDate(s.date) - today) / 86400000
-    return diff <= 7
+  return isCrew
+    ? <CrewDashboard user={user} shows={shows} labor={labor} navigate={navigate} />
+    : <ManagerDashboard user={user} shows={shows} labor={labor} navigate={navigate} isManager={isManager} />
+}
+
+/* ─────────────────────────────────────────────────────────────── Manager ── */
+
+function ManagerDashboard({ user, shows, labor, navigate, isManager }) {
+  const today = startOfToday()
+  const upcoming = shows.filter(s => {
+    const d = parseDate(s.date); return d && d >= today && s.status !== 'cancelled'
   })
+  const thisWeek = upcoming.filter(s => (parseDate(s.date) - today) / 86400000 <= 7)
   const insideShows = upcoming.filter(s => s.stage === 'inside')
   const beachShows  = upcoming.filter(s => s.stage === 'beach')
-  const openAdvances = shows.filter(s => !s.advancingComplete && s.status !== 'cancelled')
 
-  const recentShows = [...shows]
-    .sort((a, b) => parseDate(b.date) - parseDate(a.date))
-    .slice(0, 8)
+  const todos = useMemo(() => buildTodoList(upcoming, labor), [upcoming, labor])
+  const greeting = user?.name ? `Hi ${user.name.split(' ')[0]}` : 'Welcome'
 
   return (
     <div>
       <div className="page-header">
         <div>
-          <div className="page-title">Dashboard</div>
-          <div className="page-subtitle">Windjammer — Inside Stage & Beach Stage</div>
+          <div className="page-title">{greeting} — here's what needs you</div>
+          <div className="page-subtitle">The Windjammer · Inside Stage &amp; Beach Stage</div>
         </div>
       </div>
 
@@ -57,81 +76,220 @@ export default function Dashboard() {
           <div className="stat-sub">upcoming events</div>
         </div>
         <div className="stat-card">
-          <div className="stat-label">Open Advances</div>
-          <div className="stat-value" style={{ color: 'var(--warning)' }}>{openAdvances.length}</div>
-          <div className="stat-sub">need advancing</div>
+          <div className="stat-label">Action Items</div>
+          <div className="stat-value" style={{ color: 'var(--warning)' }}>{todos.length}</div>
+          <div className="stat-sub">need attention</div>
         </div>
-
       </div>
 
       <div className="two-col-grid">
         <div className="card">
           <div className="card-header">
-            <span className="card-title">Recent Shows</span>
-            <button className="btn btn-ghost btn-sm" onClick={() => navigate('/shows')}>View all</button>
+            <span className="card-title">Your To-Do List</span>
+            {isManager && (
+              <button className="btn btn-ghost btn-sm" onClick={() => navigate('/advancing')}>Advancing</button>
+            )}
           </div>
-          {recentShows.length === 0 ? (
-            <div className="empty-state">No shows yet</div>
+          {todos.length === 0 ? (
+            <div className="empty-state">🎉 All caught up — no open action items.</div>
           ) : (
-            <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Date</th>
-                    <th>Artist / Event</th>
-                    <th>Stage</th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {recentShows.map(show => (
-                    <tr key={show.id} style={{ cursor: 'pointer' }} onClick={() => navigate(`/shows/${show.id}`)}>
-                      <td className="text-muted">{show.date}</td>
-                      <td><strong>{show.artist || show.eventName || '—'}</strong></td>
-                      <td>
-                        <span className={`badge badge-${show.stage}`}>
-                          {show.stage === 'inside' ? 'Inside' : 'Beach'}
-                        </span>
-                      </td>
-                      <td>
-                        <span className={`badge badge-${show.status || 'pending'}`}>
-                          {show.status || 'pending'}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <ul className="todo-list">
+              {todos.map(t => (
+                <li key={`${t.showId}-${t.kind}`} className="todo-item" onClick={() => navigate(`/shows/${t.showId}`)}>
+                  <span className={`todo-badge todo-${t.severity}`}>{t.icon}</span>
+                  <div className="todo-body">
+                    <div className="todo-title">{t.title}</div>
+                    <div className="todo-meta">{t.subtitle}</div>
+                  </div>
+                  <span className="todo-date">{t.dateLabel}</span>
+                </li>
+              ))}
+            </ul>
           )}
         </div>
 
         <div className="card">
           <div className="card-header">
             <span className="card-title">This Week</span>
+            <button className="btn btn-ghost btn-sm" onClick={() => navigate('/shows')}>All shows</button>
           </div>
           {thisWeek.length === 0 ? (
-            <div className="empty-state">No shows this week</div>
+            <div className="empty-state">No shows in the next 7 days</div>
           ) : (
             <div className="form-grid">
               {thisWeek.map(show => (
-                <div key={show.id} onClick={() => navigate(`/shows/${show.id}`)} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 0', borderBottom: '1px solid var(--border)', cursor: 'pointer' }}>
-                  <div style={{ minWidth: 56, fontSize: '0.75rem', color: 'var(--text-muted)', textAlign: 'center' }}>
-                    <div style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--text)' }}>
-                      {new Date(show.date + 'T12:00:00').getDate()}
-                    </div>
-                    {new Date(show.date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short' })}
-                  </div>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontWeight: 600, fontSize: '0.875rem' }}>{show.artist || show.eventName}</div>
-                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: 2 }}>{show.venue || show.showTime || ''}</div>
-                  </div>
-                  <span className={`badge badge-${show.stage}`}>{show.stage === 'inside' ? 'Inside' : 'Beach'}</span>
-                </div>
+                <ShowRow key={show.id} show={show} onClick={() => navigate(`/shows/${show.id}`)} />
               ))}
             </div>
           )}
         </div>
+      </div>
+    </div>
+  )
+}
+
+function buildTodoList(upcomingShows, laborRows) {
+  const items = []
+  const now = startOfToday()
+  for (const s of upcomingShows) {
+    const showDate = parseDate(s.date)
+    const days = showDate ? Math.round((showDate - now) / 86400000) : null
+    const dateLabel = days == null ? '' : days === 0 ? 'Today' : days === 1 ? 'Tomorrow' : `${days}d`
+    const severity = days != null && days <= 3 ? 'high' : days != null && days <= 10 ? 'med' : 'low'
+    const title = s.artist || s.eventName || 'Untitled show'
+
+    if (s.advancingComplete !== 'true' && s.advancingComplete !== true) {
+      const hasContact = s.tourManager || s.promoter || s.advanceEmail
+      items.push({
+        showId: s.id, kind: 'advancing',
+        icon: hasContact ? '✉️' : '📞',
+        title: hasContact ? `Advance ${title}` : `Find contact for ${title}`,
+        subtitle: hasContact
+          ? `Confirm production details with ${s.tourManager || s.promoter || s.advanceEmail}`
+          : 'No tour manager / promoter on file yet',
+        dateLabel, severity,
+      })
+    }
+
+    if (!s.showTime && !s.doorsTime) {
+      items.push({
+        showId: s.id, kind: 'showtime',
+        icon: '⏰',
+        title: `Add doors / show time — ${title}`,
+        subtitle: 'No times set on the show',
+        dateLabel, severity,
+      })
+    }
+
+    if (days != null && days <= 14) {
+      const crewCount = laborRows.filter(l => l.showId === s.id).length
+      if (crewCount === 0) {
+        items.push({
+          showId: s.id, kind: 'crew',
+          icon: '👥',
+          title: `Schedule crew — ${title}`,
+          subtitle: 'No labor entries yet for this show',
+          dateLabel, severity,
+        })
+      }
+    }
+  }
+  const sevRank = { high: 0, med: 1, low: 2 }
+  return items.sort((a, b) => sevRank[a.severity] - sevRank[b.severity])
+}
+
+function ShowRow({ show, onClick }) {
+  const d = parseDate(show.date)
+  return (
+    <div onClick={onClick} className="week-row">
+      <div className="week-date">
+        <div className="week-day">{d ? d.getDate() : '—'}</div>
+        <div>{d ? d.toLocaleDateString('en-US', { month: 'short' }) : ''}</div>
+      </div>
+      <div style={{ flex: 1 }}>
+        <div style={{ fontWeight: 600, fontSize: '0.875rem' }}>{show.artist || show.eventName || '—'}</div>
+        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: 2 }}>
+          {show.showTime || show.doorsTime || show.venue || ''}
+        </div>
+      </div>
+      <span className={`badge badge-${show.stage}`}>{show.stage === 'inside' ? 'Inside' : 'Beach'}</span>
+    </div>
+  )
+}
+
+/* ────────────────────────────────────────────────────────────────── Crew ── */
+
+function CrewDashboard({ user, shows, labor, navigate }) {
+  const today = startOfToday()
+  const myName = (user?.name || '').toLowerCase()
+  const myId = user?.staffId || ''
+
+  const mine = labor
+    .filter(l => (myId && l.staffId === myId) || (myName && (l.workerName || '').toLowerCase() === myName))
+    .map(l => {
+      const show = shows.find(s => s.id === l.showId)
+      return { ...l, _show: show, _date: parseDate(show?.date) }
+    })
+    .filter(l => l._date && l._date >= today && l._show?.status !== 'cancelled')
+    .sort((a, b) => a._date - b._date)
+
+  const next = mine[0]
+  const greeting = user?.name ? `Hi ${user.name.split(' ')[0]}` : 'Welcome'
+
+  return (
+    <div>
+      <div className="page-header">
+        <div>
+          <div className="page-title">{greeting} — your schedule</div>
+          <div className="page-subtitle">{mine.length} upcoming call{mine.length === 1 ? '' : 's'}</div>
+        </div>
+      </div>
+
+      {next && (
+        <div className="card next-call-card">
+          <div className="next-call-label">Next Call</div>
+          <div className="next-call-grid">
+            <div>
+              <div className="next-call-show">{next._show?.artist || next._show?.eventName || '—'}</div>
+              <div className="next-call-meta">
+                {next._date.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
+                {next._show?.stage ? ` · ${next._show.stage === 'inside' ? 'Inside Stage' : 'Beach Stage'}` : ''}
+              </div>
+            </div>
+            <div className="next-call-time">
+              <div className="next-call-time-value">{next.callTime || '—'}</div>
+              <div className="next-call-time-label">Call</div>
+            </div>
+          </div>
+          <div className="next-call-role">{next.role || 'Crew'}</div>
+        </div>
+      )}
+
+      <div className="card">
+        <div className="card-header">
+          <span className="card-title">Upcoming Calls</span>
+        </div>
+        {mine.length === 0 ? (
+          <div className="empty-state">
+            No upcoming calls on your schedule.<br />
+            <small>If you think this is wrong, ask your production manager to add you to a show.</small>
+          </div>
+        ) : (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Show</th>
+                  <th>Role</th>
+                  <th>Call</th>
+                  <th>Wrap</th>
+                  <th>Stage</th>
+                </tr>
+              </thead>
+              <tbody>
+                {mine.map(l => (
+                  <tr key={l.id} style={{ cursor: 'pointer' }} onClick={() => navigate(`/shows/${l.showId}`)}>
+                    <td>
+                      <strong>{l._date.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}</strong>
+                    </td>
+                    <td>{l._show?.artist || l._show?.eventName || l.showName || '—'}</td>
+                    <td>{l.role || '—'}</td>
+                    <td>{l.callTime || '—'}</td>
+                    <td>{l.wrapTime || '—'}</td>
+                    <td>
+                      {l._show?.stage && (
+                        <span className={`badge badge-${l._show.stage}`}>
+                          {l._show.stage === 'inside' ? 'Inside' : 'Beach'}
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     </div>
   )

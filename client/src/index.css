@@ -160,6 +160,36 @@ textarea { resize: vertical; min-height: 80px; }
 .update-toast button    { background: var(--accent); color: #fff; border: none; border-radius: 6px; padding: 6px 12px; font-size: 0.8rem; font-weight: 600; cursor: pointer; }
 .update-toast button:hover { opacity: 0.9; }
 
+/* ─── Dashboard To-Do List ───────────────────────────────────────────────── */
+.todo-list              { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 4px; }
+.todo-item              { display: flex; align-items: center; gap: 12px; padding: 10px 8px; border-radius: 8px; cursor: pointer; transition: background 0.15s; }
+.todo-item:hover        { background: rgba(255,255,255,0.04); }
+.todo-badge             { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 8px; font-size: 1rem; flex-shrink: 0; }
+.todo-high              { background: rgba(239,68,68,0.18); color: #fca5a5; border: 1px solid rgba(239,68,68,0.4); }
+.todo-med               { background: rgba(245,158,11,0.15); color: var(--warning); border: 1px solid rgba(245,158,11,0.35); }
+.todo-low               { background: rgba(59,130,246,0.15); color: #93c5fd; border: 1px solid rgba(59,130,246,0.3); }
+.todo-body              { flex: 1; min-width: 0; }
+.todo-title             { font-size: 0.85rem; font-weight: 600; color: var(--text); }
+.todo-meta              { font-size: 0.72rem; color: var(--text-muted); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.todo-date              { font-size: 0.72rem; color: var(--text-muted); font-weight: 600; flex-shrink: 0; }
+
+/* ─── Dashboard "This Week" row ──────────────────────────────────────────── */
+.week-row               { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border); cursor: pointer; }
+.week-row:last-child    { border-bottom: none; }
+.week-date              { min-width: 56px; font-size: 0.72rem; color: var(--text-muted); text-align: center; }
+.week-day               { font-size: 1.1rem; font-weight: 700; color: var(--text); }
+
+/* ─── Crew "Next Call" hero card ─────────────────────────────────────────── */
+.next-call-card         { background: linear-gradient(135deg, rgba(59,130,246,0.12), rgba(34,197,94,0.08)); border: 1px solid rgba(59,130,246,0.35); margin-bottom: 16px; }
+.next-call-label        { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-muted); font-weight: 600; margin-bottom: 8px; }
+.next-call-grid         { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.next-call-show         { font-size: 1.4rem; font-weight: 700; line-height: 1.1; }
+.next-call-meta         { font-size: 0.85rem; color: var(--text-muted); margin-top: 6px; }
+.next-call-time         { text-align: right; }
+.next-call-time-value   { font-size: 1.8rem; font-weight: 700; color: #93c5fd; }
+.next-call-time-label   { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-muted); }
+.next-call-role         { margin-top: 12px; display: inline-block; padding: 4px 10px; border-radius: 999px; background: rgba(255,255,255,0.06); font-size: 0.75rem; font-weight: 600; color: var(--text); }
+
 /* ─── Misc ───────────────────────────────────────────────────────────────── */
 .empty-state  { text-align: center; padding: 48px 24px; color: var(--text-muted); }
 .error-msg    { color: var(--danger); font-size: 0.82rem; margin-top: 4px; }

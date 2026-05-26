@@ -70,7 +70,7 @@ app.post('/api/auth/login', async (req, res) => {
     if (!valid)                              return res.status(401).json({ success: false, message: 'Invalid credentials' });
     if (user.active?.toLowerCase() === 'false') return res.status(403).json({ success: false, message: 'Account disabled' });
     const token = signToken(user);
-    res.json({ success: true, token, user: { id: user.id, name: user.name, role: user.role, email: user.email } });
+    res.json({ success: true, token, user: { id: user.id, name: user.name, role: user.role, email: user.email, staffId: user.staffId || '' } });
   } catch (err) {
     console.error('Login error:', err);
     res.status(500).json({ success: false, message: 'Server error' });
@@ -526,7 +526,7 @@ app.post('/api/onboard/:token', async (req, res) => {
     res.json({
       success: true,
       token,
-      user: { id: user.id, name: user.name, role: user.role, email: user.email },
+      user: { id: user.id, name: user.name, role: user.role, email: user.email, staffId: user.staffId || '' },
     });
   } catch (err) {
     if (err.name === 'TokenExpiredError')
