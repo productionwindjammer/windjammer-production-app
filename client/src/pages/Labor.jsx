@@ -47,7 +47,6 @@ export default function Labor() {
       makeCrewRow('House Crew'),
       makeCrewRow('House Crew'),
       makeCrewRow('House Crew'),
-      makeCrewRow('Stagehand'),
     ])
     setCrewQuickRow(null); setCrewQuickName('')
     setCrewModal(true)
