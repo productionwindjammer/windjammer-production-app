@@ -30,10 +30,12 @@ export default function ShowDetail() {
   const navigate = useNavigate()
 
   const [show, setShow]           = useState(null)
+  const [siblings, setSiblings]   = useState([]) // other dates of the same multi-night run
   const [advancing, setAdvancing] = useState(null)
   const [schedule, setSchedule]   = useState([])
   const [labor, setLabor]         = useState([])
   const [loading, setLoading]     = useState(true)
+  const [copyingFrom, setCopyingFrom] = useState('')
   const [activeTab, setActiveTab] = useState('advancing')
   const [artistFilled, setArtistFilled] = useState(false)
 
@@ -77,6 +79,16 @@ export default function ShowDetail() {
       if (!thisShow) { navigate('/shows'); return }
       setShow(thisShow)
       setShowForm({ ...BLANK_SHOW, ...thisShow })
+
+      // Find sibling shows: same artist + stage (case-insensitive) = same run
+      const artistLc = (thisShow.artist || thisShow.eventName || '').trim().toLowerCase()
+      const sibs = artistLc
+        ? shows
+            .filter(s => (s.artist || s.eventName || '').trim().toLowerCase() === artistLc
+                       && (s.stage || '').toLowerCase() === (thisShow.stage || '').toLowerCase())
+            .sort((a, b) => (a.date || '').localeCompare(b.date || ''))
+        : [thisShow]
+      setSiblings(sibs)
 
       const advances = advRes.data.data || []
       let adv = advances.find(a => a.showId === id)
@@ -202,6 +214,42 @@ export default function ShowDetail() {
     await reloadSchedule()
   }
 
+  async function handleCopySchedule(fromShowId) {
+    if (!fromShowId) return
+    setCopyingFrom(fromShowId)
+    try {
+      const sourceShow = siblings.find(s => s.id === fromShowId)
+      const sourceName = sourceShow ? `Night ${siblings.findIndex(s => s.id === fromShowId) + 1} (${sourceShow.date})` : 'that night'
+      const replaceAll = schedule.length > 0
+        ? confirm(`Copy ${sourceName}'s schedule into THIS day?\n\nClick OK to REPLACE this day's ${schedule.length} item(s).\nClick Cancel to keep both (append).`)
+        : true
+      const res = await api.get('/schedule')
+      const allSched = res.data.data || []
+      const sourceItems = allSched.filter(s => s.showId === fromShowId)
+      if (sourceItems.length === 0) {
+        alert('That night has no schedule items yet.')
+        return
+      }
+      if (replaceAll) {
+        await Promise.all(schedule.map(s => api.delete(`/schedule/${s.id}`)))
+      }
+      for (const item of sourceItems) {
+        // eslint-disable-next-line no-unused-vars
+        const { id: _omit, createdAt, updatedAt, ...rest } = item
+        await api.post('/schedule', {
+          ...rest,
+          showId:   id,
+          showName: `${show.date} — ${show.artist || show.eventName}`,
+          stage:    show.stage,
+          date:     show.date,
+        })
+      }
+      await reloadSchedule()
+    } finally {
+      setCopyingFrom('')
+    }
+  }
+
   // ── Labor ────────────────────────────────────────────────────────────────────
   const setL = k => e => setLaborForm(v => ({ ...v, [k]: e.target.value }))
 
@@ -292,6 +340,42 @@ export default function ShowDetail() {
           </div>
         </div>
       </div>
+
+      {/* ── Day selector (only shown for multi-night runs) ──────────────── */}
+      {siblings.length > 1 && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+          padding: '10px 14px', marginBottom: 16, borderRadius: 8,
+          background: 'rgba(255,255,255,0.03)',
+          border: '1px solid rgba(255,255,255,0.08)',
+        }}>
+          <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.5)', textTransform: 'uppercase', letterSpacing: '0.08em', marginRight: 4 }}>
+            {siblings.length}-Night Run · Day
+          </span>
+          {siblings.map((s, idx) => {
+            const isActive = s.id === id
+            const d = s.date ? new Date(s.date + 'T12:00:00') : null
+            return (
+              <button
+                key={s.id}
+                onClick={() => isActive ? null : navigate(`/shows/${s.id}`)}
+                style={{
+                  padding: '6px 12px', borderRadius: 6, cursor: isActive ? 'default' : 'pointer',
+                  border: isActive ? `1px solid ${stageColor}` : '1px solid rgba(255,255,255,0.1)',
+                  background: isActive ? `rgba(${stageRgb},0.18)` : 'transparent',
+                  color: isActive ? '#fff' : 'rgba(255,255,255,0.65)',
+                  fontWeight: isActive ? 600 : 400, fontSize: 13,
+                }}
+              >
+                Night {idx + 1}
+                {d && <span style={{ marginLeft: 6, opacity: 0.7, fontSize: 11 }}>
+                  · {d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                </span>}
+              </button>
+            )
+          })}
+        </div>
+      )}
 
       {/* ── Tabs ─────────────────────────────────────────────────────────────── */}
       <div style={{ display: 'flex', gap: 0, marginBottom: 20, borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
@@ -423,7 +507,24 @@ export default function ShowDetail() {
       ══════════════════════════════════════════════════════════════════════ */}
       {activeTab === 'schedule' && (
         <div>
-          <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+            {siblings.length > 1 && (
+              <select
+                value={copyingFrom}
+                onChange={e => handleCopySchedule(e.target.value)}
+                style={{
+                  padding: '8px 12px', borderRadius: 6, fontSize: 13,
+                  background: 'rgba(255,255,255,0.04)',
+                  border: '1px solid rgba(255,255,255,0.12)', color: '#fff',
+                }}
+              >
+                <option value="">📋 Copy schedule from another night…</option>
+                {siblings.filter(s => s.id !== id).map((s, idx) => {
+                  const nightIdx = siblings.findIndex(x => x.id === s.id) + 1
+                  return <option key={s.id} value={s.id}>Night {nightIdx} — {s.date}</option>
+                })}
+              </select>
+            )}
             <button className="btn btn-primary" onClick={openAddSched}>+ Add Item</button>
           </div>
           <div className="card">
