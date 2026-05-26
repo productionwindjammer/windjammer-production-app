@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider } from './context/AuthContext'
 import ProtectedRoute from './components/ProtectedRoute'
 import Layout from './components/Layout'
+import UpdatePrompt from './components/UpdatePrompt'
 import Login from './pages/Login'
 import Onboard from './pages/Onboard'
 import Dashboard from './pages/Dashboard'
@@ -22,6 +23,7 @@ export default function App() {
     <SettingsProvider>
     <AuthProvider>
       <BrowserRouter>
+        <UpdatePrompt />
         <Routes>
           <Route path="/login" element={<Login />} />
           <Route path="/onboard/:token" element={<Onboard />} />

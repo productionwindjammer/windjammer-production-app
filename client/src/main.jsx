@@ -3,12 +3,8 @@ import ReactDOM from 'react-dom/client'
 import App from './App.jsx'
 import './index.css'
 
-// Register service worker so the app is installable as a PWA
-if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js').catch(err => console.warn('SW registration failed:', err))
-  })
-}
+// Service worker registration + auto-update toast live inside <UpdatePrompt />
+// (mounted in App.jsx) so installed PWA users get new deploys automatically.
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>

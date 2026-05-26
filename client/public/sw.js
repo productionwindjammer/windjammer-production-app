@@ -1,32 +1,67 @@
-// Minimal service worker — required for full PWA installability on some browsers.
-// Network-first; falls back to cache for offline shell.
-const CACHE = 'windjammer-v1';
-const SHELL = ['/', '/icon-192.png', '/icon-512.png', '/apple-touch-icon.png', '/manifest.webmanifest'];
+// Service worker that keeps installed users on the latest version.
+//   - HTML/navigation requests: network-first (so index.html always reflects newest deploy)
+//   - Hashed JS/CSS/images: cache-first (Vite fingerprints filenames, so stale = wrong URL = miss)
+//   - On update, notifies open clients so the UI can prompt a reload.
+//
+// Bump CACHE when you intentionally want to nuke all old caches.
+const CACHE = 'windjammer-v2';
+const SHELL = ['/manifest.webmanifest', '/icon-192.png', '/icon-512.png', '/apple-touch-icon.png'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).catch(() => {}));
+  // Activate immediately so we don't wait for all tabs to close
   self.skipWaiting();
 });
 
 self.addEventListener('activate', e => {
-  e.waitUntil(
-    caches.keys().then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k))))
-  );
-  self.clients.claim();
+  e.waitUntil((async () => {
+    const keys = await caches.keys();
+    await Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k)));
+    await self.clients.claim();
+    const clients = await self.clients.matchAll({ type: 'window' });
+    clients.forEach(c => c.postMessage({ type: 'SW_UPDATED' }));
+  })());
+});
+
+// Allow the page to trigger an immediate skip-waiting
+self.addEventListener('message', e => {
+  if (e.data && e.data.type === 'SKIP_WAITING') self.skipWaiting();
 });
 
 self.addEventListener('fetch', e => {
   const req = e.request;
   if (req.method !== 'GET') return;
-  // Never cache API calls
-  if (new URL(req.url).pathname.startsWith('/api/')) return;
-  e.respondWith(
-    fetch(req)
-      .then(res => {
-        const copy = res.clone();
-        caches.open(CACHE).then(c => c.put(req, copy)).catch(() => {});
-        return res;
-      })
-      .catch(() => caches.match(req).then(r => r || caches.match('/')))
-  );
+  const url = new URL(req.url);
+
+  // Never cache API or auth callbacks
+  if (url.pathname.startsWith('/api/')) return;
+
+  // HTML / navigations: network-first so users always pick up the newest deploy
+  const isHtml =
+    req.mode === 'navigate' ||
+    (req.headers.get('accept') || '').includes('text/html');
+  if (isHtml) {
+    e.respondWith((async () => {
+      try {
+        const fresh = await fetch(req, { cache: 'no-store' });
+        const copy = fresh.clone();
+        caches.open(CACHE).then(c => c.put('/', copy)).catch(() => {});
+        return fresh;
+      } catch {
+        const cached = await caches.match('/') || await caches.match(req);
+        return cached || new Response('Offline', { status: 503, statusText: 'Offline' });
+      }
+    })());
+    return;
+  }
+
+  // Static assets: cache-first, refresh in background
+  e.respondWith((async () => {
+    const cached = await caches.match(req);
+    const network = fetch(req).then(res => {
+      if (res && res.ok) caches.open(CACHE).then(c => c.put(req, res.clone())).catch(() => {});
+      return res;
+    }).catch(() => null);
+    return cached || network || new Response('', { status: 504 });
+  })());
 });

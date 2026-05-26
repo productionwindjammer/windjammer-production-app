@@ -12,9 +12,21 @@ const app = express();
 app.set('trust proxy', true);
 app.use(express.json({ limit: '10mb' }));
 
-// Serve React build in production
+// Serve React build in production.
+// Hashed assets get long cache; HTML and sw.js MUST always be fresh so users
+// pick up new Railway deploys without manual cache-clearing.
 if (process.env.NODE_ENV === 'production') {
-  app.use(express.static(path.join(__dirname, 'client/dist')));
+  app.use(express.static(path.join(__dirname, 'client/dist'), {
+    setHeaders(res, filePath) {
+      const base = path.basename(filePath);
+      if (base === 'sw.js' || base === 'index.html' || base === 'manifest.webmanifest') {
+        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      } else if (/\/assets\//.test(filePath)) {
+        // Vite fingerprints assets/* so they're safe to cache forever
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      }
+    },
+  }));
 }
 
 // ── Auth Helpers ─────────────────────────────────────────────────────────────
@@ -1756,6 +1768,7 @@ app.post('/api/scrape/import', requireAuth, requireRole('admin', 'production_man
 // ── SPA catch-all (production) ────────────────────────────────────────────────
 if (process.env.NODE_ENV === 'production') {
   app.get('*', (req, res) => {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     res.sendFile(path.join(__dirname, 'client/dist/index.html'));
   });
 }
