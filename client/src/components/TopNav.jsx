@@ -3,8 +3,8 @@ import { useAuth } from '../context/AuthContext'
 import { navForRole } from '../nav'
 
 export default function TopNav() {
-  const { user } = useAuth()
-  const items = navForRole(user?.role)
+  const { effectiveRole } = useAuth()
+  const items = navForRole(effectiveRole)
   return (
     <nav className="top-nav">
       {items.map(item => (

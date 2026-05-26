@@ -43,6 +43,15 @@ body {
 .btn-logout       { background: none; border: 1px solid var(--border); color: var(--text-muted); padding: 5px 12px; border-radius: 6px; font-size: 0.8rem; cursor: pointer; transition: color 0.15s, border-color 0.15s; }
 .btn-logout:hover { color: var(--danger); border-color: var(--danger); }
 
+/* ─── View-as switcher (admin-only) ──────────────────────────────────────── */
+.view-as              { display: flex; align-items: center; gap: 6px; font-size: 0.75rem; color: var(--text-muted); }
+.view-as-label        { text-transform: uppercase; letter-spacing: 0.08em; font-weight: 600; }
+.view-as select       { background: var(--bg-card); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; font-size: 0.8rem; cursor: pointer; }
+.view-as select:hover { border-color: var(--accent); }
+
+.impersonation-banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 20px; background: rgba(234,179,8,0.12); border-bottom: 1px solid rgba(234,179,8,0.35); color: #fde68a; font-size: 0.85rem; }
+.impersonation-banner strong { color: #fff8d6; }
+
 /* ─── Sidebar ────────────────────────────────────────────────────────────── */
 .sidebar-brand         { padding: 18px 16px 14px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; align-items: center; gap: 6px; }
 .sidebar-brand h2      { font-size: 0.9rem; font-weight: 700; color: var(--text); }

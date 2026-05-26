@@ -53,13 +53,15 @@ function dateRangeLabel(dates) {
 }
 
 export default function Dashboard() {
-  const { user } = useAuth()
+  const { user, effectiveRole } = useAuth()
   const { settings } = useSettings()
   const tf = settings.timeFormat || '12h'
   const navigate = useNavigate()
-  const role = user?.role || ''
-  const isCrew = role === 'crew' || role === 'staff' || role === 'tech'
-  const isManager = role === 'admin' || role === 'production_manager'
+  const role = effectiveRole || user?.role || ''
+  const isCrew     = role === 'crew' || role === 'staff' || role === 'tech'
+  const isManager  = role === 'admin' || role === 'production_manager'
+  const isPromoter = role === 'promoter'
+  const isVenue    = role === 'venue_management'
 
   const [shows, setShows] = useState([])
   const [labor, setLabor] = useState([])
@@ -78,9 +80,10 @@ export default function Dashboard() {
 
   if (loading) return <div className="loading">Loading dashboard…</div>
 
-  return isCrew
-    ? <CrewDashboard user={user} shows={shows} labor={labor} navigate={navigate} />
-    : <ManagerDashboard user={user} shows={shows} labor={labor} navigate={navigate} isManager={isManager} />
+  if (isPromoter) return <PromoterDashboard user={user} shows={shows} navigate={navigate} tf={tf} />
+  if (isVenue)    return <VenueDashboard    user={user} shows={shows} navigate={navigate} tf={tf} />
+  if (isCrew)     return <CrewDashboard     user={user} shows={shows} labor={labor} navigate={navigate} />
+  return <ManagerDashboard user={user} shows={shows} labor={labor} navigate={navigate} isManager={isManager} />
 }
 
 /* ─────────────────────────────────────────────────────────────── Manager ── */
@@ -352,6 +355,171 @@ function CrewDashboard({ user, shows, labor, navigate }) {
             </table>
           </div>
         )}
+      </div>
+    </div>
+  )
+}
+
+/* ────────────────────────────────────────────────────────────── Promoter ── */
+
+/**
+ * Promoter view: this venue has a single in-house promoter, so we show ALL
+ * upcoming shows with the production info that matters most for promotion —
+ * artist, date, stage, doors/show times, ticket status, and advancing
+ * progress. Read-only; clicking a row opens the full show detail.
+ */
+function PromoterDashboard({ user, shows, navigate, tf }) {
+  const today = startOfToday()
+  const upcomingRaw = shows.filter(s => {
+    const d = parseDate(s.date); return d && d >= today && s.status !== 'cancelled'
+  })
+  const upcoming = useMemo(() => groupShowRuns(upcomingRaw), [shows])
+  const thisWeek = upcoming.filter(s => (parseDate(s.date) - today) / 86400000 <= 7)
+  const insideShows = upcoming.filter(s => s.stage === 'inside')
+  const beachShows  = upcoming.filter(s => s.stage === 'beach')
+  const needAdvancing = upcoming.filter(s =>
+    s.advancingComplete !== 'true' && s.advancingComplete !== true
+  ).length
+
+  const greeting = user?.name ? `Hi ${user.name.split(' ')[0]}` : 'Welcome'
+
+  return (
+    <div>
+      <div className="page-header">
+        <div>
+          <div className="page-title">{greeting} — promoter overview</div>
+          <div className="page-subtitle">The Windjammer · all upcoming shows</div>
+        </div>
+      </div>
+
+      <div className="stat-grid">
+        <div className="stat-card">
+          <div className="stat-label">Upcoming Shows</div>
+          <div className="stat-value">{upcoming.length}</div>
+          <div className="stat-sub">{thisWeek.length} this week</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label">Inside Stage</div>
+          <div className="stat-value" style={{ color: '#60aeff' }}>{insideShows.length}</div>
+          <div className="stat-sub">upcoming events</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label">Beach Stage</div>
+          <div className="stat-value" style={{ color: '#4ade80' }}>{beachShows.length}</div>
+          <div className="stat-sub">upcoming events</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label">Pending Advancing</div>
+          <div className="stat-value" style={{ color: 'var(--warning)' }}>{needAdvancing}</div>
+          <div className="stat-sub">not yet confirmed</div>
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="card-header">
+          <span className="card-title">All Upcoming Shows</span>
+          <button className="btn btn-ghost btn-sm" onClick={() => navigate('/shows')}>Open shows</button>
+        </div>
+        {upcoming.length === 0 ? (
+          <div className="empty-state">No upcoming shows on the books.</div>
+        ) : (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Artist</th>
+                  <th>Stage</th>
+                  <th>Doors</th>
+                  <th>Show</th>
+                  <th>Advancing</th>
+                </tr>
+              </thead>
+              <tbody>
+                {upcoming.map(s => {
+                  const d = parseDate(s.date)
+                  const advanced = s.advancingComplete === 'true' || s.advancingComplete === true
+                  const isRun = (s._nights || 1) > 1
+                  return (
+                    <tr key={s.id} style={{ cursor: 'pointer' }} onClick={() => navigate(`/shows/${s.id}`)}>
+                      <td>
+                        <strong>{d ? d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }) : '—'}</strong>
+                        {isRun && (
+                          <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                            {s._nights} nights ({dateRangeLabel(s._dates)})
+                          </div>
+                        )}
+                      </td>
+                      <td>{s.artist || s.eventName || '—'}</td>
+                      <td>
+                        {s.stage && (
+                          <span className={`badge badge-${s.stage}`}>
+                            {s.stage === 'inside' ? 'Inside' : 'Beach'}
+                          </span>
+                        )}
+                      </td>
+                      <td>{s.doorsTime ? formatTime(s.doorsTime, tf) : '—'}</td>
+                      <td>{s.showTime ? formatTime(s.showTime, tf) : '—'}</td>
+                      <td>
+                        <span className={`badge badge-${advanced ? 'confirmed' : 'cancelled'}`}>
+                          {advanced ? 'Confirmed' : 'Pending'}
+                        </span>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/* ─────────────────────────────────────────────────────────────── Venue ── */
+
+/**
+ * Venue Management view: deliberately minimal for now. The detailed
+ * dashboard (occupancy, revenue indicators, etc.) is planned for a later
+ * pass — this stub keeps the role usable in the meantime.
+ */
+function VenueDashboard({ user, shows, navigate }) {
+  const today = startOfToday()
+  const upcomingRaw = shows.filter(s => {
+    const d = parseDate(s.date); return d && d >= today && s.status !== 'cancelled'
+  })
+  const upcoming = useMemo(() => groupShowRuns(upcomingRaw), [shows])
+  const thisWeek = upcoming.filter(s => (parseDate(s.date) - today) / 86400000 <= 7)
+  const greeting = user?.name ? `Hi ${user.name.split(' ')[0]}` : 'Welcome'
+
+  return (
+    <div>
+      <div className="page-header">
+        <div>
+          <div className="page-title">{greeting} — venue overview</div>
+          <div className="page-subtitle">The Windjammer · management snapshot</div>
+        </div>
+      </div>
+
+      <div className="stat-grid">
+        <div className="stat-card">
+          <div className="stat-label">Upcoming Shows</div>
+          <div className="stat-value">{upcoming.length}</div>
+          <div className="stat-sub">{thisWeek.length} this week</div>
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="card-header">
+          <span className="card-title">Coming Soon</span>
+          <button className="btn btn-ghost btn-sm" onClick={() => navigate('/shows')}>View shows</button>
+        </div>
+        <div className="empty-state">
+          A dedicated venue-management dashboard (occupancy, revenue, staffing
+          overview) is on the roadmap. For now, jump into Shows to browse the
+          full calendar.
+        </div>
       </div>
     </div>
   )

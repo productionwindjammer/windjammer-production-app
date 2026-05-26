@@ -4,8 +4,8 @@ import { navForRole } from '../nav'
 import InstallApp from './InstallApp'
 
 export default function Sidebar() {
-  const { user } = useAuth()
-  const items = navForRole(user?.role)
+  const { effectiveRole } = useAuth()
+  const items = navForRole(effectiveRole)
   return (
     <nav className="sidebar">
       <div className="sidebar-brand">

@@ -10,6 +10,8 @@ const ROLES = [
   { value: 'admin',              label: 'Admin' },
   { value: 'production_manager', label: 'Production Manager' },
   { value: 'crew',               label: 'Crew' },
+  { value: 'promoter',           label: 'Promoter' },
+  { value: 'venue_management',   label: 'Venue Management' },
 ]
 
 export default function Users() {
