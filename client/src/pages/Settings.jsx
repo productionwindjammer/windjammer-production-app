@@ -100,6 +100,11 @@ export default function Settings() {
               {NAV_PATHS.map(n => <option key={n.path} value={n.path}>{n.label}</option>)}
             </select>
           </Field>
+
+          <Field label="Time format" hint="How call times, doors, show times, etc. are displayed and printed.">
+            <SegBtn options={[{ v: '12h', l: '12-hour (1:30 PM)' }, { v: '24h', l: '24-hour (13:30)' }]}
+                    value={settings.timeFormat} onChange={v => update({ timeFormat: v })} />
+          </Field>
         </div>
       </div>
 

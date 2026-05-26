@@ -3,7 +3,9 @@ import { useNavigate } from 'react-router-dom'
 import api from '../api'
 import Modal from '../components/Modal'
 import { useAuth } from '../context/AuthContext'
+import { useSettings } from '../context/SettingsContext'
 import { filterShowList } from '../utils/showFilters'
+import { formatTime } from '../utils/time'
 
 const BLANK = {
   showId: '', showName: '', stage: 'inside',
@@ -22,6 +24,8 @@ const SCHED_BLANK = { showId: '', showName: '', stage: 'inside', label: '', time
 export default function Advancing() {
   const { user } = useAuth()
   const navigate = useNavigate()
+  const { settings } = useSettings()
+  const tf = settings.timeFormat || '12h'
 
   const [records, setRecords]     = useState([])
   const [shows, setShows]         = useState([])
@@ -242,7 +246,7 @@ export default function Advancing() {
     const scheduleRows = [...schedule]
       .sort((a, b) => (a.time || '').localeCompare(b.time || ''))
       .map(s => `<tr>
-        <td style="padding:5px 12px 5px 0;border-bottom:1px solid #eee;white-space:nowrap">${s.time || '—'}</td>
+        <td style="padding:5px 12px 5px 0;border-bottom:1px solid #eee;white-space:nowrap">${formatTime(s.time, tf) || '—'}</td>
         <td style="padding:5px 12px 5px 0;border-bottom:1px solid #eee;font-weight:600">${s.label || s.eventType || '—'}</td>
         <td style="padding:5px 12px 5px 0;border-bottom:1px solid #eee;color:#555">${s.responsible || ''}</td>
         <td style="padding:5px 0;border-bottom:1px solid #eee;color:#777">${s.notes || ''}</td>
@@ -252,7 +256,7 @@ export default function Advancing() {
       .map(l => `<tr>
         <td style="padding:5px 12px 5px 0;border-bottom:1px solid #eee;font-weight:600">${l.role || '—'}</td>
         <td style="padding:5px 12px 5px 0;border-bottom:1px solid #eee">${l.workerName || '—'}</td>
-        <td style="padding:5px 12px 5px 0;border-bottom:1px solid #eee">${l.callTime || '—'}</td>
+        <td style="padding:5px 12px 5px 0;border-bottom:1px solid #eee">${formatTime(l.callTime, tf) || '—'}</td>
         <td style="padding:5px 0;border-bottom:1px solid #eee;color:#777">${l.notes || ''}</td>
       </tr>`).join('')
 
@@ -273,7 +277,7 @@ export default function Advancing() {
       <div style="text-align:center;border-bottom:4px solid ${stageColor};padding-bottom:18px;margin-bottom:22px">
         <div style="font-size:11px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;color:#999;margin-bottom:4px">Windjammer Production Management</div>
         <h1 style="margin:0;font-size:24px;color:${stageColor}">${showLabel}</h1>
-        <div style="margin-top:6px;font-size:13px;color:#666">${stageName} · ${show.date || ''}${show.showTime ? ` · Show: ${show.showTime}` : ''}${show.doorsTime ? ` · Doors: ${show.doorsTime}` : ''}</div>
+        <div style="margin-top:6px;font-size:13px;color:#666">${stageName} · ${show.date || ''}${show.showTime ? ` · Show: ${formatTime(show.showTime, tf)}` : ''}${show.doorsTime ? ` · Doors: ${formatTime(show.doorsTime, tf)}` : ''}</div>
         <div style="margin-top:6px;font-size:12px;color:#999">Production Brief issued ${now}${user?.name ? ` by ${user.name}` : ''} · <span style="color:${record.advancingComplete === 'true' ? '#16a34a' : '#d97706'}">${record.advancingComplete === 'true' ? '✅ Advancing Complete' : '🔄 In Progress'}</span></div>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:24px">
@@ -281,8 +285,8 @@ export default function Advancing() {
           <h3 style="margin:0 0 10px;font-size:13px;text-transform:uppercase;letter-spacing:0.08em;color:${stageColor};border-bottom:1px solid #e5e7eb;padding-bottom:5px">Show Info</h3>
           <table style="font-size:14px;border-collapse:collapse;width:100%">
             <tr><td style="padding:3px 12px 3px 0;color:#999;width:120px">Date</td><td>${show.date || '—'}</td></tr>
-            <tr><td style="padding:3px 12px 3px 0;color:#999">Show Time</td><td>${show.showTime || '—'}</td></tr>
-            <tr><td style="padding:3px 12px 3px 0;color:#999">Doors</td><td>${show.doorsTime || '—'}</td></tr>
+            <tr><td style="padding:3px 12px 3px 0;color:#999">Show Time</td><td>${formatTime(show.showTime, tf) || '—'}</td></tr>
+            <tr><td style="padding:3px 12px 3px 0;color:#999">Doors</td><td>${formatTime(show.doorsTime, tf) || '—'}</td></tr>
             <tr><td style="padding:3px 12px 3px 0;color:#999">Curfew</td><td>${record.curfew || '—'}</td></tr>
             <tr><td style="padding:3px 12px 3px 0;color:#999">Capacity</td><td>${show.capacity || '—'}</td></tr>
             <tr><td style="padding:3px 12px 3px 0;color:#999">Sound Restrict.</td><td>${record.soundRestrictions || '—'}</td></tr>
@@ -824,7 +828,7 @@ export default function Advancing() {
                   <tbody>
                     {schedItems.map(item => (
                       <tr key={item.id}>
-                        <td style={{padding:'5px 8px 5px 0',whiteSpace:'nowrap',borderBottom:'1px solid var(--border)'}}><strong>{item.time || '—'}</strong></td>
+                        <td style={{padding:'5px 8px 5px 0',whiteSpace:'nowrap',borderBottom:'1px solid var(--border)'}}><strong>{item.time ? formatTime(item.time, tf) : '—'}</strong></td>
                         <td style={{padding:'5px 8px 5px 0',borderBottom:'1px solid var(--border)'}}>{item.label || '—'}</td>
                         <td style={{padding:'5px 8px 5px 0',color:'var(--text-muted)',borderBottom:'1px solid var(--border)'}}>{item.responsible || '—'}</td>
                         <td style={{padding:'5px 8px 5px 0',color:'var(--text-muted)',maxWidth:180,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',borderBottom:'1px solid var(--border)'}}>{item.notes || '—'}</td>

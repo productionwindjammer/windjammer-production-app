@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react'
 import api from '../api'
 import Modal from '../components/Modal'
 import { filterShowList } from '../utils/showFilters'
+import { useSettings } from '../context/SettingsContext'
+import { formatTime } from '../utils/time'
 
 const BLANK = {
   showId: '', showName: '', stage: 'inside',
@@ -11,6 +13,8 @@ const BLANK = {
 }
 
 export default function Labor() {
+  const { settings } = useSettings()
+  const tf = settings.timeFormat || '12h'
   const [entries, setEntries] = useState([])
   const [shows, setShows]     = useState([])
   const [staff, setStaff]     = useState([])
@@ -325,8 +329,8 @@ export default function Labor() {
                     <td className="text-muted">{e.role || '—'}</td>
                     <td className="text-muted">{e.showName || '—'}</td>
                     <td><span className={`badge badge-${e.stage}`}>{e.stage === 'inside' ? 'Inside' : 'Beach'}</span></td>
-                    <td className="text-muted">{e.callTime || '—'}</td>
-                    <td className="text-muted">{e.wrapTime || '—'}</td>
+                    <td className="text-muted">{e.callTime ? formatTime(e.callTime, tf) : '—'}</td>
+                    <td className="text-muted">{e.wrapTime ? formatTime(e.wrapTime, tf) : '—'}</td>
                     <td>{(e.payType || 'hour') === 'day' ? `${e.days || 1} day${(e.days || 1) == 1 ? '' : 's'}` : (e.hours ? `${e.hours} hr` : '—')}</td>
                     <td>{e.rate ? `$${e.rate}${(e.payType || 'hour') === 'day' ? '/day' : '/hr'}` : '—'}</td>
                     <td><strong>{e.total ? `$${e.total}` : '—'}</strong></td>

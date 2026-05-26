@@ -10,6 +10,7 @@ const DEFAULTS = {
   menuPos:  'side',   // 'side' | 'top'
   density:  'comfortable', // 'comfortable' | 'compact'
   landing:  '/dashboard',  // default route after login
+  timeFormat: '12h',       // '12h' | '24h' — applies to all displayed/outbound times
 }
 
 const STORAGE_KEY = 'wj_settings'

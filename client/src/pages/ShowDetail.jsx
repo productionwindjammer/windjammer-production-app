@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import api from '../api'
 import Modal from '../components/Modal'
+import { useSettings } from '../context/SettingsContext'
+import { formatTime } from '../utils/time'
 
 const BLANK_ADV = {
   riderReceived: 'false', riderNotes: '', stagingChanges: '', capacityChanges: '',
@@ -28,6 +30,8 @@ const BLANK_SHOW = {
 export default function ShowDetail() {
   const { id } = useParams()
   const navigate = useNavigate()
+  const { settings } = useSettings()
+  const tf = settings.timeFormat || '12h'
 
   const [show, setShow]           = useState(null)
   const [siblings, setSiblings]   = useState([]) // other dates of the same multi-night run
@@ -315,8 +319,8 @@ export default function ShowDetail() {
             </div>
             <div style={{ fontSize: 13, color: 'rgba(255,255,255,0.55)', display: 'flex', gap: 18, flexWrap: 'wrap' }}>
               <span>📅 {show.date}</span>
-              {show.showTime  && <span>🕐 Show: {show.showTime}</span>}
-              {show.doorsTime && <span>🚪 Doors: {show.doorsTime}</span>}
+              {show.showTime  && <span>🕐 Show: {formatTime(show.showTime, tf)}</span>}
+              {show.doorsTime && <span>🚪 Doors: {formatTime(show.doorsTime, tf)}</span>}
               {show.capacity  && <span>👥 Cap: {show.capacity}</span>}
               {show.tourManager && <span>🎭 TM: {show.tourManager}</span>}
               {show.promoter  && <span>📣 {show.promoter}</span>}
@@ -546,7 +550,7 @@ export default function ShowDetail() {
                   <tbody>
                     {schedule.map(item => (
                       <tr key={item.id}>
-                        <td><strong>{item.time || '—'}</strong></td>
+                        <td><strong>{item.time ? formatTime(item.time, tf) : '—'}</strong></td>
                         <td>{item.label || '—'}</td>
                         <td className="text-muted">{item.duration ? `${item.duration} min` : '—'}</td>
                         <td className="text-muted">{item.responsible || '—'}</td>
@@ -605,8 +609,8 @@ export default function ShowDetail() {
                       <tr key={l.id}>
                         <td><strong>{l.role || '—'}</strong></td>
                         <td>{l.workerName || '—'}</td>
-                        <td className="text-muted">{l.callTime || '—'}</td>
-                        <td className="text-muted">{l.wrapTime || '—'}</td>
+                        <td className="text-muted">{l.callTime ? formatTime(l.callTime, tf) : '—'}</td>
+                        <td className="text-muted">{l.wrapTime ? formatTime(l.wrapTime, tf) : '—'}</td>
                         <td className="text-muted">{l.hours || '—'}</td>
                         <td className="text-muted">{l.rate ? `$${l.rate}` : '—'}</td>
                         <td><strong style={{ color: '#6ee7b7' }}>{l.total ? `$${l.total}` : '—'}</strong></td>

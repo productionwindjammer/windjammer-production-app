@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import api from '../api'
 import { useAuth } from '../context/AuthContext'
+import { useSettings } from '../context/SettingsContext'
+import { formatTime } from '../utils/time'
 
 // Parse YYYY-MM-DD dates as local noon to avoid UTC timezone shifts
 const parseDate = d => d ? new Date(d + 'T12:00:00') : null
@@ -52,6 +54,8 @@ function dateRangeLabel(dates) {
 
 export default function Dashboard() {
   const { user } = useAuth()
+  const { settings } = useSettings()
+  const tf = settings.timeFormat || '12h'
   const navigate = useNavigate()
   const role = user?.role || ''
   const isCrew = role === 'crew' || role === 'staff' || role === 'tech'
@@ -243,7 +247,7 @@ function ShowRow({ show, onClick }) {
           </span>}
         </div>
         <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: 2 }}>
-          {show.showTime || show.doorsTime || show.venue || ''}
+          {[show.showTime, show.doorsTime].filter(Boolean).map(t => formatTime(t, tf)).join(' / ') || show.venue || ''}
         </div>
       </div>
       <span className={`badge badge-${show.stage}`}>{show.stage === 'inside' ? 'Inside' : 'Beach'}</span>
@@ -291,7 +295,7 @@ function CrewDashboard({ user, shows, labor, navigate }) {
               </div>
             </div>
             <div className="next-call-time">
-              <div className="next-call-time-value">{next.callTime || '—'}</div>
+              <div className="next-call-time-value">{next.callTime ? formatTime(next.callTime, tf) : '—'}</div>
               <div className="next-call-time-label">Call</div>
             </div>
           </div>
@@ -329,8 +333,8 @@ function CrewDashboard({ user, shows, labor, navigate }) {
                     </td>
                     <td>{l._show?.artist || l._show?.eventName || l.showName || '—'}</td>
                     <td>{l.role || '—'}</td>
-                    <td>{l.callTime || '—'}</td>
-                    <td>{l.wrapTime || '—'}</td>
+                    <td>{l.callTime ? formatTime(l.callTime, tf) : '—'}</td>
+                    <td>{l.wrapTime ? formatTime(l.wrapTime, tf) : '—'}</td>
                     <td>
                       {l._show?.stage && (
                         <span className={`badge badge-${l._show.stage}`}>

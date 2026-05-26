@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import api from '../api'
 import Modal from '../components/Modal'
+import { useSettings } from '../context/SettingsContext'
+import { formatTime } from '../utils/time'
 
 const BLANK = {
   date: '', artist: '', eventName: '', stage: 'inside', status: 'pending',
@@ -10,6 +12,8 @@ const BLANK = {
 }
 
 export default function Shows() {
+  const { settings } = useSettings()
+  const tf = settings.timeFormat || '12h'
   const navigate = useNavigate()
   const [shows, setShows]       = useState([])
   const [loading, setLoading]   = useState(true)
@@ -201,7 +205,7 @@ export default function Shows() {
                     <td className="text-muted">{show.date}</td>
                     <td><strong>{show.artist || show.eventName || '—'}</strong></td>
                     <td><span className={`badge badge-${show.stage}`}>{show.stage === 'inside' ? 'Inside' : 'Beach'}</span></td>
-                    <td className="text-muted">{show.showTime || '—'}</td>
+                    <td className="text-muted">{show.showTime ? formatTime(show.showTime, tf) : '—'}</td>
                     <td className="text-muted">{show.capacity || '—'}</td>
                     <td><span className={`badge badge-${show.status || 'pending'}`}>{show.status || 'pending'}</span></td>
                     <td className="text-muted">{show.tourManager || '—'}</td>
@@ -374,7 +378,7 @@ export default function Shows() {
                         </div>
                         <div style={{fontSize:12,color:'rgba(255,255,255,0.45)',marginTop:2}}>
                           {ev.date}
-                          {ev.time && ` · ${ev.time}`}
+                          {ev.time && ` · ${formatTime(ev.time, tf)}`}
                           {ev.isDuplicate && <span style={{marginLeft:8,color:'#6ee7b7'}}>✓ Already in app</span>}
                         </div>
                       </div>

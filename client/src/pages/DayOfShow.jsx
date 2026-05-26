@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react'
 import api from '../api'
 import Modal from '../components/Modal'
 import { filterShowList } from '../utils/showFilters'
+import { useSettings } from '../context/SettingsContext'
+import { formatTime } from '../utils/time'
 
 const BLANK = {
   showId: '', showName: '', stage: 'inside', date: '',
@@ -10,6 +12,8 @@ const BLANK = {
 }
 
 export default function DayOfShow() {
+  const { settings } = useSettings()
+  const tf = settings.timeFormat || '12h'
   const [items, setItems]     = useState([])
   const [shows, setShows]     = useState([])
   const [loading, setLoading] = useState(true)
@@ -104,7 +108,7 @@ export default function DayOfShow() {
                 )}
                 {filtered.map(item => (
                   <tr key={item.id}>
-                    <td><strong>{item.time || '—'}</strong></td>
+                    <td><strong>{item.time ? formatTime(item.time, tf) : '—'}</strong></td>
                     <td>{item.label || '—'}</td>
                     <td className="text-muted">{item.showName || '—'}</td>
                     <td><span className={`badge badge-${item.stage}`}>{item.stage === 'inside' ? 'Inside' : 'Beach'}</span></td>
