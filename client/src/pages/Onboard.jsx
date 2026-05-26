@@ -237,7 +237,7 @@ function InstallInstructions() {
 // ── tiny presentational helpers ──────────────────────────────────────────────
 function Wrap({ children }) {
   return (
-    <div style={{ minHeight: '100vh', background: '#0f172a', padding: '40px 20px' }}>
+    <div style={{ height: '100vh', overflowY: 'auto', WebkitOverflowScrolling: 'touch', background: '#0f172a', padding: '40px 20px', boxSizing: 'border-box' }}>
       <div style={{ maxWidth: 720, margin: '0 auto', background: '#fff', borderRadius: 16, padding: 32, boxShadow: '0 10px 30px rgba(0,0,0,0.2)' }}>
         {children}
       </div>
