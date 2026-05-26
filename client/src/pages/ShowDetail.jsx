@@ -17,7 +17,8 @@ const BLANK_SCHED = {
 }
 
 const BLANK_LABOR = {
-  workerName: '', role: '', callTime: '', wrapTime: '',
+  staffId: '', workerName: '', role: '', callTime: '', wrapTime: '',
+  payType: 'hour', days: '1',
   hours: '', rate: '', total: '', union: 'false', notes: '',
 }
 
@@ -64,6 +65,19 @@ export default function ShowDetail() {
   const [laborEditing, setLaborEditing] = useState(null)
   const [laborForm, setLaborForm]       = useState(BLANK_LABOR)
   const [savingLabor, setSavingLabor]   = useState(false)
+  const [staff, setStaff]               = useState([])
+  const [quickAddName, setQuickAddName] = useState('')
+  const [quickAddBusy, setQuickAddBusy] = useState(false)
+  const [quickAddError, setQuickAddError] = useState('')
+  const showLaborQuickAdd = laborForm.staffId === '__new__'
+
+  // Bulk Build-Crew modal
+  const [crewModal, setCrewModal]       = useState(false)
+  const [crewRows, setCrewRows]         = useState([])
+  const [crewSaving, setCrewSaving]     = useState(false)
+  const [crewQuickRow, setCrewQuickRow] = useState(null)
+  const [crewQuickName, setCrewQuickName] = useState('')
+  const [crewQuickBusy, setCrewQuickBusy] = useState(false)
 
   useEffect(() => { loadAll() }, [id]) // eslint-disable-line
 
@@ -71,11 +85,12 @@ export default function ShowDetail() {
   async function loadAll() {
     setLoading(true)
     try {
-      const [showsRes, advRes, schedRes, laborRes] = await Promise.all([
+      const [showsRes, advRes, schedRes, laborRes, staffRes] = await Promise.all([
         api.get('/shows'),
         api.get('/advancing'),
         api.get('/schedule'),
         api.get('/labor'),
+        api.get('/staff'),
       ])
 
       const shows = showsRes.data.data || []
@@ -145,6 +160,7 @@ export default function ShowDetail() {
           .sort((a, b) => (a.time || '').localeCompare(b.time || ''))
       )
       setLabor((laborRes.data.data || []).filter(l => l.showId === id))
+      setStaff(staffRes.data.data || [])
     } finally {
       setLoading(false)
     }
@@ -262,7 +278,156 @@ export default function ShowDetail() {
     return !isNaN(hv) && !isNaN(rv) ? (hv * rv).toFixed(2) : ''
   }
 
-  function openAddLabor() { setLaborEditing(null); setLaborForm({ ...BLANK_LABOR }); setLaborModal(true) }
+  function parseRates(raw) {
+    if (!raw) return []
+    if (Array.isArray(raw)) return raw
+    try { const v = JSON.parse(raw); return Array.isArray(v) ? v : [] }
+    catch { return [] }
+  }
+
+  const selectedLaborStaff = staff.find(s => s.id === laborForm.staffId)
+  const selectedLaborRates = selectedLaborStaff ? parseRates(selectedLaborStaff.rates) : []
+
+  function pickLaborStaff(sid) {
+    if (sid === '__new__') {
+      setQuickAddName(''); setQuickAddError('')
+      setLaborForm(v => ({ ...v, staffId: '__new__', workerName: '' }))
+      return
+    }
+    const s = staff.find(x => x.id === sid)
+    if (!s) { setLaborForm(v => ({ ...v, staffId: '', workerName: '' })); return }
+    const rates = parseRates(s.rates)
+    if (rates.length === 1) {
+      const r = rates[0]
+      setLaborForm(v => ({
+        ...v, staffId: s.id, workerName: s.name || '',
+        role: r.role || s.role || v.role,
+        payType: r.payType || v.payType || 'hour',
+        rate: r.rate || '',
+      }))
+      return
+    }
+    const payType = s.payType || 'hour'
+    const rate = payType === 'day' ? (s.dayRate || '') : (s.hourlyRate || '')
+    setLaborForm(v => ({
+      ...v, staffId: s.id, workerName: s.name || '',
+      role: s.role || v.role,
+      payType, rate,
+    }))
+  }
+
+  function pickLaborStaffPosition(idx) {
+    const r = selectedLaborRates[Number(idx)]
+    if (!r) return
+    setLaborForm(v => ({
+      ...v, role: r.role || v.role,
+      payType: r.payType || 'hour', rate: r.rate || '',
+    }))
+  }
+
+  async function quickAddLaborWorker() {
+    const name = quickAddName.trim()
+    if (!name) { setQuickAddError('Enter a name'); return }
+    setQuickAddBusy(true); setQuickAddError('')
+    try {
+      const res = await api.post('/staff', { name, active: 'true' })
+      const created = res.data?.data || res.data
+      if (!created?.id) throw new Error('Could not add worker')
+      setStaff(prev => [...prev, created])
+      setLaborForm(v => ({ ...v, staffId: created.id, workerName: created.name || name }))
+      setQuickAddName('')
+    } catch (err) {
+      setQuickAddError(err.response?.data?.message || err.message || 'Could not add worker')
+    } finally {
+      setQuickAddBusy(false)
+    }
+  }
+
+  // ── Bulk Build-Crew helpers (scoped to this show) ──────────────────────────
+  const newRowId = () => `tmp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
+  function makeCrewRow(role) {
+    return { _rid: newRowId(), staffId: '', workerName: '', role: role || '',
+             callTime: '', wrapTime: '', payType: 'hour', days: '1', hours: '', rate: '', union: 'false' }
+  }
+  function openCrewBuilder() {
+    setCrewRows([
+      makeCrewRow('House Crew'),
+      makeCrewRow('House Crew'),
+      makeCrewRow('House Crew'),
+    ])
+    setCrewQuickRow(null); setCrewQuickName('')
+    setCrewModal(true)
+  }
+  function updateCrewRow(rid, patch) {
+    setCrewRows(rows => rows.map(r => r._rid === rid ? { ...r, ...patch } : r))
+  }
+  function pickCrewWorker(rid, sid) {
+    if (sid === '__new__') { setCrewQuickRow(rid); setCrewQuickName(''); return }
+    const s = staff.find(x => x.id === sid)
+    if (!s) { updateCrewRow(rid, { staffId: '', workerName: '' }); return }
+    const rates = parseRates(s.rates)
+    if (rates.length >= 1) {
+      const r = rates[0]
+      updateCrewRow(rid, {
+        staffId: s.id, workerName: s.name || '', role: r.role || s.role || '',
+        payType: r.payType || 'hour', rate: r.rate || '',
+      })
+    } else {
+      const payType = s.payType || 'hour'
+      const rate = payType === 'day' ? (s.dayRate || '') : (s.hourlyRate || '')
+      updateCrewRow(rid, { staffId: s.id, workerName: s.name || '', role: s.role || '', payType, rate })
+    }
+  }
+  async function commitCrewQuickAdd() {
+    const name = crewQuickName.trim()
+    if (!name) return
+    setCrewQuickBusy(true)
+    try {
+      const res = await api.post('/staff', { name, active: 'true' })
+      const created = res.data?.data || res.data
+      if (!created?.id) throw new Error('Could not add worker')
+      setStaff(prev => [...prev, created])
+      if (crewQuickRow) updateCrewRow(crewQuickRow, { staffId: created.id, workerName: created.name || name })
+      setCrewQuickRow(null); setCrewQuickName('')
+    } catch (err) {
+      alert(err.response?.data?.message || err.message || 'Could not add worker')
+    } finally {
+      setCrewQuickBusy(false)
+    }
+  }
+  function calcRowTotal(r) {
+    if ((r.payType || 'hour') === 'day') {
+      const d = parseFloat(r.days || '1'), rate = parseFloat(r.rate)
+      return !isNaN(d) && !isNaN(rate) ? (d * rate).toFixed(2) : ''
+    }
+    const h = parseFloat(r.hours), rate = parseFloat(r.rate)
+    return !isNaN(h) && !isNaN(rate) ? (h * rate).toFixed(2) : ''
+  }
+  async function handleCrewSave() {
+    const valid = crewRows.filter(r => r.staffId && r.staffId !== '__new__' && r.workerName)
+    if (valid.length === 0) { alert('Add at least one worker.'); return }
+    setCrewSaving(true)
+    try {
+      for (const r of valid) {
+        const payload = {
+          showId: id, showName: `${show.date} — ${show.artist || show.eventName}`, stage: show.stage,
+          staffId: r.staffId, workerName: r.workerName, role: r.role || '',
+          callTime: r.callTime || '', wrapTime: r.wrapTime || '',
+          payType: r.payType || 'hour', days: r.days || '1', hours: r.hours || '',
+          rate: r.rate || '', total: calcRowTotal(r), union: r.union || 'false', notes: '',
+        }
+        await api.post('/labor', payload)
+      }
+      await reloadLabor()
+      setCrewModal(false)
+    } catch (err) {
+      alert(err.response?.data?.message || err.message || 'Save failed')
+    } finally {
+      setCrewSaving(false)
+    }
+  }
+
+  function openAddLabor() { setLaborEditing(null); setLaborForm({ ...BLANK_LABOR }); setQuickAddName(''); setQuickAddError(''); setLaborModal(true) }
   function openEditLabor(r) { setLaborEditing(r); setLaborForm({ ...BLANK_LABOR, ...r }); setLaborModal(true) }
 
   async function handleSaveLabor() {
@@ -583,7 +748,10 @@ export default function ShowDetail() {
                 Total: <strong style={{ color: '#6ee7b7' }}>${totalLaborCost.toFixed(2)}</strong>
               </div>
             )}
-            <button className="btn btn-primary" onClick={openAddLabor} style={{ marginLeft: 'auto' }}>+ Add Worker</button>
+            <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+              <button className="btn btn-ghost" onClick={openCrewBuilder}>+ Build Crew</button>
+              <button className="btn btn-primary" onClick={openAddLabor}>+ Add Worker</button>
+            </div>
           </div>
           <div className="card">
             {labor.length === 0 ? (
@@ -786,13 +954,58 @@ export default function ShowDetail() {
           }
         >
           <div className="form-grid">
+            <div className="form-group">
+              <label>Worker *</label>
+              <select value={laborForm.staffId || ''} onChange={e => pickLaborStaff(e.target.value)}>
+                <option value="">— Select worker —</option>
+                {staff.filter(s => s.active !== 'false')
+                  .slice()
+                  .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+                  .map(s => (
+                    <option key={s.id} value={s.id}>{s.name}{s.role ? ` — ${s.role}` : ''}</option>
+                  ))}
+                <option value="__new__">+ Add new worker…</option>
+              </select>
+              {showLaborQuickAdd && (
+                <div style={{ display: 'flex', gap: 6, marginTop: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <input
+                    autoFocus
+                    value={quickAddName}
+                    onChange={e => setQuickAddName(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); quickAddLaborWorker() } }}
+                    placeholder="New worker name"
+                    style={{ flex: '1 1 200px' }}
+                  />
+                  <button type="button" className="btn btn-primary btn-sm" onClick={quickAddLaborWorker} disabled={quickAddBusy}>
+                    {quickAddBusy ? 'Adding…' : 'Add'}
+                  </button>
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setLaborForm(v => ({ ...v, staffId: '' })); setQuickAddError('') }}>
+                    Cancel
+                  </button>
+                  {quickAddError && <span style={{ color: '#dc2626', fontSize: 12, width: '100%' }}>{quickAddError}</span>}
+                </div>
+              )}
+            </div>
+            {selectedLaborRates.length > 1 && (
+              <div className="form-group">
+                <label>Position (rate)</label>
+                <select onChange={e => pickLaborStaffPosition(e.target.value)} defaultValue="">
+                  <option value="">— Pick a position rate —</option>
+                  {selectedLaborRates.map((r, i) => (
+                    <option key={i} value={i}>
+                      {r.role || '(unnamed)'} — ${r.rate || '0.00'}{r.payType === 'day' ? '/day' : '/hr'}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
             <div className="form-row">
               <div className="form-group">
                 <label>Role</label>
                 <input value={laborForm.role} onChange={setL('role')} placeholder="Audio Engineer, Stage Manager…" />
               </div>
               <div className="form-group">
-                <label>Name</label>
+                <label>Name (override)</label>
                 <input value={laborForm.workerName} onChange={setL('workerName')} />
               </div>
             </div>
@@ -834,6 +1047,115 @@ export default function ShowDetail() {
                 <label>Notes</label>
                 <input value={laborForm.notes} onChange={setL('notes')} />
               </div>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* ══════════════════════════════════════════════════════════════════════
+          BUILD CREW (bulk) MODAL — scoped to this show
+      ══════════════════════════════════════════════════════════════════════ */}
+      {crewModal && (
+        <Modal
+          title={`Build Crew — ${show?.date || ''} ${show?.artist || show?.eventName || ''}`}
+          onClose={() => setCrewModal(false)}
+          footer={
+            <>
+              <button className="btn btn-ghost" onClick={() => setCrewModal(false)}>Cancel</button>
+              <button className="btn btn-primary" onClick={handleCrewSave} disabled={crewSaving}>
+                {crewSaving ? 'Saving…' : `Save ${crewRows.filter(r => r.staffId && r.staffId !== '__new__').length} entries`}
+              </button>
+            </>
+          }
+        >
+          <div className="form-grid">
+            <div style={{ display: 'flex', gap: 8, margin: '4px 0 8px', flexWrap: 'wrap' }}>
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => setCrewRows(r => [...r, makeCrewRow('House Crew')])}>+ House Crew row</button>
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => setCrewRows(r => [...r, makeCrewRow('Stagehand')])}>+ Stagehand row</button>
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => setCrewRows(r => [...r, makeCrewRow('')])}>+ Custom row</button>
+            </div>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                <thead>
+                  <tr style={{ textAlign: 'left', color: 'var(--text-muted)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    <th style={{ padding: '6px 4px', minWidth: 180 }}>Worker</th>
+                    <th style={{ padding: '6px 4px', minWidth: 130 }}>Position</th>
+                    <th style={{ padding: '6px 4px', width: 90 }}>Call</th>
+                    <th style={{ padding: '6px 4px', width: 90 }}>Wrap</th>
+                    <th style={{ padding: '6px 4px', width: 80 }}>Type</th>
+                    <th style={{ padding: '6px 4px', width: 75 }}>Units</th>
+                    <th style={{ padding: '6px 4px', width: 90 }}>Rate $</th>
+                    <th style={{ padding: '6px 4px', width: 32 }}></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {crewRows.map(r => (
+                    <tr key={r._rid} style={{ borderTop: '1px solid var(--border)' }}>
+                      <td style={{ padding: '6px 4px', verticalAlign: 'top' }}>
+                        <select value={r.staffId || ''} onChange={e => pickCrewWorker(r._rid, e.target.value)} style={{ width: '100%' }}>
+                          <option value="">— Select —</option>
+                          {staff.filter(s => s.active !== 'false')
+                            .slice()
+                            .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+                            .map(s => (
+                              <option key={s.id} value={s.id}>{s.name}{s.role ? ` — ${s.role}` : ''}</option>
+                            ))}
+                          <option value="__new__">+ Add new worker…</option>
+                        </select>
+                        {crewQuickRow === r._rid && (
+                          <div style={{ display: 'flex', gap: 4, marginTop: 4 }}>
+                            <input
+                              autoFocus
+                              value={crewQuickName}
+                              onChange={e => setCrewQuickName(e.target.value)}
+                              onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); commitCrewQuickAdd() } }}
+                              placeholder="New worker name"
+                              style={{ flex: 1, fontSize: 12 }}
+                            />
+                            <button type="button" className="btn btn-primary btn-sm" onClick={commitCrewQuickAdd} disabled={crewQuickBusy} style={{ padding: '2px 8px' }}>
+                              {crewQuickBusy ? '…' : 'Add'}
+                            </button>
+                            <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setCrewQuickRow(null); updateCrewRow(r._rid, { staffId: '' }) }} style={{ padding: '2px 6px' }}>✕</button>
+                          </div>
+                        )}
+                      </td>
+                      <td style={{ padding: '6px 4px', verticalAlign: 'top' }}>
+                        <input value={r.role} onChange={e => updateCrewRow(r._rid, { role: e.target.value })} style={{ width: '100%' }} placeholder="Position" />
+                      </td>
+                      <td style={{ padding: '6px 4px', verticalAlign: 'top' }}>
+                        <input type="time" value={r.callTime} onChange={e => updateCrewRow(r._rid, { callTime: e.target.value })} style={{ width: '100%' }} />
+                      </td>
+                      <td style={{ padding: '6px 4px', verticalAlign: 'top' }}>
+                        <input type="time" value={r.wrapTime} onChange={e => updateCrewRow(r._rid, { wrapTime: e.target.value })} style={{ width: '100%' }} />
+                      </td>
+                      <td style={{ padding: '6px 4px', verticalAlign: 'top' }}>
+                        <select value={r.payType} onChange={e => updateCrewRow(r._rid, { payType: e.target.value })} style={{ width: '100%' }}>
+                          <option value="hour">Hour</option>
+                          <option value="day">Day</option>
+                        </select>
+                      </td>
+                      <td style={{ padding: '6px 4px', verticalAlign: 'top' }}>
+                        {r.payType === 'day'
+                          ? <input type="number" step="0.5" value={r.days} onChange={e => updateCrewRow(r._rid, { days: e.target.value })} style={{ width: '100%' }} placeholder="1" />
+                          : <input type="number" step="0.5" value={r.hours} onChange={e => updateCrewRow(r._rid, { hours: e.target.value })} style={{ width: '100%' }} placeholder="0" />
+                        }
+                      </td>
+                      <td style={{ padding: '6px 4px', verticalAlign: 'top' }}>
+                        <input type="number" step="0.01" value={r.rate} onChange={e => updateCrewRow(r._rid, { rate: e.target.value })} style={{ width: '100%' }} placeholder="0" />
+                      </td>
+                      <td style={{ padding: '6px 4px', verticalAlign: 'top', textAlign: 'center' }}>
+                        <button type="button" className="btn btn-ghost btn-sm" onClick={() => setCrewRows(rows => rows.filter(x => x._rid !== r._rid))} style={{ padding: '2px 6px' }} title="Remove row">✕</button>
+                      </td>
+                    </tr>
+                  ))}
+                  {crewRows.length === 0 && (
+                    <tr><td colSpan={8}><div className="empty-state" style={{ padding: 20 }}>No rows. Use the buttons above to add some.</div></td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 8 }}>
+              Tip: Rates auto-fill from each worker's saved Staff rate. Override any field per row before saving.
             </div>
           </div>
         </Modal>
