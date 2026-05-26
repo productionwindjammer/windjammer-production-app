@@ -21,6 +21,10 @@ export default function Labor() {
   const [saving, setSaving]   = useState(false)
   const [filter, setFilter]   = useState({ show: '', stage: '' })
   const [showPastShows, setShowPastShows] = useState(false)
+  const [quickAddName, setQuickAddName] = useState('')
+  const [quickAddBusy, setQuickAddBusy] = useState(false)
+  const [quickAddError, setQuickAddError] = useState('')
+  const showQuickAdd = form.staffId === '__new__'
 
   useEffect(() => {
     Promise.all([api.get('/labor'), api.get('/shows'), api.get('/staff')]).then(([l, s, st]) => {
@@ -60,6 +64,12 @@ export default function Labor() {
   const selectedRates = selectedStaff ? parseRates(selectedStaff.rates) : []
 
   function pickStaff(id) {
+    if (id === '__new__') {
+      setQuickAddName('')
+      setQuickAddError('')
+      setForm(v => ({ ...v, staffId: '__new__', workerName: '' }))
+      return
+    }
     const s = staff.find(x => x.id === id)
     if (!s) { setForm(v => ({ ...v, staffId: '', workerName: '' })); return }
     const rates = parseRates(s.rates)
@@ -98,6 +108,24 @@ export default function Labor() {
       payType: r.payType || 'day',
       rate: r.rate || '',
     }))
+  }
+
+  async function quickAddWorker() {
+    const name = quickAddName.trim()
+    if (!name) { setQuickAddError('Enter a name'); return }
+    setQuickAddBusy(true); setQuickAddError('')
+    try {
+      const res = await api.post('/staff', { name, active: 'true' })
+      const created = res.data?.data || res.data
+      if (!created?.id) throw new Error('Could not create staff record')
+      setStaff(prev => [...prev, created])
+      setForm(v => ({ ...v, staffId: created.id, workerName: created.name || name }))
+      setQuickAddName('')
+    } catch (err) {
+      setQuickAddError(err.response?.data?.message || err.message || 'Could not add worker')
+    } finally {
+      setQuickAddBusy(false)
+    }
   }
 
   async function handleSave() {
@@ -249,20 +277,37 @@ export default function Labor() {
                 </select>
               </div>
             </div>
-            <div className="form-row">
-              <div className="form-group">
-                <label>Worker (from Staff)</label>
-                <select value={f.staffId} onChange={e => pickStaff(e.target.value)}>
-                  <option value="">— Select staff —</option>
-                  {staff.filter(s => s.active !== 'false').map(s => (
+            <div className="form-group">
+              <label>Worker *</label>
+              <select value={form.staffId || ''} onChange={e => pickStaff(e.target.value)}>
+                <option value="">— Select worker —</option>
+                {staff.filter(s => s.active !== 'false')
+                  .slice()
+                  .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+                  .map(s => (
                     <option key={s.id} value={s.id}>{s.name}{s.role ? ` — ${s.role}` : ''}</option>
                   ))}
-                </select>
-              </div>
-              <div className="form-group">
-                <label>Worker Name *</label>
-                <input value={f.workerName} onChange={set('workerName')} placeholder="Or type a name" />
-              </div>
+                <option value="__new__">+ Add new worker…</option>
+              </select>
+              {showQuickAdd && (
+                <div style={{ display: 'flex', gap: 6, marginTop: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <input
+                    autoFocus
+                    value={quickAddName}
+                    onChange={e => setQuickAddName(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); quickAddWorker() } }}
+                    placeholder="New worker name"
+                    style={{ flex: '1 1 200px' }}
+                  />
+                  <button type="button" className="btn btn-primary btn-sm" onClick={quickAddWorker} disabled={quickAddBusy}>
+                    {quickAddBusy ? 'Adding…' : 'Add'}
+                  </button>
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setForm(v => ({ ...v, staffId: '' })); setQuickAddError('') }}>
+                    Cancel
+                  </button>
+                  {quickAddError && <span style={{ color: '#dc2626', fontSize: 12, width: '100%' }}>{quickAddError}</span>}
+                </div>
+              )}
             </div>
             {selectedRates.length > 1 && (
               <div className="form-group">
