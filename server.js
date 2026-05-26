@@ -420,6 +420,10 @@ app.post('/api/staff/:id/invite', requireAuth, requireRole('admin', 'production_
         createdAt: new Date().toISOString(),
       };
       await sheets.appendRow(config.googleSheets.sheets.users, user);
+    } else if (user.staffId !== staff.id) {
+      // Backfill the link so onboarding updates the correct staff row.
+      await sheets.updateRowById(config.googleSheets.sheets.users, user.id, { staffId: staff.id });
+      user.staffId = staff.id;
     }
     const inviteUrl = await sendInviteEmailIfPossible(user, staff, req);
     res.json({ success: true, inviteUrl });
@@ -487,7 +491,16 @@ app.post('/api/onboard/:token', async (req, res) => {
 
     // Update (or create) the linked staff record with everything they filled in.
     const staffRows = await sheets.getRows(config.googleSheets.sheets.staff);
-    let staff = staffRows.find(s => s.id === user.staffId);
+    let staff = user.staffId ? staffRows.find(s => s.id === user.staffId) : null;
+    // Fallback: match by email so we never create a duplicate staff row when
+    // the user record was created without a staffId backlink.
+    if (!staff && user.email) {
+      staff = staffRows.find(s => (s.email || '').toLowerCase() === user.email.toLowerCase());
+      if (staff && staff.id !== user.staffId) {
+        await sheets.updateRowById(config.googleSheets.sheets.users, user.id, { staffId: staff.id });
+        user.staffId = staff.id;
+      }
+    }
     const ratesJson = (() => {
       try { return JSON.stringify(Array.isArray(rates) ? rates : JSON.parse(rates || '[]')); }
       catch { return '[]'; }
