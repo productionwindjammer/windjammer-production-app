@@ -32,7 +32,7 @@ export default function Login() {
     <div className="login-page">
       <div className="login-card">
         <div className="login-logo">
-          <h1>🎭 Windjammer</h1>
+          <img src="/windjammer-logo.png" alt="The Windjammer" />
           <p>Production Management System</p>
         </div>
         <form onSubmit={handleSubmit} className="form-grid">

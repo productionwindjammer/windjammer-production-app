@@ -44,15 +44,17 @@ body {
 .btn-logout:hover { color: var(--danger); border-color: var(--danger); }
 
 /* ─── Sidebar ────────────────────────────────────────────────────────────── */
-.sidebar-brand         { padding: 20px 16px 12px; border-bottom: 1px solid var(--border); }
+.sidebar-brand         { padding: 18px 16px 14px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; align-items: center; gap: 6px; }
 .sidebar-brand h2      { font-size: 0.9rem; font-weight: 700; color: var(--text); }
-.sidebar-brand p       { font-size: 0.72rem; color: var(--text-muted); margin-top: 2px; }
+.sidebar-brand p       { font-size: 0.7rem; color: var(--text-muted); }
+.sidebar-logo          { width: 140px; max-width: 100%; height: auto; filter: invert(1) brightness(1.1) contrast(1.05); -webkit-filter: invert(1) brightness(1.1) contrast(1.05); }
 .sidebar-section-label { padding: 16px 16px 6px; font-size: 0.67rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-muted); font-weight: 600; }
 .sidebar-item          { display: flex; align-items: center; gap: 10px; padding: 9px 16px; font-size: 0.85rem; color: var(--text-muted); cursor: pointer; border-radius: 7px; margin: 1px 8px; text-decoration: none; transition: background 0.15s, color 0.15s; }
 .sidebar-item:hover    { background: rgba(255,255,255,0.05); color: var(--text); }
 .sidebar-item.active   { background: rgba(59,130,246,0.15); color: #60a5fa; }
 .sidebar-sub           { padding-left: 28px; font-size: 0.8rem; margin: 0 8px; }
 .sidebar-icon          { font-size: 1rem; width: 18px; text-align: center; }
+.sidebar-footer        { margin-top: auto; padding: 14px 12px; border-top: 1px solid var(--border); }
 
 /* ─── Page Header ────────────────────────────────────────────────────────── */
 .page-header    { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 24px; }
@@ -137,11 +139,21 @@ textarea { resize: vertical; min-height: 80px; }
 .modal-footer  { padding: 14px 24px; border-top: 1px solid var(--border); display: flex; gap: 10px; justify-content: flex-end; }
 
 /* ─── Login ──────────────────────────────────────────────────────────────── */
-.login-page    { min-height: 100vh; display: flex; align-items: center; justify-content: center; background: var(--bg); }
+.login-page    { min-height: 100vh; display: flex; align-items: center; justify-content: center; background: var(--bg); padding: 20px; }
 .login-card    { background: var(--bg-card); border: 1px solid var(--border); border-radius: 14px; padding: 40px; width: 100%; max-width: 400px; }
 .login-logo    { text-align: center; margin-bottom: 28px; }
-.login-logo h1 { font-size: 1.5rem; font-weight: 700; }
+.login-logo img { width: 200px; max-width: 100%; height: auto; filter: invert(1) brightness(1.1) contrast(1.05); -webkit-filter: invert(1) brightness(1.1) contrast(1.05); }
+.login-logo h1 { font-size: 1.5rem; font-weight: 700; margin-top: 14px; }
 .login-logo p  { color: var(--text-muted); font-size: 0.85rem; margin-top: 6px; }
+
+/* ─── Install App Button + Modal ─────────────────────────────────────────── */
+.install-app-btn        { display: inline-flex; align-items: center; justify-content: center; gap: 6px; width: 100%; padding: 9px 14px; border-radius: 8px; font-size: 0.82rem; font-weight: 600; background: rgba(59,130,246,0.15); color: #93c5fd; border: 1px solid rgba(59,130,246,0.35); cursor: pointer; transition: background 0.15s, color 0.15s; }
+.install-app-btn:hover  { background: rgba(59,130,246,0.28); color: #bfdbfe; }
+.install-modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.7); display: flex; align-items: center; justify-content: center; z-index: 300; padding: 20px; }
+.install-modal          { background: var(--bg-card); border: 1px solid var(--border); border-radius: 14px; padding: 26px 28px; max-width: 420px; width: 100%; }
+.install-modal h3       { font-size: 1.05rem; font-weight: 700; margin-bottom: 14px; }
+.install-modal ol       { margin: 0 0 14px 20px; padding: 0; color: var(--text); font-size: 0.88rem; line-height: 1.7; }
+.install-modal-hint     { font-size: 0.78rem; color: var(--text-muted); margin-bottom: 16px; }
 
 /* ─── Misc ───────────────────────────────────────────────────────────────── */
 .empty-state  { text-align: center; padding: 48px 24px; color: var(--text-muted); }

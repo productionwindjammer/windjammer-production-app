@@ -1,24 +1,16 @@
 {
-  "name": "Windjammer Production",
+  "name": "The Windjammer — Production",
   "short_name": "Windjammer",
-  "description": "Show advancing, day-of-show, settlement, and crew tools for Windjammer Production.",
+  "description": "Show advancing, day-of-show, settlement, and crew tools for The Windjammer.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
-  "background_color": "#0f172a",
+  "orientation": "any",
+  "background_color": "#ffffff",
   "theme_color": "#3b82f6",
   "icons": [
-    {
-      "src": "/icon-192.png",
-      "sizes": "192x192",
-      "type": "image/png",
-      "purpose": "any maskable"
-    },
-    {
-      "src": "/icon-512.png",
-      "sizes": "512x512",
-      "type": "image/png",
-      "purpose": "any maskable"
-    }
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
   ]
 }

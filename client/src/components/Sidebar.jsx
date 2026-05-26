@@ -1,6 +1,7 @@
 import { NavLink } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { navForRole } from '../nav'
+import InstallApp from './InstallApp'
 
 export default function Sidebar() {
   const { user } = useAuth()
@@ -8,7 +9,7 @@ export default function Sidebar() {
   return (
     <nav className="sidebar">
       <div className="sidebar-brand">
-        <h2>Windjammer</h2>
+        <img src="/windjammer-logo.png" alt="The Windjammer" className="sidebar-logo" />
         <p>Production Management</p>
       </div>
       <div className="sidebar-section-label">Navigation</div>
@@ -22,6 +23,9 @@ export default function Sidebar() {
           {item.label}
         </NavLink>
       ))}
+      <div className="sidebar-footer">
+        <InstallApp />
+      </div>
     </nav>
   )
 }
