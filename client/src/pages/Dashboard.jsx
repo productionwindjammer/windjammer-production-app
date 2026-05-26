@@ -95,6 +95,8 @@ function ManagerDashboard({ user, shows, labor, navigate, isManager }) {
   const thisWeek = upcoming.filter(s => (parseDate(s.date) - today) / 86400000 <= 7)
   const insideShows = upcoming.filter(s => s.stage === 'inside')
   const beachShows  = upcoming.filter(s => s.stage === 'beach')
+  const { settings } = useSettings()
+  const tf = settings.timeFormat || '12h'
 
   const todos = useMemo(() => buildTodoList(upcoming, labor), [upcoming, labor])
   const greeting = user?.name ? `Hi ${user.name.split(' ')[0]}` : 'Welcome'
@@ -167,7 +169,7 @@ function ManagerDashboard({ user, shows, labor, navigate, isManager }) {
           ) : (
             <div className="form-grid">
               {thisWeek.map(show => (
-                <ShowRow key={show.id} show={show} onClick={() => navigate(`/shows/${show.id}`)} />
+                <ShowRow key={show.id} show={show} tf={tf} onClick={() => navigate(`/shows/${show.id}`)} />
               ))}
             </div>
           )}
@@ -230,7 +232,7 @@ function buildTodoList(upcomingShows, laborRows) {
   return items.sort((a, b) => sevRank[a.severity] - sevRank[b.severity])
 }
 
-function ShowRow({ show, onClick }) {
+function ShowRow({ show, onClick, tf = '12h' }) {
   const isRun = (show._nights || 1) > 1
   const d = parseDate(show.date)
   return (
@@ -258,6 +260,8 @@ function ShowRow({ show, onClick }) {
 /* ────────────────────────────────────────────────────────────────── Crew ── */
 
 function CrewDashboard({ user, shows, labor, navigate }) {
+  const { settings } = useSettings()
+  const tf = settings.timeFormat || '12h'
   const today = startOfToday()
   const myName = (user?.name || '').toLowerCase()
   const myId = user?.staffId || ''
