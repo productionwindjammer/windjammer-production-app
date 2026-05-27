@@ -190,6 +190,7 @@ function splitArtistNames(text) {
 async function ensureArtistsFromShow(show) {
   const candidates = [
     ...splitArtistNames(show.artist),
+    ...splitArtistNames(show.support),
     ...splitArtistNames(show.eventName),
   ];
   if (candidates.length === 0) return [];

@@ -5,10 +5,12 @@ import Modal from '../components/Modal'
 import { useSettings } from '../context/SettingsContext'
 import { formatTime } from '../utils/time'
 
+const DEFAULT_PROMOTER = 'Scottie Frier'
+
 const BLANK = {
   date: '', artist: '', eventName: '', stage: 'inside', status: 'pending',
-  showTime: '', doorsTime: '', capacity: '', ticketPrice: '', guarantee: '',
-  promoter: '', tourManager: '', notes: ''
+  showTime: '', doorsTime: '', capacity: '', ticketPrice: '', support: '',
+  promoter: DEFAULT_PROMOTER, tourManager: '', notes: ''
 }
 
 export default function Shows() {
@@ -23,6 +25,7 @@ export default function Shows() {
   const [filter, setFilter]     = useState({ stage: '', status: '', search: '' })
   const [showPast, setShowPast] = useState(false)
   const [saving, setSaving]     = useState(false)
+  const [supportActs, setSupportActs] = useState([])
 
   // ── Scraper state ──────────────────────────────────────────────────────────
   const [scrapeOpen, setScrapeOpen]     = useState(false)
@@ -42,16 +45,37 @@ export default function Shows() {
     } finally { setLoading(false) }
   }
 
-  function openAdd() { setEditing(null); setForm(BLANK); setModal(true) }
-  function openEdit(s) { setEditing(s); setForm({ ...BLANK, ...s }); setModal(true) }
+  function parseSupport(str) {
+    return String(str || '')
+      .split(',')
+      .map(s => s.trim())
+      .filter(Boolean)
+  }
+
+  function openAdd() {
+    setEditing(null)
+    setForm(BLANK)
+    setSupportActs([])
+    setModal(true)
+  }
+  function openEdit(s) {
+    setEditing(s)
+    setForm({ ...BLANK, ...s, promoter: s.promoter || DEFAULT_PROMOTER })
+    setSupportActs(parseSupport(s.support))
+    setModal(true)
+  }
 
   async function handleSave() {
     setSaving(true)
     try {
+      const payload = {
+        ...form,
+        support: supportActs.map(s => s.trim()).filter(Boolean).join(', '),
+      }
       if (editing) {
-        await api.put(`/shows/${editing.id}`, form)
+        await api.put(`/shows/${editing.id}`, payload)
       } else {
-        await api.post('/shows', form)
+        await api.post('/shows', payload)
       }
       await load()
       setModal(false)
@@ -253,8 +277,33 @@ export default function Shows() {
             </div>
             <div className="form-row">
               <div className="form-group">
-                <label>Artist Name</label>
-                <input value={f.artist} onChange={set('artist')} placeholder="Artist or band name" />
+                <label>Headlining Artist</label>
+                <input value={f.artist} onChange={set('artist')} placeholder="Headliner name" />
+                {supportActs.map((name, i) => (
+                  <div key={i} style={{ display:'flex', gap:6, marginTop:6 }}>
+                    <input
+                      value={name}
+                      onChange={e => {
+                        const v = e.target.value
+                        setSupportActs(arr => arr.map((x, j) => (j === i ? v : x)))
+                      }}
+                      placeholder={`Support act ${i + 1}`}
+                      style={{ flex: 1 }}
+                    />
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      onClick={() => setSupportActs(arr => arr.filter((_, j) => j !== i))}
+                      title="Remove support act"
+                    >×</button>
+                  </div>
+                ))}
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  style={{ marginTop: 6, alignSelf: 'flex-start' }}
+                  onClick={() => setSupportActs(arr => [...arr, ''])}
+                >+ Add support act</button>
               </div>
               <div className="form-group">
                 <label>Event Name</label>
@@ -293,17 +342,13 @@ export default function Shows() {
             </div>
             <div className="form-row">
               <div className="form-group">
-                <label>Guarantee / Deal</label>
-                <input value={f.guarantee} onChange={set('guarantee')} placeholder="Artist guarantee" />
-              </div>
-              <div className="form-group">
                 <label>Promoter</label>
                 <input value={f.promoter} onChange={set('promoter')} placeholder="Promoter name" />
               </div>
-            </div>
-            <div className="form-group">
-              <label>Tour Manager</label>
-              <input value={f.tourManager} onChange={set('tourManager')} placeholder="TM name and contact" />
+              <div className="form-group">
+                <label>Tour Manager</label>
+                <input value={f.tourManager} onChange={set('tourManager')} placeholder="TM name and contact" />
+              </div>
             </div>
             <div className="form-group">
               <label>Notes</label>
