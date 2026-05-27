@@ -534,25 +534,112 @@ export default function ShowDetail() {
           {siblings.map((s, idx) => {
             const isActive = s.id === id
             const d = s.date ? new Date(s.date + 'T12:00:00') : null
+            const label = d ? d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : ''
             return (
-              <button
+              <span
                 key={s.id}
-                onClick={() => isActive ? null : navigate(`/shows/${s.id}`)}
                 style={{
-                  padding: '6px 12px', borderRadius: 6, cursor: isActive ? 'default' : 'pointer',
+                  display: 'inline-flex', alignItems: 'stretch', borderRadius: 6, overflow: 'hidden',
                   border: isActive ? `1px solid ${stageColor}` : '1px solid rgba(255,255,255,0.1)',
                   background: isActive ? `rgba(${stageRgb},0.18)` : 'transparent',
-                  color: isActive ? '#fff' : 'rgba(255,255,255,0.65)',
-                  fontWeight: isActive ? 600 : 400, fontSize: 13,
                 }}
               >
-                Night {idx + 1}
-                {d && <span style={{ marginLeft: 6, opacity: 0.7, fontSize: 11 }}>
-                  · {d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-                </span>}
-              </button>
+                <button
+                  onClick={() => isActive ? null : navigate(`/shows/${s.id}`)}
+                  style={{
+                    padding: '6px 10px', cursor: isActive ? 'default' : 'pointer',
+                    border: 'none', background: 'transparent',
+                    color: isActive ? '#fff' : 'rgba(255,255,255,0.65)',
+                    fontWeight: isActive ? 600 : 400, fontSize: 13,
+                  }}
+                >
+                  Night {idx + 1}
+                  {label && <span style={{ marginLeft: 6, opacity: 0.7, fontSize: 11 }}>· {label}</span>}
+                </button>
+                <button
+                  title={`Remove Night ${idx + 1}${label ? ` (${label})` : ''} from this run`}
+                  onClick={async () => {
+                    const msg = `Remove Night ${idx + 1}${label ? ` (${label})` : ''} from this run?\n\nThis permanently deletes that show date${isActive ? ' and you will be moved to another night.' : '.'}`
+                    if (!confirm(msg)) return
+                    try {
+                      await api.delete(`/shows/${s.id}`)
+                      if (isActive) {
+                        const next = siblings.find(x => x.id !== s.id)
+                        if (next) navigate(`/shows/${next.id}`, { replace: true })
+                        else navigate('/shows', { replace: true })
+                      } else {
+                        setSiblings(prev => prev.filter(x => x.id !== s.id))
+                      }
+                    } catch (e) {
+                      alert('Failed to remove that night: ' + (e?.response?.data?.error || e.message))
+                    }
+                  }}
+                  style={{
+                    padding: '0 8px', border: 'none', background: 'transparent',
+                    borderLeft: '1px solid rgba(255,255,255,0.08)',
+                    color: 'rgba(255,255,255,0.45)', cursor: 'pointer', fontSize: 12, lineHeight: 1,
+                  }}
+                  onMouseEnter={e => { e.currentTarget.style.background = 'rgba(220,38,38,0.25)'; e.currentTarget.style.color = '#fff' }}
+                  onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'rgba(255,255,255,0.45)' }}
+                >
+                  ✕
+                </button>
+              </span>
             )
           })}
+          <button
+            title="Add another night to this run"
+            onClick={async () => {
+              // Default to the day after the last existing night
+              const last = siblings[siblings.length - 1]
+              let defaultDate = ''
+              if (last?.date) {
+                const d = new Date(last.date + 'T12:00:00')
+                d.setDate(d.getDate() + 1)
+                defaultDate = d.toISOString().slice(0, 10)
+              }
+              const input = prompt(
+                `Add another night to this run.\n\nDate (YYYY-MM-DD):`,
+                defaultDate
+              )
+              if (!input) return
+              const newDate = input.trim()
+              if (!/^\d{4}-\d{2}-\d{2}$/.test(newDate)) {
+                alert('Please enter a date in YYYY-MM-DD format.')
+                return
+              }
+              if (siblings.some(s => s.date === newDate)) {
+                alert('A night already exists on that date for this run.')
+                return
+              }
+              try {
+                const payload = {
+                  ...BLANK_SHOW,
+                  ...show,
+                  date: newDate,
+                  status: 'pending',
+                  ticketsSold: '',
+                }
+                delete payload.id
+                delete payload.createdAt
+                delete payload.updatedAt
+                const res = await api.post('/shows', payload)
+                const newId = res?.data?.data?.id || res?.data?.id
+                if (newId) navigate(`/shows/${newId}`)
+                else window.location.reload()
+              } catch (e) {
+                alert('Failed to add night: ' + (e?.response?.data?.error || e.message))
+              }
+            }}
+            style={{
+              padding: '6px 12px', borderRadius: 6, cursor: 'pointer',
+              border: '1px dashed rgba(255,255,255,0.2)',
+              background: 'transparent', color: 'rgba(255,255,255,0.6)',
+              fontSize: 13,
+            }}
+          >
+            + Add night
+          </button>
         </div>
       )}
 
