@@ -24,6 +24,7 @@ module.exports = {
       unavailability:   'Unavailability',
       artists:          'Artists',
       artistDocuments:  'ArtistDocuments',
+      gmailLabelMappings: 'GmailLabelMappings',
     }
   }
 };

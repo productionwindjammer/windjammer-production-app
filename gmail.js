@@ -229,6 +229,7 @@ module.exports = {
   isConfigured,
   hasClientCredentials,
   parseMessage,
+  listLabels,
   searchEmails,
   getMessage,
   getAttachmentData,
