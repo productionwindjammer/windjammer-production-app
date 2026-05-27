@@ -21,6 +21,7 @@ module.exports = {
       staff:          'Staff',
       techpack:       'TechPack',
       emails:         'Emails',
+      unavailability: 'Unavailability',
     }
   }
 };

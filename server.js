@@ -291,6 +291,7 @@ crudRoutes(app, '/api/labor',           'labor');
 crudRoutes(app, '/api/vendors',         'vendors');
 crudRoutes(app, '/api/vendor-bookings', 'vendorBookings');
 crudRoutes(app, '/api/settlement',      'settlement');
+crudRoutes(app, '/api/unavailability',  'unavailability', ['admin','production_manager']);
 
 // Staff: auto-provision a default user account when an admin adds a staff
 // member with an email address. The account is created with a random unknown
