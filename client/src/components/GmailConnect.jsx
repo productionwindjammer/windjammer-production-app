@@ -135,7 +135,8 @@ function LabelMappings() {
       setLabels(lr.data.labels || [])
       if (lr.data.message) setErr(lr.data.message)
       setMappings(mr.data.mappings || [])
-      setShows(sr.data.shows || sr.data || [])
+      const showRows = sr.data?.data ?? sr.data?.shows ?? (Array.isArray(sr.data) ? sr.data : [])
+      setShows(Array.isArray(showRows) ? showRows : [])
     } catch (e) {
       setErr(e.response?.data?.message || e.message)
     } finally { setLoading(false) }
