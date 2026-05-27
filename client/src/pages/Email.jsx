@@ -2,6 +2,7 @@ import { useEffect, useState, useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import api from '../api'
 import GmailConnect from '../components/GmailConnect'
+import Modal from '../components/Modal'
 import { useAuth } from '../context/AuthContext'
 
 export default function Email() {
@@ -42,6 +43,7 @@ export default function Email() {
   const [bulkShowId, setBulkShowId]   = useState('')
   const [bulkShowPast, setBulkShowPast] = useState(false)
   const [bulkSubmitting, setBulkSubmitting] = useState(false)
+  const [allShowsPickerOpen, setAllShowsPickerOpen] = useState(false)
 
   function toggleSelected(id) {
     setSelectedIds(prev => {
@@ -561,6 +563,7 @@ export default function Email() {
                   onLink={handleBulkLink}
                   onClear={clearSelection}
                   onSelectAll={() => selectAllVisible(inboxEmails)}
+                  onOpenAllShows={() => setAllShowsPickerOpen(true)}
                 />
               )}
               {!gmailStatus?.connected ? (
@@ -671,6 +674,7 @@ export default function Email() {
                   onLink={handleBulkLink}
                   onClear={clearSelection}
                   onSelectAll={() => selectAllVisible(inboxEmails)}
+                  onOpenAllShows={() => setAllShowsPickerOpen(true)}
                 />
               )}
               {loadingInbox ? (
@@ -1015,6 +1019,20 @@ export default function Email() {
       </div>
 
       {/* ── Compose / Reply modal ────────────────────────────────────────────── */}
+      {allShowsPickerOpen && (
+        <AllShowsPicker
+          shows={shows}
+          onClose={() => setAllShowsPickerOpen(false)}
+          onPick={(id) => {
+            setBulkShowId(id)
+            // Make sure the picked show is visible in the dropdown after pick
+            const s = shows.find(x => x.id === id)
+            const todayStr = new Date().toISOString().slice(0, 10)
+            if (s?.date && s.date < todayStr) setBulkShowPast(true)
+            setAllShowsPickerOpen(false)
+          }}
+        />
+      )}
       {composeOpen && (
         <div className="modal-backdrop">
           <div className="modal modal-lg" style={{ display: 'flex', flexDirection: 'column', maxHeight: '85vh' }}>
@@ -1160,6 +1178,7 @@ function EmailAssignControl({ email, advances, shows, open, onToggle, onAssign, 
   const [showId, setShowId] = useState('')
   const [setAdv, setSetAdv] = useState(true)
   const [showPast, setShowPast] = useState(false)
+  const [pickerOpen, setPickerOpen] = useState(false)
 
   // Build a "Date — Artist/Event" label for each show, sorted by date asc.
   // Hide past shows by default to keep the list focused on what crew is actively working.
@@ -1168,6 +1187,11 @@ function EmailAssignControl({ email, advances, shows, open, onToggle, onAssign, 
     .filter(s => showPast || !s.date || s.date >= todayStr)
     .sort((a, b) => (a.date || '').localeCompare(b.date || ''))
     .map(s => ({ id: s.id, label: `${s.date || ''} — ${s.artist || s.eventName || s.id}` }))
+  // Inject the picked show if it isn't already in the filtered list
+  if (showId && !options.find(o => o.id === showId)) {
+    const s = shows.find(x => x.id === showId)
+    if (s) options.unshift({ id: s.id, label: `${s.date || ''} — ${s.artist || s.eventName || s.id}` })
+  }
 
   if (!open) {
     return (
@@ -1178,6 +1202,19 @@ function EmailAssignControl({ email, advances, shows, open, onToggle, onAssign, 
   }
 
   return (
+    <>
+    {pickerOpen && (
+      <AllShowsPicker
+        shows={shows}
+        onClose={() => setPickerOpen(false)}
+        onPick={(id) => {
+          setShowId(id)
+          const s = shows.find(x => x.id === id)
+          if (s?.date && s.date < todayStr) setShowPast(true)
+          setPickerOpen(false)
+        }}
+      />
+    )}
     <div style={{
       display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap',
       padding: 8, borderRadius: 6, background: 'rgba(255,255,255,0.04)',
@@ -1185,10 +1222,15 @@ function EmailAssignControl({ email, advances, shows, open, onToggle, onAssign, 
     }}>
       <select
         value={showId}
-        onChange={e => setShowId(e.target.value)}
+        onChange={e => {
+          const v = e.target.value
+          if (v === '__all__') { setPickerOpen(true); return }
+          setShowId(v)
+        }}
         style={{ padding: '5px 8px', fontSize: 12, minWidth: 220 }}
       >
         <option value="">-- pick a show --</option>
+        <option value="__all__">🗂 All shows…</option>
         {options.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
       </select>
       <label style={{ fontSize: 11, display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer', color: 'rgba(255,255,255,0.55)' }}>
@@ -1208,17 +1250,22 @@ function EmailAssignControl({ email, advances, shows, open, onToggle, onAssign, 
       </button>
       <button className="btn btn-ghost btn-sm" onClick={onToggle} disabled={submitting}>Cancel</button>
     </div>
+    </>
   )
 }
-
-// Sticky bar shown when one or more emails are selected via the row checkboxes.
 // Lets the user pick a show once and link every selected email to it.
-function BulkLinkBar({ count, shows, showId, setShowId, showPast, setShowPast, submitting, onLink, onClear, onSelectAll }) {
+function BulkLinkBar({ count, shows, showId, setShowId, showPast, setShowPast, submitting, onLink, onClear, onSelectAll, onOpenAllShows }) {
   const todayStr = new Date().toISOString().slice(0, 10)
   const options = [...shows]
     .filter(s => showPast || !s.date || s.date >= todayStr)
     .sort((a, b) => (a.date || '').localeCompare(b.date || ''))
     .map(s => ({ id: s.id, label: `${s.date || ''} — ${s.artist || s.eventName || s.id}` }))
+  // If the selected show isn't in the filtered list (e.g. picked from the All
+  // Shows modal), inject it so the dropdown still shows the chosen label.
+  if (showId && !options.find(o => o.id === showId)) {
+    const s = shows.find(x => x.id === showId)
+    if (s) options.unshift({ id: s.id, label: `${s.date || ''} — ${s.artist || s.eventName || s.id}` })
+  }
 
   return (
     <div style={{
@@ -1230,10 +1277,15 @@ function BulkLinkBar({ count, shows, showId, setShowId, showPast, setShowPast, s
       <button className="btn btn-ghost btn-sm" onClick={onSelectAll} title="Add all visible emails to selection">+ All visible</button>
       <select
         value={showId}
-        onChange={e => setShowId(e.target.value)}
+        onChange={e => {
+          const v = e.target.value
+          if (v === '__all__') { onOpenAllShows(); return }
+          setShowId(v)
+        }}
         style={{ padding: '5px 8px', fontSize: 12, minWidth: 240 }}
       >
         <option value="">-- pick a show --</option>
+        <option value="__all__">🗂 All shows…</option>
         {options.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
       </select>
       <label style={{ fontSize: 11, display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer', color: 'rgba(255,255,255,0.65)' }}>
@@ -1246,5 +1298,62 @@ function BulkLinkBar({ count, shows, showId, setShowId, showPast, setShowPast, s
       </button>
       <button className="btn btn-ghost btn-sm" onClick={onClear} disabled={submitting}>Clear</button>
     </div>
+  )
+}
+
+// Modal that lists every show (past + future) with a search box.
+// Click a row to pick it; the parent receives the show id.
+function AllShowsPicker({ shows, onPick, onClose }) {
+  const [q, setQ] = useState('')
+  const todayStr = new Date().toISOString().slice(0, 10)
+  const needle = q.trim().toLowerCase()
+  const rows = [...shows]
+    .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
+    .filter(s => {
+      if (!needle) return true
+      return [s.date, s.artist, s.eventName, s.stage, s.status, s.promoter, s.tourManager]
+        .filter(Boolean).some(v => String(v).toLowerCase().includes(needle))
+    })
+
+  return (
+    <Modal title="Pick a show" onClose={onClose} size="lg">
+      <input
+        type="text"
+        autoFocus
+        value={q}
+        onChange={e => setQ(e.target.value)}
+        placeholder="Search by date, artist, event, stage, status…"
+        style={{ width: '100%', padding: '8px 10px', fontSize: 14, marginBottom: 10 }}
+      />
+      <div style={{ maxHeight: '55vh', overflowY: 'auto', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 6 }}>
+        {rows.length === 0 ? (
+          <div className="empty-state" style={{ padding: 20 }}>No shows match.</div>
+        ) : rows.map(s => {
+          const isPast = s.date && s.date < todayStr
+          return (
+            <button
+              key={s.id}
+              onClick={() => onPick(s.id)}
+              style={{
+                display: 'flex', width: '100%', alignItems: 'center', gap: 10,
+                padding: '10px 12px', textAlign: 'left',
+                background: 'transparent', color: 'inherit',
+                border: 'none', borderBottom: '1px solid rgba(255,255,255,0.05)',
+                cursor: 'pointer', fontSize: 13,
+                opacity: isPast ? 0.7 : 1,
+              }}
+              onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
+              onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+            >
+              <span style={{ fontVariantNumeric: 'tabular-nums', fontWeight: 600, minWidth: 90 }}>{s.date || '—'}</span>
+              <span style={{ flex: 1, fontWeight: 500 }}>{s.artist || s.eventName || '(untitled)'}</span>
+              {s.stage && <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 10, background: 'rgba(255,255,255,0.08)', textTransform: 'capitalize' }}>{s.stage}</span>}
+              {s.status && <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 10, background: 'rgba(255,255,255,0.08)', textTransform: 'capitalize' }}>{s.status}</span>}
+              {isPast && <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.45)' }}>past</span>}
+            </button>
+          )
+        })}
+      </div>
+    </Modal>
   )
 }
