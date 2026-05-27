@@ -147,6 +147,17 @@ function parseMessage(msg) {
   };
 }
 
+// ── List Gmail labels for a mailbox ──────────────────────────────────────────
+async function listLabels(client) {
+  const gmail = client || getGmailClient();
+  const res = await gmail.users.labels.list({ userId: 'me' });
+  return (res.data.labels || []).map(l => ({
+    id:   l.id,
+    name: l.name,
+    type: l.type, // 'system' or 'user'
+  }));
+}
+
 // ── Search Gmail for messages matching a query ────────────────────────────────
 // Optional `client` overrides the shared client (used for per-user mailboxes).
 async function searchEmails(query, maxResults = 100, client) {
