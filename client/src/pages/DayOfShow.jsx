@@ -64,6 +64,73 @@ export default function DayOfShow() {
     .filter(i => !selectedShow || i.showId === selectedShow)
     .sort((a, b) => (a.time || '').localeCompare(b.time || ''))
 
+  function handlePrint() {
+    // Group filtered items by show so "All Shows" prints one page per show.
+    const groups = new Map()
+    for (const it of filtered) {
+      const sid = it.showId || '_'
+      if (!groups.has(sid)) groups.set(sid, [])
+      groups.get(sid).push(it)
+    }
+    if (groups.size === 0) { alert('No schedule items to print.'); return }
+
+    const pages = []
+    for (const [sid, rows] of groups) {
+      const show = shows.find(s => s.id === sid)
+      const dateStr = show?.date || rows[0]?.date || ''
+      let prettyDate = dateStr
+      if (/^\d{4}-\d{2}-\d{2}/.test(dateStr)) {
+        const [y, m, d] = dateStr.slice(0, 10).split('-').map(Number)
+        const dt = new Date(y, m - 1, d)
+        prettyDate = dt.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: '2-digit', year: 'numeric' })
+      }
+      const rowsHtml = rows.map(it => `
+        <tr>
+          <td class="label">${escapeHtml(it.label || '')}</td>
+          <td class="time">${it.time ? escapeHtml(formatTime(it.time, tf)) : ''}</td>
+        </tr>`).join('')
+      pages.push(`
+        <section class="page">
+          <header>
+            <h1>The Windjammer</h1>
+            <h2>Isle of Palms, SC</h2>
+            <h2>${escapeHtml(prettyDate)}</h2>
+          </header>
+          <table>${rowsHtml}</table>
+        </section>`)
+    }
+
+    const html = `<!DOCTYPE html><html><head>
+      <title>Day Sheet</title>
+      <style>
+        @page { size: letter; margin: 0.6in; }
+        * { box-sizing: border-box; }
+        html, body { margin: 0; padding: 0; background: #fff; color: #000;
+          font-family: 'Impact','Arial Black','Helvetica Neue',sans-serif;
+          -webkit-font-smoothing: antialiased; }
+        .page { page-break-after: always; padding: 0.25in 0; }
+        .page:last-child { page-break-after: auto; }
+        header { text-align: center; margin-bottom: 0.4in; }
+        header h1 { font-size: 34pt; margin: 0 0 4pt; letter-spacing: 0.5pt; }
+        header h2 { font-size: 22pt; margin: 0; font-weight: 900; }
+        table { margin: 0 auto; border-collapse: collapse; width: 70%; }
+        td { padding: 6pt 0; font-size: 22pt; font-weight: 900; vertical-align: baseline; }
+        td.label { text-align: right; padding-right: 0.6in; }
+        td.time  { text-align: left;  white-space: nowrap; font-variant-numeric: tabular-nums; }
+      </style>
+    </head><body>${pages.join('')}</body></html>`
+
+    const win = window.open('', '_blank')
+    win.document.write(html)
+    win.document.close()
+    win.focus()
+    setTimeout(() => win.print(), 400)
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]))
+  }
+
   return (
     <div>
       <div className="page-header">
@@ -71,7 +138,10 @@ export default function DayOfShow() {
           <div className="page-title">Day of Show</div>
           <div className="page-subtitle">Load-in to load-out schedule and timeline management</div>
         </div>
-        <button className="btn btn-primary" onClick={openAdd}>+ Add Item</button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button className="btn btn-ghost" onClick={handlePrint} disabled={filtered.length === 0}>🖨 Print Day Sheet</button>
+          <button className="btn btn-primary" onClick={openAdd}>+ Add Item</button>
+        </div>
       </div>
 
       <div className="filter-bar">
