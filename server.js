@@ -914,12 +914,12 @@ app.get('/api/artists/:id/documents', requireAuth, async (req, res) => {
 });
 
 // Upload a document to an artist's folder (PM+)
-// Body: { filename, mimeType, data (base64), type, year, notes }
+// Body: { filename, mimeType, data (base64), type, year, notes, showId, showDate }
 app.post('/api/artists/:id/documents',
   requireAuth, requireRole('admin','production_manager'),
   async (req, res) => {
     try {
-      const { filename, mimeType, data, type, year, notes } = req.body || {};
+      const { filename, mimeType, data, type, year, notes, showId, showDate } = req.body || {};
       if (!filename || !mimeType || !data)
         return res.status(400).json({ success: false, message: 'filename, mimeType, data required' });
 
@@ -947,6 +947,8 @@ app.post('/api/artists/:id/documents',
         type:        type || 'other',
         year:        year ? String(year) : '',
         notes:       notes || '',
+        showId:      showId || '',
+        showDate:    showDate || '',
         mimeType,
         driveFileId: uploaded.data.id,
         webViewLink: uploaded.data.webViewLink || `https://drive.google.com/file/d/${uploaded.data.id}/view`,

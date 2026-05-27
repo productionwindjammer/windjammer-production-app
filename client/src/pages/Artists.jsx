@@ -203,40 +203,52 @@ function ArtistDetail({ id }) {
 
   const [artist, setArtist] = useState(null)
   const [docs, setDocs]     = useState([])
+  const [shows, setShows]   = useState([])
+  const [advancing, setAdvancing] = useState([])
   const [loading, setLoading] = useState(true)
   const [uploading, setUploading] = useState(false)
-  const [uploadMeta, setUploadMeta] = useState({ type: 'rider', year: '', notes: '' })
+  const [uploadMeta, setUploadMeta] = useState({ type: 'rider', year: '', notes: '', showId: '' })
 
   useEffect(() => { load() }, [id])
   async function load() {
     setLoading(true)
     try {
-      const [aRes, dRes] = await Promise.all([
+      const [aRes, dRes, sRes, advRes] = await Promise.all([
         api.get('/artists'),
         api.get(`/artists/${id}/documents`),
+        api.get('/shows'),
+        api.get('/advancing').catch(() => ({ data: { data: [] } })),
       ])
       setArtist((aRes.data.data || []).find(a => a.id === id) || null)
       setDocs(dRes.data.data || [])
+      setShows(sRes.data.data || [])
+      setAdvancing(advRes.data.data || [])
     } finally { setLoading(false) }
   }
 
   async function onUpload(e) {
     const file = e.target.files?.[0]
-    e.target.value = '' // reset so same file can be re-picked
+    e.target.value = ''
     if (!file) return
     if (file.size > 25 * 1024 * 1024) { alert('Max file size is 25MB.'); return }
     setUploading(true)
     try {
       const data = await fileToBase64(file)
+      // If a show is selected, also stamp its date and auto-derive the year
+      const linkedShow = artistShows.find(s => s.id === uploadMeta.showId)
+      const showDate   = linkedShow?.date || ''
+      const derivedYr  = uploadMeta.year || (showDate ? showDate.slice(0, 4) : '')
       await api.post(`/artists/${id}/documents`, {
         filename: file.name,
         mimeType: file.type || 'application/octet-stream',
         data,
-        type: uploadMeta.type,
-        year: uploadMeta.year,
-        notes: uploadMeta.notes,
+        type:     uploadMeta.type,
+        year:     derivedYr,
+        notes:    uploadMeta.notes,
+        showId:   uploadMeta.showId || '',
+        showDate,
       })
-      setUploadMeta({ type: 'rider', year: '', notes: '' })
+      setUploadMeta({ type: 'rider', year: '', notes: '', showId: uploadMeta.showId })
       await load()
     } catch (err) {
       alert('Upload failed: ' + (err?.response?.data?.message || err.message))
@@ -249,6 +261,30 @@ function ArtistDetail({ id }) {
     catch (err) { alert('Delete failed: ' + (err?.response?.data?.message || err.message)) }
   }
 
+  // ── Derived: shows for this artist (matched by name, case-insensitive) ──
+  const artistShows = useMemo(() => {
+    if (!artist) return []
+    const key = (artist.name || '').trim().toLowerCase()
+    const aliases = (artist.aliases || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean)
+    const names = new Set([key, ...aliases])
+    return shows
+      .filter(s => {
+        const n = (s.artist || s.eventName || '').trim().toLowerCase()
+        return n && (names.has(n) || [...names].some(x => x && (n.includes(x) || x.includes(n))))
+      })
+      .sort((a, b) => (b.date || '').localeCompare(a.date || '')) // newest first
+  }, [shows, artist])
+
+  // Pre-select the most recent show in the upload form when shows load
+  useEffect(() => {
+    if (!uploadMeta.showId && artistShows.length > 0) {
+      // Prefer an upcoming show if any, otherwise the most recent past one
+      const todayStr = new Date().toISOString().slice(0, 10)
+      const upcoming = [...artistShows].reverse().find(s => (s.date || '') >= todayStr)
+      setUploadMeta(m => ({ ...m, showId: (upcoming || artistShows[0])?.id || '' }))
+    }
+  }, [artistShows]) // eslint-disable-line
+
   if (loading) return <div>Loading…</div>
   if (!artist) return (
     <div>
@@ -257,16 +293,35 @@ function ArtistDetail({ id }) {
     </div>
   )
 
-  // Group docs by type, newest first within each
-  const grouped = docs.reduce((acc, d) => {
+  // Index docs by showId; collect "unscoped" (library) docs separately
+  const docsByShow = new Map()
+  const unscopedDocs = []
+  for (const d of docs) {
+    if (d.showId) {
+      if (!docsByShow.has(d.showId)) docsByShow.set(d.showId, [])
+      docsByShow.get(d.showId).push(d)
+    } else {
+      unscopedDocs.push(d)
+    }
+  }
+  // Newest docs first within each show
+  for (const arr of docsByShow.values()) {
+    arr.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''))
+  }
+  unscopedDocs.sort((a, b) =>
+    (b.year || '').localeCompare(a.year || '') || (b.createdAt || '').localeCompare(a.createdAt || '')
+  )
+
+  // Group unscoped library docs by type
+  const libraryByType = unscopedDocs.reduce((acc, d) => {
     const k = d.type || 'other'
     if (!acc[k]) acc[k] = []
     acc[k].push(d)
     return acc
   }, {})
-  for (const k of Object.keys(grouped)) {
-    grouped[k].sort((a, b) => (b.year || '').localeCompare(a.year || '') || (b.createdAt || '').localeCompare(a.createdAt || ''))
-  }
+
+  const advanceByShow = new Map(advancing.map(a => [a.showId, a]))
+  const todayStr = new Date().toISOString().slice(0, 10)
 
   return (
     <div>
@@ -283,6 +338,9 @@ function ArtistDetail({ id }) {
               {artist.contactName}{artist.contactEmail && ` · ${artist.contactEmail}`}{artist.contactPhone && ` · ${artist.contactPhone}`}
             </div>
           )}
+          <div style={{ marginTop: 6, fontSize: 12, color: 'rgba(255,255,255,0.5)' }}>
+            {artistShows.length} show{artistShows.length === 1 ? '' : 's'} on record · {docs.length} document{docs.length === 1 ? '' : 's'}
+          </div>
         </div>
         {artist.driveFolderId && (
           <a className="btn btn-ghost btn-sm" target="_blank" rel="noreferrer"
@@ -298,15 +356,25 @@ function ArtistDetail({ id }) {
       {canEdit && (
         <div className="card" style={{ padding: 16, marginBottom: 20 }}>
           <h3 style={{ marginTop: 0 }}>Add a document</h3>
-          <div className="form-row" style={{ alignItems: 'flex-end' }}>
+          <div className="form-row" style={{ alignItems: 'flex-end', flexWrap: 'wrap' }}>
             <label>Type
               <select value={uploadMeta.type} onChange={e => setUploadMeta(m => ({ ...m, type: e.target.value }))}>
                 {DOC_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
               </select>
             </label>
-            <label>Year (optional)
-              <input type="number" min="1980" max="2100" value={uploadMeta.year} placeholder="e.g. 2026"
-                onChange={e => setUploadMeta(m => ({ ...m, year: e.target.value }))} />
+            <label>Attach to show
+              <select value={uploadMeta.showId} onChange={e => setUploadMeta(m => ({ ...m, showId: e.target.value }))}>
+                <option value="">— Reusable library (no show) —</option>
+                {artistShows.map(s => (
+                  <option key={s.id} value={s.id}>
+                    {s.date}{s.stage ? ` · ${s.stage}` : ''}{s.status ? ` · ${s.status}` : ''}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>Year
+              <input type="number" min="1980" max="2100" value={uploadMeta.year} placeholder="auto"
+                onChange={e => setUploadMeta(m => ({ ...m, year: e.target.value }))} style={{ width: 90 }} />
             </label>
             <label style={{ flex: 1, minWidth: 200 }}>Notes (optional)
               <input value={uploadMeta.notes} placeholder="e.g. Updated band size"
@@ -318,57 +386,145 @@ function ArtistDetail({ id }) {
             </label>
           </div>
           <div style={{ marginTop: 8, fontSize: 12, color: 'rgba(255,255,255,0.5)' }}>
-            Stored in the artist's Google Drive folder (max 25 MB). All crew & staff can view.
+            Tip: link a document to a specific show to file it under that performance's history. Skip the show to keep it as a reusable template (e.g. a stage plot that doesn't change).
           </div>
         </div>
       )}
 
-      {/* Document list */}
-      {docs.length === 0 ? (
-        <div className="card" style={{ padding: 24, textAlign: 'center', color: 'rgba(255,255,255,0.6)' }}>
-          No documents yet.{canEdit && ' Upload a tech rider, stage plot, or anything reusable across years.'}
+      {/* ── Reusable library ─────────────────────────────────────────── */}
+      {unscopedDocs.length > 0 && (
+        <div style={{ marginBottom: 24 }}>
+          <h2 style={{ fontSize: 16, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'rgba(255,255,255,0.7)' }}>
+            📚 Reusable Library
+          </h2>
+          {Object.entries(libraryByType).map(([type, list]) => (
+            <DocTable key={type} title={DOC_TYPE_LABEL[type] || type} docs={list} canEdit={canEdit} onDelete={removeDoc} />
+          ))}
         </div>
-      ) : (
-        Object.entries(grouped).map(([type, list]) => (
-          <div key={type} style={{ marginBottom: 20 }}>
-            <h3 style={{ marginBottom: 8, fontSize: 14, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'rgba(255,255,255,0.55)' }}>
-              {DOC_TYPE_LABEL[type] || type} <span style={{ opacity: 0.5, fontWeight: 400 }}>({list.length})</span>
-            </h3>
-            <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-              <table className="data-table" style={{ width: '100%' }}>
-                <thead>
-                  <tr>
-                    <th>File</th>
-                    <th style={{ width: 80 }}>Year</th>
-                    <th>Notes</th>
-                    <th style={{ width: 160 }}>Uploaded</th>
-                    <th style={{ width: 180 }}></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {list.map(d => (
-                    <tr key={d.id}>
-                      <td><strong>📄 {d.name}</strong></td>
-                      <td>{d.year || ''}</td>
-                      <td style={{ fontSize: 13, color: 'rgba(255,255,255,0.7)' }}>{d.notes}</td>
-                      <td style={{ fontSize: 12, color: 'rgba(255,255,255,0.5)' }}>
-                        {d.uploadedBy && <div>{d.uploadedBy}</div>}
-                        {d.createdAt && <div>{new Date(d.createdAt).toLocaleDateString()}</div>}
-                      </td>
-                      <td>
-                        <a className="btn btn-ghost btn-sm" target="_blank" rel="noreferrer" href={d.webViewLink}>Open</a>
-                        {canEdit && (
-                          <button className="btn btn-danger btn-sm" onClick={() => removeDoc(d)}>Del</button>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        ))
       )}
+
+      {/* ── Show history (chronological, newest first) ─────────────── */}
+      <div>
+        <h2 style={{ fontSize: 16, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'rgba(255,255,255,0.7)' }}>
+          🗓️ Show History
+        </h2>
+        {artistShows.length === 0 ? (
+          <div className="card" style={{ padding: 24, textAlign: 'center', color: 'rgba(255,255,255,0.6)' }}>
+            No shows on record for {artist.name} yet.
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {artistShows.map(s => {
+              const sdocs = docsByShow.get(s.id) || []
+              const adv   = advanceByShow.get(s.id)
+              const isFuture = (s.date || '') >= todayStr
+              const stage = (s.stage || 'inside').toLowerCase()
+              const stageColor = stage === 'beach' ? '#10b981' : '#3b82f6'
+              return (
+                <div key={s.id} className="card" style={{ padding: 16, borderLeft: `3px solid ${stageColor}` }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap', gap: 8 }}>
+                    <div>
+                      <div style={{ fontSize: 16, fontWeight: 600 }}>
+                        {formatLongDate(s.date)}
+                        {isFuture && <span style={{ marginLeft: 8, fontSize: 11, padding: '2px 6px', borderRadius: 3, background: 'rgba(59,130,246,0.2)', color: '#93c5fd' }}>UPCOMING</span>}
+                      </div>
+                      <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.6)', marginTop: 2 }}>
+                        <span className={`badge badge-${stage}`}>{stage === 'inside' ? 'Inside Stage' : 'Beach Stage'}</span>
+                        <span className={`badge badge-${s.status || 'pending'}`} style={{ marginLeft: 6 }}>{s.status || 'pending'}</span>
+                        {s.eventName && s.eventName !== s.artist && <span style={{ marginLeft: 8 }}>· {s.eventName}</span>}
+                      </div>
+                    </div>
+                    <Link to={`/shows/${s.id}`} className="btn btn-ghost btn-sm">Open show →</Link>
+                  </div>
+
+                  {/* Quick advance summary */}
+                  {adv && (
+                    <div style={{ marginTop: 10, fontSize: 13, color: 'rgba(255,255,255,0.75)', display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                      {adv.advancingComplete === 'true' && <span style={{ color: '#10b981' }}>✓ Advance complete</span>}
+                      {adv.curfew && <span>Curfew: <strong>{adv.curfew}</strong></span>}
+                      {adv.advanceContact && <span>TM: {adv.advanceContact}</span>}
+                    </div>
+                  )}
+
+                  {/* Documents attached to this show */}
+                  {sdocs.length === 0 ? (
+                    <div style={{ marginTop: 12, fontSize: 12, color: 'rgba(255,255,255,0.4)', fontStyle: 'italic' }}>
+                      No documents attached to this show.{canEdit && ' Use the upload form above and pick this show.'}
+                    </div>
+                  ) : (
+                    <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      {sdocs.map(d => (
+                        <div key={d.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, padding: '6px 10px', background: 'rgba(255,255,255,0.03)', borderRadius: 4 }}>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <span style={{ fontSize: 11, padding: '1px 6px', borderRadius: 3, background: 'rgba(255,255,255,0.08)', color: 'rgba(255,255,255,0.7)', marginRight: 8 }}>
+                              {DOC_TYPE_LABEL[d.type] || d.type}
+                            </span>
+                            <strong style={{ fontSize: 13 }}>📄 {d.name}</strong>
+                            {d.notes && <span style={{ marginLeft: 8, fontSize: 12, color: 'rgba(255,255,255,0.55)' }}>· {d.notes}</span>}
+                          </div>
+                          <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                            <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.4)' }}>{d.uploadedBy}</span>
+                            <a className="btn btn-ghost btn-sm" target="_blank" rel="noreferrer" href={d.webViewLink}>Open</a>
+                            {canEdit && <button className="btn btn-danger btn-sm" onClick={() => removeDoc(d)}>✕</button>}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </div>
     </div>
   )
+}
+
+function DocTable({ title, docs, canEdit, onDelete }) {
+  return (
+    <div style={{ marginBottom: 14 }}>
+      <h3 style={{ marginBottom: 6, fontSize: 13, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'rgba(255,255,255,0.5)' }}>
+        {title} <span style={{ opacity: 0.6, fontWeight: 400 }}>({docs.length})</span>
+      </h3>
+      <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+        <table className="data-table" style={{ width: '100%' }}>
+          <thead>
+            <tr>
+              <th>File</th>
+              <th style={{ width: 70 }}>Year</th>
+              <th>Notes</th>
+              <th style={{ width: 140 }}>Uploaded</th>
+              <th style={{ width: 150 }}></th>
+            </tr>
+          </thead>
+          <tbody>
+            {docs.map(d => (
+              <tr key={d.id}>
+                <td><strong>📄 {d.name}</strong></td>
+                <td>{d.year || ''}</td>
+                <td style={{ fontSize: 13, color: 'rgba(255,255,255,0.7)' }}>{d.notes}</td>
+                <td style={{ fontSize: 12, color: 'rgba(255,255,255,0.5)' }}>
+                  {d.uploadedBy && <div>{d.uploadedBy}</div>}
+                  {d.createdAt && <div>{new Date(d.createdAt).toLocaleDateString()}</div>}
+                </td>
+                <td>
+                  <a className="btn btn-ghost btn-sm" target="_blank" rel="noreferrer" href={d.webViewLink}>Open</a>
+                  {canEdit && <button className="btn btn-danger btn-sm" onClick={() => onDelete(d)}>Del</button>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+function formatLongDate(ymd) {
+  if (!ymd) return 'No date'
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(ymd)
+  if (!m) return ymd
+  const d = new Date(+m[1], +m[2] - 1, +m[3])
+  return d.toLocaleDateString('en-US', { weekday: 'short', month: 'long', day: 'numeric', year: 'numeric' })
 }
