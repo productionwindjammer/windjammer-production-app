@@ -206,7 +206,7 @@ export default function Shows() {
 
       <div className="card">
         {loading ? <div className="loading">Loading…</div> : (
-          <div className="table-wrap">
+          <div className="table-wrap responsive-cards">
             <table>
               <thead>
                 <tr>
@@ -226,14 +226,14 @@ export default function Shows() {
                 )}
                 {filtered.map(show => (
                   <tr key={show.id} style={{ cursor: 'pointer' }} onClick={() => navigate(`/shows/${show.id}`)}>
-                    <td className="text-muted">{show.date}</td>
-                    <td><strong>{show.artist || show.eventName || '—'}</strong></td>
-                    <td><span className={`badge badge-${show.stage}`}>{show.stage === 'inside' ? 'Inside' : 'Beach'}</span></td>
-                    <td className="text-muted">{show.showTime ? formatTime(show.showTime, tf) : '—'}</td>
-                    <td className="text-muted">{show.capacity || '—'}</td>
-                    <td><span className={`badge badge-${show.status || 'pending'}`}>{show.status || 'pending'}</span></td>
-                    <td className="text-muted">{show.tourManager || '—'}</td>
-                      <td onClick={e => e.stopPropagation()}>
+                    <td data-label="Date" className="text-muted">{show.date}</td>
+                    <td data-label="Artist"><strong>{show.artist || show.eventName || '—'}</strong></td>
+                    <td data-label="Stage"><span className={`badge badge-${show.stage}`}>{show.stage === 'inside' ? 'Inside' : 'Beach'}</span></td>
+                    <td data-label="Show Time" className="text-muted">{show.showTime ? formatTime(show.showTime, tf) : '—'}</td>
+                    <td data-label="Capacity" className="text-muted">{show.capacity || '—'}</td>
+                    <td data-label="Status"><span className={`badge badge-${show.status || 'pending'}`}>{show.status || 'pending'}</span></td>
+                    <td data-label="Tour Manager" className="text-muted">{show.tourManager || '—'}</td>
+                      <td data-label="Actions" onClick={e => e.stopPropagation()}>
                       <div className="actions-cell">
                         <button className="btn btn-ghost btn-sm" onClick={() => openEdit(show)}>Edit</button>
                         <button className="btn btn-danger btn-sm" onClick={() => handleDelete(show.id)}>Del</button>

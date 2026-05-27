@@ -3,11 +3,11 @@ import { useAuth } from '../context/AuthContext'
 import { navForRole } from '../nav'
 import InstallApp from './InstallApp'
 
-export default function Sidebar() {
+export default function Sidebar({ className = '' }) {
   const { effectiveRole } = useAuth()
   const items = navForRole(effectiveRole)
   return (
-    <nav className="sidebar">
+    <nav className={'sidebar' + (className ? ' ' + className : '')}>
       <div className="sidebar-brand">
         <img src="/windjammer-logo.png" alt="The Windjammer" className="sidebar-logo" />
         <p>Production Management</p>

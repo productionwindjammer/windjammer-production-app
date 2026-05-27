@@ -266,3 +266,213 @@ textarea { resize: vertical; min-height: 80px; }
 .top-nav-item                                 { display: inline-flex; align-items: center; gap: 6px; padding: 8px 12px; font-size: 0.82rem; color: var(--text-muted); text-decoration: none; border-radius: 6px; white-space: nowrap; }
 .top-nav-item:hover                           { background: rgba(127,127,127,0.10); color: var(--text); }
 .top-nav-item.active                          { background: rgba(59,130,246,0.15); color: var(--accent); }
+
+/* ─── Mobile menu trigger (hamburger) ────────────────────────────────────── */
+/* Hidden on desktop; shown by the small-screen media query below. */
+.mobile-menu-btn {
+  display: none;
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text);
+  width: 36px; height: 36px;
+  border-radius: 8px;
+  font-size: 1.2rem;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.mobile-menu-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+.mobile-nav-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.55);
+  z-index: 90;
+}
+.mobile-nav-overlay.open { display: block; }
+
+/* ════════════════════════════════════════════════════════════════════════ */
+/* RESPONSIVE — TABLET (≤1024px)                                            */
+/* Slim down chrome, scrollable tables, two-up form grids collapse to one.  */
+/* ════════════════════════════════════════════════════════════════════════ */
+@media (max-width: 1024px) {
+  .main-content       { padding: 20px 22px; }
+  .sidebar            { width: 200px; }
+  .sidebar-item       { font-size: 0.82rem; padding: 8px 14px; }
+  .page-title         { font-size: 1.2rem; }
+  .stat-grid          { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+  .stat-value         { font-size: 1.65rem; }
+
+  /* Wide tables become horizontally scrollable wrappers. */
+  .table-wrap, .table-scroll { -webkit-overflow-scrolling: touch; overflow-x: auto; }
+
+  /* Two-column form grids drop to a single column. */
+  .form-grid,
+  [style*="grid-template-columns: 1fr 1fr"] { grid-template-columns: 1fr !important; }
+}
+
+/* ════════════════════════════════════════════════════════════════════════ */
+/* RESPONSIVE — MOBILE (≤720px)                                              */
+/* Sidebar collapses behind a hamburger overlay. Cards stack. Modal full.   */
+/* ════════════════════════════════════════════════════════════════════════ */
+@media (max-width: 720px) {
+  body, #root { overflow-x: hidden; }
+
+  /* ── App chrome ─────────────────────────────────────────────────────── */
+  .app-layout      { height: calc(100vh - 52px); }
+  .app-header      { height: 52px; padding: 0 12px; gap: 8px; }
+  .app-header h1   { font-size: 0.95rem; }
+  .user-chip       { font-size: 0.72rem; }
+  .user-chip strong { max-width: 90px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .btn-logout      { padding: 4px 9px; font-size: 0.72rem; }
+  .header-right    { gap: 8px; }
+  .view-as         { display: none; }     /* hide impersonation switcher on tiny screens */
+  .impersonation-banner { font-size: 0.75rem; padding: 6px 12px; }
+
+  .main-content    { padding: 14px 12px; }
+
+  /* ── Hamburger sidebar ─────────────────────────────────────────────── */
+  .mobile-menu-btn { display: inline-flex; }
+
+  .sidebar {
+    position: fixed;
+    top: 52px;
+    left: 0;
+    bottom: 0;
+    width: 260px;
+    z-index: 100;
+    transform: translateX(-100%);
+    transition: transform 0.22s ease;
+    box-shadow: 4px 0 24px rgba(0,0,0,0.35);
+  }
+  .sidebar.open { transform: translateX(0); }
+
+  /* Top-menu layout: collapse to overflow-scroll instead of stretching */
+  [data-menu="top"] .top-nav { padding: 0 10px; height: 44px; }
+  [data-menu="top"] .top-nav-item { padding: 6px 10px; font-size: 0.78rem; }
+
+  /* ── Page header stacks vertically ──────────────────────────────────── */
+  .page-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+    margin-bottom: 18px;
+  }
+  .page-header > * { width: 100%; }
+  .page-title    { font-size: 1.1rem; }
+  .page-subtitle { font-size: 0.75rem; }
+
+  /* Right-side buttons cluster wraps nicely */
+  .page-header .btn,
+  .page-header button { flex: 1 1 auto; justify-content: center; }
+
+  /* ── Cards & stats ─────────────────────────────────────────────────── */
+  .card               { padding: 14px; border-radius: 9px; }
+  .card-header        { flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+  .stat-grid          { grid-template-columns: repeat(2, 1fr); gap: 10px; margin-bottom: 18px; }
+  .stat-card          { padding: 12px 14px; }
+  .stat-label         { font-size: 0.65rem; }
+  .stat-value         { font-size: 1.4rem; }
+
+  /* ── Buttons ───────────────────────────────────────────────────────── */
+  .btn       { padding: 9px 14px; font-size: 0.85rem; }
+  .btn-sm    { padding: 6px 10px; font-size: 0.78rem; }
+
+  /* ── Forms ─────────────────────────────────────────────────────────── */
+  .form-grid,
+  .form-row,
+  [style*="grid-template-columns: 1fr 1fr"],
+  [style*="grid-template-columns: 1fr 1fr 1fr"] {
+    grid-template-columns: 1fr !important;
+    gap: 10px !important;
+  }
+  input.input, select.input, textarea.input { font-size: 16px; } /* prevents iOS auto-zoom */
+
+  /* ── Modals: full-screen on mobile ─────────────────────────────────── */
+  .modal-overlay { padding: 0 !important; }
+  .modal-overlay > * {
+    width: 100% !important;
+    max-width: 100% !important;
+    height: 100vh;
+    max-height: 100vh;
+    border-radius: 0 !important;
+    overflow-y: auto;
+  }
+
+  /* ── Tables ────────────────────────────────────────────────────────── */
+  /* Default behavior: keep the structure but allow horizontal scroll.
+     Pages opt-in to a card-stack layout by adding .responsive-cards on
+     the .table-wrap element (see Shows / DayOfShow / ShowDetail).      */
+  .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .table-wrap table { font-size: 0.82rem; }
+  .table-wrap th, .table-wrap td { padding: 8px 10px !important; }
+
+  /* Card-stack pattern: each row collapses into a stacked card with
+     pseudo-labels pulled from data-label attributes on each <td>.       */
+  .responsive-cards table,
+  .responsive-cards thead,
+  .responsive-cards tbody,
+  .responsive-cards tr,
+  .responsive-cards th,
+  .responsive-cards td { display: block; width: 100%; }
+  .responsive-cards thead { display: none; }
+  .responsive-cards tbody tr {
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    padding: 10px 12px;
+    margin-bottom: 10px;
+    background: var(--bg-card);
+  }
+  .responsive-cards tbody td {
+    padding: 4px 0 !important;
+    border: none !important;
+    display: grid;
+    grid-template-columns: 110px 1fr;
+    gap: 8px;
+    align-items: baseline;
+    font-size: 0.85rem;
+  }
+  .responsive-cards tbody td::before {
+    content: attr(data-label);
+    color: var(--text-muted);
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-weight: 600;
+  }
+  .responsive-cards tbody td:empty,
+  .responsive-cards tbody td[data-label=""] { display: none; }
+  /* "Actions" cell spans full width */
+  .responsive-cards tbody td.actions,
+  .responsive-cards tbody td[data-label="Actions"] {
+    grid-template-columns: 1fr;
+    margin-top: 6px;
+    border-top: 1px dashed var(--border) !important;
+    padding-top: 8px !important;
+  }
+  .responsive-cards tbody td[data-label="Actions"]::before { display: none; }
+
+  /* ── ShowDetail tabs scroll horizontally when many tabs ─────────────── */
+  .tabs-bar,
+  [role="tablist"] { overflow-x: auto; -webkit-overflow-scrolling: touch; flex-wrap: nowrap !important; }
+  .tabs-bar > *, [role="tablist"] > * { flex-shrink: 0; }
+
+  /* ── RichEditor toolbar wraps ────────────────────────────────────────── */
+  .rich-toolbar { flex-wrap: wrap; gap: 4px; }
+  .re-btn       { padding: 5px 8px; font-size: 0.78rem; }
+}
+
+/* ════════════════════════════════════════════════════════════════════════ */
+/* RESPONSIVE — VERY NARROW (≤420px)                                         */
+/* Stat grid collapses to single column; sidebar covers more screen.        */
+/* ════════════════════════════════════════════════════════════════════════ */
+@media (max-width: 420px) {
+  .stat-grid          { grid-template-columns: 1fr; }
+  .stat-value         { font-size: 1.55rem; }
+  .sidebar            { width: 84vw; }
+  .responsive-cards tbody td { grid-template-columns: 90px 1fr; }
+}
+
+
+

@@ -89,7 +89,7 @@ export default function DayOfShow() {
 
       <div className="card">
         {loading ? <div className="loading">Loading…</div> : (
-          <div className="table-wrap">
+          <div className="table-wrap responsive-cards">
             <table>
               <thead>
                 <tr>
@@ -108,13 +108,13 @@ export default function DayOfShow() {
                 )}
                 {filtered.map(item => (
                   <tr key={item.id}>
-                    <td><strong>{item.time ? formatTime(item.time, tf) : '—'}</strong></td>
-                    <td>{item.label || '—'}</td>
-                    <td className="text-muted">{item.showName || '—'}</td>
-                    <td><span className={`badge badge-${item.stage}`}>{item.stage === 'inside' ? 'Inside' : 'Beach'}</span></td>
-                    <td className="text-muted">{item.responsible || '—'}</td>
-                    <td className="text-muted" style={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.notes || '—'}</td>
-                    <td>
+                    <td data-label="Time"><strong>{item.time ? formatTime(item.time, tf) : '—'}</strong></td>
+                    <td data-label="Event">{item.label || '—'}</td>
+                    <td data-label="Show" className="text-muted">{item.showName || '—'}</td>
+                    <td data-label="Stage"><span className={`badge badge-${item.stage}`}>{item.stage === 'inside' ? 'Inside' : 'Beach'}</span></td>
+                    <td data-label="Responsible" className="text-muted">{item.responsible || '—'}</td>
+                    <td data-label="Notes" className="text-muted" style={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.notes || '—'}</td>
+                    <td data-label="Actions">
                       <div className="actions-cell">
                         <button className="btn btn-ghost btn-sm" onClick={() => openEdit(item)}>Edit</button>
                         <button className="btn btn-danger btn-sm" onClick={() => handleDelete(item.id)}>Del</button>

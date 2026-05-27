@@ -1,4 +1,6 @@
 import { Outlet } from 'react-router-dom'
+import { useState, useEffect } from 'react'
+import { useLocation } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useSettings } from '../context/SettingsContext'
 import Sidebar from './Sidebar'
@@ -20,10 +22,25 @@ export default function Layout() {
   const { settings } = useSettings()
   const useTop = settings.menuPos === 'top'
   const impersonating = isAdmin && !!viewAsRole
+  const [mobileOpen, setMobileOpen] = useState(false)
+  const location = useLocation()
+
+  // Close the mobile drawer on every route change
+  useEffect(() => { setMobileOpen(false) }, [location.pathname])
 
   return (
     <>
       <header className="app-header">
+        {!useTop && (
+          <button
+            type="button"
+            className="mobile-menu-btn"
+            aria-label="Open navigation"
+            onClick={() => setMobileOpen(true)}
+          >
+            ☰
+          </button>
+        )}
         <div className="header-dot" />
         <h1>Windjammer Production</h1>
         <div className="header-right">
@@ -48,7 +65,17 @@ export default function Layout() {
       )}
       {useTop && <TopNav />}
       <div className="app-layout">
-        {!useTop && <Sidebar />}
+        {!useTop && (
+          <>
+            <div
+              className={'mobile-nav-overlay' + (mobileOpen ? ' open' : '')}
+              onClick={() => setMobileOpen(false)}
+            />
+            <div className={mobileOpen ? 'sidebar-wrapper open' : 'sidebar-wrapper'}>
+              <Sidebar className={mobileOpen ? 'open' : ''} />
+            </div>
+          </>
+        )}
         <main className="main-content">
           <Outlet />
         </main>
@@ -56,4 +83,5 @@ export default function Layout() {
     </>
   )
 }
+
 
