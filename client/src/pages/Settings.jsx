@@ -1,8 +1,16 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import api from '../api'
 import { useAuth } from '../context/AuthContext'
 import { useSettings } from '../context/SettingsContext'
 import GmailConnect from '../components/GmailConnect'
+import {
+  isPushSupported,
+  notificationPermission,
+  getCurrentSubscription,
+  enablePush,
+  disablePush,
+  sendTestPush,
+} from '../api/push'
 
 const NAV_PATHS = [
   { label: 'Dashboard',    path: '/dashboard' },
@@ -133,6 +141,9 @@ export default function Settings() {
         </div>
       </div>
 
+      {/* ── Notifications ────────────────────────────────────────────── */}
+      <NotificationsCard />
+
       {/* ── Change password ────────────────────────────────────────────── */}
       <div className="card">
         <div className="card-header"><div className="card-title">Change password</div></div>
@@ -201,5 +212,140 @@ function InlineMsg({ msg }) {
       color: ok ? '#4ade80' : '#fca5a5',
       border: `1px solid ${ok ? 'rgba(34,197,94,0.35)' : 'rgba(239,68,68,0.35)'}`,
     }}>{msg.text}</div>
+  )
+}
+
+// ── Notifications card ───────────────────────────────────────────────────────
+// Per-event push prefs + browser permission/subscription toggle.
+const EVENTS = [
+  { key: 'showUpdates',   label: 'New shows added',         hint: 'When a show is created or a key field is updated.' },
+  { key: 'docUploads',    label: 'Documents uploaded',      hint: 'Riders, stage plots, input lists, etc.' },
+  { key: 'shiftAssigned', label: 'My shifts',                hint: 'When a shift is created with you on it.' },
+  { key: 'emailReceived', label: 'New advance emails',       hint: 'When new email arrives in a show inbox.' },
+  { key: 'dayOfShow',     label: 'Day-of-show reminders',    hint: 'A heads-up before doors / call times.' },
+]
+
+function NotificationsCard() {
+  const supported = isPushSupported()
+  const [perm, setPerm] = useState(supported ? notificationPermission() : 'unsupported')
+  const [subscribed, setSubscribed] = useState(false)
+  const [prefs, setPrefs] = useState({})
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState(null)
+
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      if (supported) {
+        const sub = await getCurrentSubscription().catch(() => null)
+        if (!cancelled) setSubscribed(!!sub)
+      }
+      try {
+        const { data } = await api.get('/me/notification-prefs')
+        if (!cancelled) setPrefs(data?.prefs || {})
+      } catch {}
+    })()
+    return () => { cancelled = true }
+  }, [supported])
+
+  async function enable() {
+    setBusy(true); setMsg(null)
+    try {
+      await enablePush()
+      setPerm(notificationPermission())
+      setSubscribed(true)
+      setMsg({ kind: 'ok', text: 'Notifications enabled on this device.' })
+    } catch (err) {
+      setMsg({ kind: 'err', text: err.message || 'Failed to enable notifications.' })
+    } finally { setBusy(false) }
+  }
+
+  async function disable() {
+    setBusy(true); setMsg(null)
+    try {
+      await disablePush()
+      setSubscribed(false)
+      setMsg({ kind: 'ok', text: 'Notifications disabled on this device.' })
+    } catch (err) {
+      setMsg({ kind: 'err', text: err.message || 'Failed to disable.' })
+    } finally { setBusy(false) }
+  }
+
+  async function test() {
+    setBusy(true); setMsg(null)
+    try {
+      const { data } = await sendTestPush()
+      setMsg({ kind: data?.sent ? 'ok' : 'err', text: data?.sent ? 'Test sent — check for the banner.' : 'Server reported 0 devices reached.' })
+    } catch (err) {
+      setMsg({ kind: 'err', text: err.response?.data?.message || err.message })
+    } finally { setBusy(false) }
+  }
+
+  async function togglePref(key, value) {
+    const next = { ...prefs, [key]: value }
+    setPrefs(next)
+    try { await api.put('/me/notification-prefs', next) }
+    catch (err) { setMsg({ kind: 'err', text: 'Failed to save preference: ' + (err.response?.data?.message || err.message) }) }
+  }
+
+  return (
+    <div className="card">
+      <div className="card-header"><div className="card-title">Notifications</div></div>
+
+      {!supported && (
+        <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>
+          This browser does not support push notifications. Install the app to your home screen (iOS 16.4+, Android, Desktop Chrome/Edge) to enable them.
+        </div>
+      )}
+
+      {supported && (
+        <>
+          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+            <span style={{ fontSize: 13, color: 'var(--text-muted)' }}>
+              This device: <strong style={{ color: subscribed ? 'var(--success)' : 'var(--text-muted)' }}>
+                {subscribed ? 'Enabled' : 'Disabled'}
+              </strong>
+              {perm === 'denied' && (
+                <span style={{ color: 'var(--danger)', marginLeft: 8 }}>
+                  (browser permission is blocked — re-enable in browser site settings)
+                </span>
+              )}
+            </span>
+            {!subscribed && (
+              <button className="btn btn-primary btn-sm" onClick={enable} disabled={busy || perm === 'denied'}>
+                {busy ? 'Working…' : 'Enable on this device'}
+              </button>
+            )}
+            {subscribed && (
+              <>
+                <button className="btn btn-ghost btn-sm" onClick={disable} disabled={busy}>
+                  Disable on this device
+                </button>
+                <button className="btn btn-ghost btn-sm" onClick={test} disabled={busy}>
+                  Send test
+                </button>
+              </>
+            )}
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+            {EVENTS.map(ev => {
+              const on = prefs[ev.key] !== false
+              return (
+                <Field key={ev.key} label={ev.label} hint={ev.hint}>
+                  <SegBtn
+                    options={[{ v: 'on', l: '🔔 On' }, { v: 'off', l: '🔕 Off' }]}
+                    value={on ? 'on' : 'off'}
+                    onChange={v => togglePref(ev.key, v === 'on')}
+                  />
+                </Field>
+              )
+            })}
+          </div>
+
+          {msg && <InlineMsg msg={msg} />}
+        </>
+      )}
+    </div>
   )
 }

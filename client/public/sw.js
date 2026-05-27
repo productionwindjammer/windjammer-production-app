@@ -4,7 +4,7 @@
 //   - On update, notifies open clients so the UI can prompt a reload.
 //
 // Bump CACHE when you intentionally want to nuke all old caches.
-const CACHE = 'windjammer-v3';
+const CACHE = 'windjammer-v4';
 const SHELL = ['/manifest.webmanifest', '/icon-192.png', '/icon-512.png', '/apple-touch-icon.png'];
 
 self.addEventListener('install', e => {
@@ -26,6 +26,44 @@ self.addEventListener('activate', e => {
 // Allow the page to trigger an immediate skip-waiting
 self.addEventListener('message', e => {
   if (e.data && e.data.type === 'SKIP_WAITING') self.skipWaiting();
+});
+
+// ── Web Push ────────────────────────────────────────────────────────────────
+// The server sends JSON: { title, body, url, tag, icon, badge }
+self.addEventListener('push', e => {
+  let data = {};
+  try { data = e.data ? e.data.json() : {}; }
+  catch { data = { title: 'Windjammer', body: e.data ? e.data.text() : '' }; }
+  const title = data.title || 'Windjammer';
+  const opts = {
+    body: data.body || '',
+    icon: data.icon || '/icon-192.png',
+    badge: data.badge || '/icon-192.png',
+    tag: data.tag,
+    data: { url: data.url || '/' },
+    requireInteraction: false,
+  };
+  e.waitUntil(self.registration.showNotification(title, opts));
+});
+
+// Focus an existing tab if it matches, otherwise open a new one.
+self.addEventListener('notificationclick', e => {
+  e.notification.close();
+  const target = (e.notification.data && e.notification.data.url) || '/';
+  e.waitUntil((async () => {
+    const all = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    for (const c of all) {
+      try {
+        const u = new URL(c.url);
+        if (u.origin === self.location.origin) {
+          await c.focus();
+          if ('navigate' in c) c.navigate(target);
+          return;
+        }
+      } catch {}
+    }
+    if (self.clients.openWindow) await self.clients.openWindow(target);
+  })());
 });
 
 // Always returns a real Response so respondWith never sees null/undefined

@@ -6,6 +6,7 @@ const bcrypt  = require('bcryptjs');
 const config  = require('./config/server-config');
 const sheets  = require('./sheets');
 const gmail   = require('./gmail');
+const push    = require('./push');
 const bot     = require('./advancingBot');
 
 const app = express();
@@ -243,6 +244,20 @@ async function kickoffAdvanceForShow(show) {
   const showLabel = show.artist || show.eventName || `Show ${show.id}`;
   console.log(`[kickoff] Preparing advance for show ${show.id} — ${showLabel}`);
 
+  // Notify production team that a new show was created (fire-and-forget).
+  push.sendToRole(
+    ['admin', 'production_manager'],
+    {
+      title: 'New show added',
+      body: `${showLabel}${show.date ? ' — ' + show.date : ''}${show.stage ? ' (' + show.stage + ')' : ''}`,
+      url: `/shows/${show.id}`,
+      tag: `show-${show.id}`,
+    },
+    'showUpdates'
+  ).catch(err => console.warn('[push] show-created notify failed:', err.message));
+
+
+
   // 0. Ensure artists on the bill are in the registry (fire-and-forget safe)
   try { await ensureArtistsFromShow(show); }
   catch (err) { console.error('[kickoff] Artist registry sync failed:', err.message); }
@@ -355,10 +370,35 @@ async function kickoffAdvanceForShow(show) {
   }
 }
 
+// Notify the assigned staff member when a labor row (shift) is created for
+// them. Looks up the user account by staffId and pushes only to that user.
+async function notifyShiftAssigned(record) {
+  try {
+    if (!record || !record.staffId) return;
+    const users = await sheets.getRows(config.googleSheets.sheets.users).catch(() => []);
+    const u = users.find(x => String(x.staffId) === String(record.staffId));
+    if (!u || !u.id) return;
+    const showLabel = record.showName || record.showId || 'a show';
+    const when = [record.callTime, record.wrapTime].filter(Boolean).join(' – ');
+    push.sendToUser(
+      u.id,
+      {
+        title: 'Shift assigned',
+        body: `${record.role || 'Shift'} for ${showLabel}${when ? ' (' + when + ')' : ''}`,
+        url: record.showId ? `/shows/${record.showId}` : '/labor',
+        tag: `shift-${record.id}`,
+      },
+      'shiftAssigned'
+    ).catch(err => console.warn('[push] shift notify failed:', err.message));
+  } catch (err) {
+    console.warn('[push] notifyShiftAssigned error:', err.message);
+  }
+}
+
 crudRoutes(app, '/api/shows',           'shows',     ['admin','production_manager','promoter'], { afterCreate: kickoffAdvanceForShow });
 crudRoutes(app, '/api/advancing',       'advancing', ['admin','production_manager','promoter']);
 crudRoutes(app, '/api/schedule',        'schedule');
-crudRoutes(app, '/api/labor',           'labor');
+crudRoutes(app, '/api/labor',           'labor',     ['admin','production_manager'], { afterCreate: notifyShiftAssigned });
 crudRoutes(app, '/api/vendors',         'vendors');
 crudRoutes(app, '/api/vendor-bookings', 'vendorBookings');
 crudRoutes(app, '/api/settlement',      'settlement');
@@ -653,6 +693,83 @@ app.put('/api/users/:id', requireAuth, requireRole('admin'), async (req, res) =>
     await sheets.updateRowById(config.googleSheets.sheets.users, req.params.id, updates);
     res.json({ success: true });
   } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+
+// ── Push Notifications ────────────────────────────────────────────────────────
+// Returns the VAPID public key so the client can call pushManager.subscribe().
+app.get('/api/push/public-key', (req, res) => {
+  res.json({ success: true, publicKey: push.publicKey(), enabled: push.isConfigured() });
+});
+
+// Persist a Web Push subscription for the authenticated user.
+// One user may register many devices; one row per (userId, endpoint).
+app.post('/api/push/subscribe', requireAuth, async (req, res) => {
+  try {
+    const { subscription, userAgent } = req.body || {};
+    if (!subscription || !subscription.endpoint) {
+      return res.status(400).json({ success: false, message: 'subscription.endpoint required' });
+    }
+    const result = await push.subscribe(req.user.id, subscription, userAgent || req.headers['user-agent'] || '');
+    res.json({ success: true, ...result });
+  } catch (err) {
+    console.error('push.subscribe error:', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Remove a subscription (logout, or user disabled notifications).
+app.post('/api/push/unsubscribe', requireAuth, async (req, res) => {
+  try {
+    const { endpoint } = req.body || {};
+    if (!endpoint) return res.status(400).json({ success: false, message: 'endpoint required' });
+    const result = await push.unsubscribe(endpoint);
+    res.json({ success: true, ...result });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Send a test push to the calling user — used by the Settings page to verify
+// that notifications are wired correctly.
+app.post('/api/push/test', requireAuth, async (req, res) => {
+  try {
+    const result = await push.sendToUser(req.user.id, {
+      title: 'Windjammer test notification',
+      body: 'Push is working on this device.',
+      url: '/settings',
+      tag: 'wj-test',
+    });
+    res.json({ success: true, ...result });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Update notification preferences for the authenticated user.
+app.put('/api/me/notification-prefs', requireAuth, async (req, res) => {
+  try {
+    const prefs = req.body || {};
+    await sheets.updateRowById(config.googleSheets.sheets.users, req.user.id, {
+      notificationPrefs: JSON.stringify(prefs),
+    });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+app.get('/api/me/notification-prefs', requireAuth, async (req, res) => {
+  try {
+    const users = await sheets.getRows(config.googleSheets.sheets.users).catch(() => []);
+    const u = users.find(r => String(r.id) === String(req.user.id));
+    let prefs = {};
+    if (u && u.notificationPrefs) {
+      try { prefs = JSON.parse(u.notificationPrefs); } catch {}
+    }
+    res.json({ success: true, prefs });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
 });
 
 // ── Tech Pack ─────────────────────────────────────────────────────────────────
@@ -1027,6 +1144,18 @@ app.post('/api/artists/:id/documents',
         createdAt:   new Date().toISOString(),
       };
       await sheets.appendRow(config.googleSheets.sheets.artistDocuments, record);
+
+      // Notify the production team that a new document landed.
+      push.sendToRole(
+        ['admin', 'production_manager'],
+        {
+          title: 'Document uploaded',
+          body: `${artist.name || 'Artist'}: ${filename}${type ? ' (' + type + ')' : ''}`,
+          url: showId ? `/shows/${showId}` : `/artists`,
+          tag: `doc-${record.id}`,
+        },
+        'docUploads'
+      ).catch(err => console.warn('[push] doc-upload notify failed:', err.message));
 
       res.json({ success: true, data: record });
     } catch (err) {
