@@ -3,6 +3,8 @@ import { useNavigate } from 'react-router-dom'
 import api from '../api'
 import Modal from '../components/Modal'
 import { useAuth } from '../context/AuthContext'
+import { useSettings } from '../context/SettingsContext'
+import { formatTime } from '../utils/time'
 
 // Color palette per stage (matches existing badge-inside / badge-beach hues)
 const STAGE_COLORS = {
@@ -52,6 +54,8 @@ const BLANK_UNAV = { staffId: '', staffName: '', startDate: '', endDate: '', rea
 export default function Calendar() {
   const navigate = useNavigate()
   const { effectiveRole } = useAuth()
+  const { settings } = useSettings()
+  const tf = settings?.timeFormat || '12h'
   const canEditUnav = ['admin', 'production_manager'].includes(effectiveRole)
 
   const today = new Date()
@@ -214,15 +218,24 @@ export default function Calendar() {
                     <div style={{ fontSize: 12, fontWeight: isToday ? 700 : 500, color: isToday ? '#60a5fa' : 'rgba(255,255,255,0.7)', marginBottom: 4, textAlign: 'right' }}>
                       {d.getDate()}
                     </div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                      {items.map((it, i) => it.type === 'show' ? (
-                        <ShowChip key={`s${i}`} show={it.show} onClick={e => { e.stopPropagation(); navigate(`/shows/${it.show.id}`) }} />
-                      ) : (
-                        <UnavChip key={`u${i}`} u={it.unav} canEdit={canEditUnav}
-                          onClick={e => { e.stopPropagation(); if (canEditUnav) openEditUnav(it.unav) }}
-                          onDelete={e => { e.stopPropagation(); deleteUnav(it.unav) }} />
-                      ))}
-                    </div>
+                    {(() => {
+                      const shown = items.slice(0, 3)
+                      const hidden = items.length - shown.length
+                      return (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                          {shown.map((it, i) => it.type === 'show' ? (
+                            <ShowChip key={`s${i}`} show={it.show} tf={tf} onClick={e => { e.stopPropagation(); navigate(`/shows/${it.show.id}`) }} />
+                          ) : (
+                            <UnavChip key={`u${i}`} u={it.unav} canEdit={canEditUnav}
+                              onClick={e => { e.stopPropagation(); if (canEditUnav) openEditUnav(it.unav) }}
+                              onDelete={e => { e.stopPropagation(); deleteUnav(it.unav) }} />
+                          ))}
+                          {hidden > 0 && (
+                            <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.55)', textAlign: 'center' }}>+{hidden} more</div>
+                          )}
+                        </div>
+                      )
+                    })()}
                   </div>
                 )
               })}
@@ -276,13 +289,13 @@ function LegendDot({ color, label }) {
   )
 }
 
-function ShowChip({ show, onClick }) {
+function ShowChip({ show, tf, onClick }) {
   const stage  = (show.stage || 'inside').toLowerCase()
   const colors = STAGE_COLORS[stage] || STAGE_COLORS.inside
   const status = (show.status || 'pending').toLowerCase()
   const dim    = STATUS_DIM[status] ?? 1
   const label  = show.artist || show.eventName || 'Untitled'
-  const time   = show.showTime || show.doorsTime || ''
+  const time   = show.showTime ? formatTime(show.showTime, tf) : ''
   return (
     <button
       onClick={onClick}
