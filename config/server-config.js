@@ -3,8 +3,8 @@ module.exports = {
   jwtSecret: process.env.JWT_SECRET || 'windjammer-dev-secret-change-in-production',
 
   stages: {
-    inside: { id: 'inside', name: 'Inside Stage', color: '#1a4a7a' },
-    beach:  { id: 'beach',  name: 'Beach Stage',  color: '#1a6b4a' },
+    inside: { id: 'inside', name: 'Inside Stage', color: '#1a4a7a', capacity: 500  },
+    beach:  { id: 'beach',  name: 'Beach Stage',  color: '#1a6b4a', capacity: 1200 },
   },
 
   googleSheets: {

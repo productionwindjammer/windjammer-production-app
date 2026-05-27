@@ -4,6 +4,7 @@ import api from '../api'
 import Modal from '../components/Modal'
 import { useSettings } from '../context/SettingsContext'
 import { formatTime } from '../utils/time'
+import { getTicketStats } from '../utils/stages'
 
 const BLANK_ADV = {
   riderReceived: 'false', riderNotes: '', stagingChanges: '', capacityChanges: '',
@@ -24,7 +25,7 @@ const BLANK_LABOR = {
 
 const BLANK_SHOW = {
   date: '', artist: '', eventName: '', stage: 'inside', status: 'pending',
-  showTime: '', doorsTime: '', capacity: '', ticketPrice: '', guarantee: '',
+  showTime: '', doorsTime: '', capacity: '', ticketPrice: '', ticketsSold: '', guarantee: '',
   promoter: '', tourManager: '', notes: '',
 }
 
@@ -486,10 +487,19 @@ export default function ShowDetail() {
               <span>📅 {show.date}</span>
               {show.showTime  && <span>🕐 Show: {formatTime(show.showTime, tf)}</span>}
               {show.doorsTime && <span>🚪 Doors: {formatTime(show.doorsTime, tf)}</span>}
-              {show.capacity  && <span>👥 Cap: {show.capacity}</span>}
+              {(() => {
+                const { sold, capacity, pct } = getTicketStats(show)
+                if (!capacity && !sold) return null
+                return (
+                  <span title="Tickets sold / capacity">
+                    🎟 {sold}{capacity ? ` / ${capacity}` : ''}
+                    {pct != null && <strong style={{ marginLeft: 4, color: pct >= 80 ? '#86efac' : pct >= 40 ? '#fde68a' : '#fca5a5' }}>· {pct}%</strong>}
+                  </span>
+                )
+              })()}
               {show.tourManager && <span>🎭 TM: {show.tourManager}</span>}
               {show.promoter  && <span>📣 {show.promoter}</span>}
-              {show.ticketPrice && <span>🎟 ${show.ticketPrice}</span>}
+              {show.ticketPrice && <span>💵 ${show.ticketPrice}</span>}
             </div>
             {show.notes && (
               <div style={{ marginTop: 8, fontSize: 13, color: 'rgba(255,255,255,0.4)', fontStyle: 'italic' }}>
@@ -879,6 +889,10 @@ export default function ShowDetail() {
               <div className="form-group">
                 <label>Ticket Price</label>
                 <input value={showForm.ticketPrice} onChange={e => setShowForm(v => ({ ...v, ticketPrice: e.target.value }))} />
+              </div>
+              <div className="form-group">
+                <label>Tickets Sold</label>
+                <input type="number" min="0" value={showForm.ticketsSold} onChange={e => setShowForm(v => ({ ...v, ticketsSold: e.target.value }))} placeholder="e.g. 320" />
               </div>
               <div className="form-group">
                 <label>Guarantee</label>

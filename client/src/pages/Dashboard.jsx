@@ -4,6 +4,7 @@ import api from '../api'
 import { useAuth } from '../context/AuthContext'
 import { useSettings } from '../context/SettingsContext'
 import { formatTime } from '../utils/time'
+import { getTicketStats } from '../utils/stages'
 
 // Parse YYYY-MM-DD dates as local noon to avoid UTC timezone shifts
 const parseDate = d => d ? new Date(d + 'T12:00:00') : null
@@ -363,10 +364,14 @@ function CrewDashboard({ user, shows, labor, navigate }) {
 /* ────────────────────────────────────────────────────────────── Promoter ── */
 
 /**
- * Promoter view: this venue has a single in-house promoter, so we show ALL
- * upcoming shows with the production info that matters most for promotion —
- * artist, date, stage, doors/show times, ticket status, and advancing
- * progress. Read-only; clicking a row opens the full show detail.
+ * Promoter view: focuses on the four things a promoter actually opens the
+ * app for — ticket sales pace, shows still needing attention (status not yet
+ * confirmed / missing times), the upcoming week at a glance, and a roll-up
+ * of recently advanced shows that are now production-ready.
+ *
+ * The single in-house promoter sees ALL upcoming shows here; clicking any
+ * row jumps to that show's detail page where they can edit dates, ticket
+ * counts, status, and TM contact info (write access is granted server-side).
  */
 function PromoterDashboard({ user, shows, navigate, tf }) {
   const today = startOfToday()
@@ -375,11 +380,36 @@ function PromoterDashboard({ user, shows, navigate, tf }) {
   })
   const upcoming = useMemo(() => groupShowRuns(upcomingRaw), [shows])
   const thisWeek = upcoming.filter(s => (parseDate(s.date) - today) / 86400000 <= 7)
-  const insideShows = upcoming.filter(s => s.stage === 'inside')
-  const beachShows  = upcoming.filter(s => s.stage === 'beach')
-  const needAdvancing = upcoming.filter(s =>
-    s.advancingComplete !== 'true' && s.advancingComplete !== true
-  ).length
+
+  // "Needs attention" = not yet confirmed/settled, OR missing doors/show time,
+  //                     OR no TM/promoter contact on file.
+  const needsAttention = upcoming
+    .map(s => {
+      const reasons = []
+      const stat = (s.status || 'pending').toLowerCase()
+      if (stat === 'pending' || stat === 'advancing') reasons.push(stat === 'pending' ? 'Hold — not confirmed' : 'Advancing')
+      if (!s.showTime && !s.doorsTime) reasons.push('No doors / show time')
+      if (!s.tourManager && !s.promoter && !s.advanceEmail && !s.advanceContact) reasons.push('No advance contact')
+      return reasons.length ? { ...s, _reasons: reasons } : null
+    })
+    .filter(Boolean)
+    .slice(0, 12)
+
+  const recentlyAdvanced = upcoming
+    .filter(s => s.advancingComplete === 'true' || s.advancingComplete === true)
+    .slice(0, 8)
+
+  // Sales totals over the next 14 days — useful pulse for promoter
+  const next14 = upcoming.filter(s => (parseDate(s.date) - today) / 86400000 <= 14)
+  const salesPulse = next14.reduce((acc, s) => {
+    const { sold, capacity } = getTicketStats(s)
+    acc.sold     += sold
+    acc.capacity += (capacity || 0)
+    return acc
+  }, { sold: 0, capacity: 0 })
+  const pulsePct = salesPulse.capacity
+    ? Math.round((salesPulse.sold / salesPulse.capacity) * 100)
+    : null
 
   const greeting = user?.name ? `Hi ${user.name.split(' ')[0]}` : 'Welcome'
 
@@ -390,6 +420,7 @@ function PromoterDashboard({ user, shows, navigate, tf }) {
           <div className="page-title">{greeting} — promoter overview</div>
           <div className="page-subtitle">The Windjammer · all upcoming shows</div>
         </div>
+        <button className="btn btn-primary" onClick={() => navigate('/shows')}>+ Manage shows</button>
       </div>
 
       <div className="stat-grid">
@@ -399,26 +430,77 @@ function PromoterDashboard({ user, shows, navigate, tf }) {
           <div className="stat-sub">{thisWeek.length} this week</div>
         </div>
         <div className="stat-card">
-          <div className="stat-label">Inside Stage</div>
-          <div className="stat-value" style={{ color: '#60aeff' }}>{insideShows.length}</div>
-          <div className="stat-sub">upcoming events</div>
+          <div className="stat-label">Needs Attention</div>
+          <div className="stat-value" style={{ color: 'var(--warning)' }}>{needsAttention.length}</div>
+          <div className="stat-sub">holds, missing times, etc.</div>
         </div>
         <div className="stat-card">
-          <div className="stat-label">Beach Stage</div>
-          <div className="stat-value" style={{ color: '#4ade80' }}>{beachShows.length}</div>
-          <div className="stat-sub">upcoming events</div>
+          <div className="stat-label">Sales (next 14 days)</div>
+          <div className="stat-value">{salesPulse.sold.toLocaleString()}</div>
+          <div className="stat-sub">
+            {salesPulse.capacity
+              ? `of ${salesPulse.capacity.toLocaleString()} cap · ${pulsePct}%`
+              : 'no capacity data'}
+          </div>
         </div>
         <div className="stat-card">
-          <div className="stat-label">Pending Advancing</div>
-          <div className="stat-value" style={{ color: 'var(--warning)' }}>{needAdvancing}</div>
-          <div className="stat-sub">not yet confirmed</div>
+          <div className="stat-label">Production-Ready</div>
+          <div className="stat-value" style={{ color: '#86efac' }}>{recentlyAdvanced.length}</div>
+          <div className="stat-sub">advanced & confirmed</div>
+        </div>
+      </div>
+
+      <div className="two-col-grid">
+        <div className="card">
+          <div className="card-header">
+            <span className="card-title">Needs Your Attention</span>
+            <button className="btn btn-ghost btn-sm" onClick={() => navigate('/shows')}>All shows</button>
+          </div>
+          {needsAttention.length === 0 ? (
+            <div className="empty-state">🎉 Every upcoming show is confirmed and contacts on file.</div>
+          ) : (
+            <ul className="todo-list">
+              {needsAttention.map(s => {
+                const d = parseDate(s.date)
+                const days = d ? Math.round((d - today) / 86400000) : null
+                const dateLabel = days == null ? '' : days === 0 ? 'Today' : days === 1 ? 'Tomorrow' : `${days}d`
+                const severity = days != null && days <= 7 ? 'high' : days != null && days <= 21 ? 'med' : 'low'
+                return (
+                  <li key={s.id} className="todo-item" onClick={() => navigate(`/shows/${s.id}`)}>
+                    <span className={`todo-badge todo-${severity}`}>⚠️</span>
+                    <div className="todo-body">
+                      <div className="todo-title">{s.artist || s.eventName || 'Untitled show'}</div>
+                      <div className="todo-meta">{s._reasons.join(' · ')}</div>
+                    </div>
+                    <span className="todo-date">{dateLabel}</span>
+                  </li>
+                )
+              })}
+            </ul>
+          )}
+        </div>
+
+        <div className="card">
+          <div className="card-header">
+            <span className="card-title">This Week</span>
+            <button className="btn btn-ghost btn-sm" onClick={() => navigate('/shows')}>All shows</button>
+          </div>
+          {thisWeek.length === 0 ? (
+            <div className="empty-state">No shows in the next 7 days</div>
+          ) : (
+            <div className="form-grid">
+              {thisWeek.map(show => (
+                <ShowRow key={show.id} show={show} tf={tf} onClick={() => navigate(`/shows/${show.id}`)} />
+              ))}
+            </div>
+          )}
         </div>
       </div>
 
       <div className="card">
         <div className="card-header">
-          <span className="card-title">All Upcoming Shows</span>
-          <button className="btn btn-ghost btn-sm" onClick={() => navigate('/shows')}>Open shows</button>
+          <span className="card-title">Ticket Sales</span>
+          <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Click any show to update sold count</span>
         </div>
         {upcoming.length === 0 ? (
           <div className="empty-state">No upcoming shows on the books.</div>
@@ -430,16 +512,18 @@ function PromoterDashboard({ user, shows, navigate, tf }) {
                   <th>Date</th>
                   <th>Artist</th>
                   <th>Stage</th>
-                  <th>Doors</th>
-                  <th>Show</th>
-                  <th>Advancing</th>
+                  <th>Sold / Cap</th>
+                  <th style={{ width: '28%' }}>% Sold</th>
+                  <th>Status</th>
                 </tr>
               </thead>
               <tbody>
                 {upcoming.map(s => {
                   const d = parseDate(s.date)
-                  const advanced = s.advancingComplete === 'true' || s.advancingComplete === true
+                  const { sold, capacity, pct } = getTicketStats(s)
+                  const stat = (s.status || 'pending').toLowerCase()
                   const isRun = (s._nights || 1) > 1
+                  const barColor = pct == null ? '#666' : pct >= 80 ? '#22c55e' : pct >= 40 ? '#eab308' : '#ef4444'
                   return (
                     <tr key={s.id} style={{ cursor: 'pointer' }} onClick={() => navigate(`/shows/${s.id}`)}>
                       <td>
@@ -458,12 +542,24 @@ function PromoterDashboard({ user, shows, navigate, tf }) {
                           </span>
                         )}
                       </td>
-                      <td>{s.doorsTime ? formatTime(s.doorsTime, tf) : '—'}</td>
-                      <td>{s.showTime ? formatTime(s.showTime, tf) : '—'}</td>
+                      <td style={{ whiteSpace: 'nowrap' }}>
+                        <strong>{sold.toLocaleString()}</strong>
+                        {capacity ? <span style={{ color: 'var(--text-muted)' }}> / {capacity.toLocaleString()}</span> : null}
+                      </td>
                       <td>
-                        <span className={`badge badge-${advanced ? 'confirmed' : 'cancelled'}`}>
-                          {advanced ? 'Confirmed' : 'Pending'}
-                        </span>
+                        {pct == null ? (
+                          <span className="text-muted" style={{ fontSize: 12 }}>—</span>
+                        ) : (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <div style={{ flex: 1, height: 6, background: 'rgba(255,255,255,0.08)', borderRadius: 3, overflow: 'hidden' }}>
+                              <div style={{ width: `${pct}%`, height: '100%', background: barColor, transition: 'width 0.3s' }} />
+                            </div>
+                            <span style={{ fontSize: 12, fontWeight: 600, minWidth: 34, textAlign: 'right' }}>{pct}%</span>
+                          </div>
+                        )}
+                      </td>
+                      <td>
+                        <span className={`badge badge-${stat}`} style={{ textTransform: 'capitalize' }}>{stat}</span>
                       </td>
                     </tr>
                   )
@@ -471,6 +567,36 @@ function PromoterDashboard({ user, shows, navigate, tf }) {
               </tbody>
             </table>
           </div>
+        )}
+      </div>
+
+      <div className="card">
+        <div className="card-header">
+          <span className="card-title">Recently Advanced</span>
+          <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Production has these ready</span>
+        </div>
+        {recentlyAdvanced.length === 0 ? (
+          <div className="empty-state">No shows have been advanced yet.</div>
+        ) : (
+          <ul className="todo-list">
+            {recentlyAdvanced.map(s => {
+              const d = parseDate(s.date)
+              const dateLabel = d ? d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : ''
+              return (
+                <li key={s.id} className="todo-item" onClick={() => navigate(`/shows/${s.id}`)}>
+                  <span className="todo-badge todo-low">✓</span>
+                  <div className="todo-body">
+                    <div className="todo-title">{s.artist || s.eventName || 'Untitled show'}</div>
+                    <div className="todo-meta">
+                      {s.stage === 'inside' ? 'Inside Stage' : s.stage === 'beach' ? 'Beach Stage' : ''}
+                      {s.showTime ? ` · Show ${formatTime(s.showTime, tf)}` : ''}
+                    </div>
+                  </div>
+                  <span className="todo-date">{dateLabel}</span>
+                </li>
+              )
+            })}
+          </ul>
         )}
       </div>
     </div>

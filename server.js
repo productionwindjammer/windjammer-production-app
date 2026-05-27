@@ -284,8 +284,8 @@ async function kickoffAdvanceForShow(show) {
   }
 }
 
-crudRoutes(app, '/api/shows',           'shows', ['admin','production_manager'], { afterCreate: kickoffAdvanceForShow });
-crudRoutes(app, '/api/advancing',       'advancing');
+crudRoutes(app, '/api/shows',           'shows',     ['admin','production_manager','promoter'], { afterCreate: kickoffAdvanceForShow });
+crudRoutes(app, '/api/advancing',       'advancing', ['admin','production_manager','promoter']);
 crudRoutes(app, '/api/schedule',        'schedule');
 crudRoutes(app, '/api/labor',           'labor');
 crudRoutes(app, '/api/vendors',         'vendors');
@@ -1101,7 +1101,7 @@ app.get('/api/emails', requireAuth, async (req, res) => {
 // If setAdvanceEmail is true, the email's sender (or recipient if outbound)
 // is also written into the Advancing record's advanceEmail so future syncs
 // pick up the contact automatically.
-app.post('/api/emails/:id/assign', requireAuth, requireRole('admin', 'production_manager'), async (req, res) => {
+app.post('/api/emails/:id/assign', requireAuth, requireRole('admin', 'production_manager', 'promoter'), async (req, res) => {
   try {
     const { id } = req.params;
     const { showId, setAdvanceEmail } = req.body;
@@ -1161,7 +1161,7 @@ app.post('/api/emails/sync', requireAuth, async (req, res) => {
 });
 
 // POST /api/emails/sync-all  — sync all open advances (also called by auto-sync)
-app.post('/api/emails/sync-all', requireAuth, requireRole('admin', 'production_manager'), async (req, res) => {
+app.post('/api/emails/sync-all', requireAuth, requireRole('admin', 'production_manager', 'promoter'), async (req, res) => {
   try {
     const picked = await pickGmailClient(req);
     if (!picked) return res.status(503).json({ success: false, message: 'Gmail not configured.' });

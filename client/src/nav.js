@@ -5,13 +5,13 @@
 export const NAV_ITEMS = [
   { label: 'Dashboard',    path: '/dashboard',    icon: '📊' },
   { label: 'Shows',        path: '/shows',         icon: '🎭' },
-  { label: 'Advancing',    path: '/advancing',     icon: '📋', sub: true, roles: ['admin', 'production_manager'] },
+  { label: 'Advancing',    path: '/advancing',     icon: '📋', sub: true, roles: ['admin', 'production_manager', 'promoter'] },
   { label: 'Day of Show',  path: '/day-of-show',   icon: '📅', sub: true },
   { label: 'Vendors',      path: '/vendors',       icon: '🏢', roles: ['admin', 'production_manager'] },
   { label: 'Staff',        path: '/staff',         icon: '👥', roles: ['admin', 'production_manager'] },
   { label: 'Users',        path: '/users',         icon: '🔐', roles: ['admin'] },
   { label: 'Tech Pack',    path: '/tech-pack',     icon: '📁' },
-  { label: 'Email',        path: '/email',         icon: '✉️', roles: ['admin', 'production_manager'] },
+  { label: 'Email',        path: '/email',         icon: '✉️', roles: ['admin', 'production_manager', 'promoter'] },
   { label: 'Settings',     path: '/settings',      icon: '⚙️' },
 ]
 
