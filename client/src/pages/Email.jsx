@@ -587,7 +587,7 @@ export default function Email() {
                       checked={selectedIds.has(email.id)}
                       onChange={() => toggleSelected(email.id)}
                       onClick={e => e.stopPropagation()}
-                      style={{ marginTop: 3, flexShrink: 0, cursor: 'pointer' }}
+                      style={{ width: 13, height: 13, margin: '3px 0 0', flexShrink: 0, cursor: 'pointer', accentColor: '#3b82f6' }}
                       title="Select for bulk link"
                     />
                     <div style={{ flex: 1, minWidth: 0 }}>
@@ -700,7 +700,7 @@ export default function Email() {
                           checked={selectedIds.has(email.id)}
                           onChange={() => toggleSelected(email.id)}
                           onClick={e => e.stopPropagation()}
-                          style={{ marginTop: 4, flexShrink: 0, cursor: 'pointer' }}
+                          style={{ width: 13, height: 13, margin: '5px 0 0', flexShrink: 0, cursor: 'pointer', accentColor: '#3b82f6' }}
                           title="Select for bulk link"
                         />
                         <div style={{
