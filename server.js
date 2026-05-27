@@ -1081,9 +1081,10 @@ function dateVariants(dateStr) {
 }
 
 // Classify a parsed email to the most likely show based on contact email,
-// artist name, event name, and date appearances in subject/snippet/from/to.
+// artist name (incl. registry aliases), event name, and date appearances in
+// subject/snippet/from/to + the email's own send date.
 // Returns { showId, showName, reason } or null if no confident match.
-function classifyEmailToShow(parsed, shows, advances = []) {
+function classifyEmailToShow(parsed, shows, advances = [], artists = []) {
   const haystackParts = [
     parsed.subject || '',
     parsed.snippet || '',
@@ -1093,6 +1094,24 @@ function classifyEmailToShow(parsed, shows, advances = []) {
   ].map(s => String(s).toLowerCase());
   const hay = haystackParts.join(' \n ');
   const fromTo = `${parsed.from || ''} ${parsed.to || ''} ${parsed.cc || ''}`.toLowerCase();
+
+  // Parse the email's send date (used to weight shows that are temporally close)
+  let emailDate = null;
+  if (parsed.date) {
+    const d = new Date(parsed.date);
+    if (!isNaN(d)) emailDate = d;
+  }
+
+  // Build a map of show.artist -> alias list (lowercased) from the artist registry
+  // so "goose" matches a show whose artist is "Goose (full band)" via the alias entry.
+  const aliasMap = new Map(); // key: show artist lowercase -> [aliases...]
+  for (const a of artists) {
+    const name = (a.name || '').toLowerCase().trim();
+    if (!name) continue;
+    const aliases = String(a.aliases || '')
+      .split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+    aliasMap.set(name, aliases);
+  }
 
   // 1) Advance contact email match (highest confidence)
   for (const adv of advances) {
@@ -1113,22 +1132,58 @@ function classifyEmailToShow(parsed, shows, advances = []) {
     const hits = [];
     const artist = (s.artist || '').toLowerCase().trim();
     const event  = (s.eventName || '').toLowerCase().trim();
+
+    // Artist hit (direct or via alias from artist registry)
+    let artistHit = false;
     if (artist && artist.length >= 3 && hay.includes(artist)) {
-      score += 10 + artist.length; hits.push(`artist:${artist}`);
+      score += 10 + artist.length; hits.push(`artist:${artist}`); artistHit = true;
+    } else if (artist) {
+      const aliases = aliasMap.get(artist) || [];
+      for (const al of aliases) {
+        if (al.length >= 3 && hay.includes(al)) {
+          score += 10 + al.length; hits.push(`alias:${al}`); artistHit = true; break;
+        }
+      }
     }
+
     if (event && event.length >= 4 && hay.includes(event)) {
       score += 8 + event.length; hits.push(`event:${event}`);
     }
+
+    // Date appearance in subject/snippet
+    let dateInBody = false;
     if (s.date) {
       for (const v of dateVariants(s.date)) {
-        if (v.length >= 4 && hay.includes(v)) { score += 5; hits.push(`date:${v}`); break; }
+        if (v.length >= 4 && hay.includes(v)) {
+          score += 5; hits.push(`date:${v}`); dateInBody = true; break;
+        }
       }
     }
+
+    // Temporal proximity: email sent within 60 days before or 14 days after the show.
+    // Only a small nudge — used as a tie-breaker between same-named shows in different years.
+    if (emailDate && s.date) {
+      const sd = new Date(s.date);
+      if (!isNaN(sd)) {
+        const diffDays = (sd - emailDate) / 86400000;
+        if (diffDays >= -14 && diffDays <= 60) {
+          score += 3; hits.push('proximity');
+          // If we also matched on artist, treat date proximity as a stronger confirmation
+          if (artistHit) { score += 5; }
+        }
+      }
+    }
+
     if (score > 0 && (!best || score > best.score)) {
-      best = { score, show: s, reason: hits.join('+') };
+      best = { score, show: s, reason: hits.join('+'), artistHit, dateInBody };
     }
   }
-  if (!best || best.score < 10) return null; // require at least one strong hit (artist/event)
+
+  // Require either a clear artist/event hit OR a date appearance in the body.
+  if (!best) return null;
+  if (!best.artistHit && !best.dateInBody && best.score < 10) return null;
+  if (best.score < 10) return null;
+
   const s = best.show;
   const showName = `${s.date || ''} — ${s.artist || s.eventName || ''}`.trim().replace(/^—\s*/, '');
   return { showId: s.id, showName, reason: best.reason };
@@ -1265,6 +1320,62 @@ app.post('/api/emails/:id/assign', requireAuth, requireRole('admin', 'production
   }
 });
 
+// POST /api/emails/relink-all  — clear all show links and re-classify every
+// stored email against the current shows + advances + artist registry.
+// Body: { mode?: 'reset' | 'fill' }
+//   - 'reset' (default): unlinks everything first, then re-matches.
+//   - 'fill': only assigns links to emails that don't currently have a showId.
+app.post('/api/emails/relink-all', requireAuth, requireRole('admin', 'production_manager'), async (req, res) => {
+  try {
+    const mode = (req.body?.mode || 'reset').toLowerCase();
+    const [all, shows, advances, artists] = await Promise.all([
+      getStoredEmails(),
+      sheets.getRows(config.googleSheets.sheets.shows),
+      sheets.getRows(config.googleSheets.sheets.advancing),
+      sheets.getRows(config.googleSheets.sheets.artists).catch(() => []),
+    ]);
+
+    let cleared = 0, linked = 0, unchanged = 0, processed = 0;
+    for (const row of all) {
+      processed++;
+      const had = !!row.showId;
+      // Build a "parsed-like" object from the stored row for the classifier
+      const parsed = {
+        subject: row.subject || '',
+        snippet: row.snippet || '',
+        from:    row.from    || '',
+        to:      row.to      || '',
+        cc:      row.cc      || '',
+        date:    row.date    || '',
+      };
+      const match = classifyEmailToShow(parsed, shows, advances, artists);
+      const targetShowId   = match?.showId   || '';
+      const targetShowName = match?.showName || '';
+
+      if (mode === 'fill' && had) { unchanged++; continue; }
+
+      const changed = (row.showId || '') !== targetShowId || (row.showName || '') !== targetShowName;
+      if (!changed) { unchanged++; continue; }
+
+      try {
+        await sheets.updateRowById(config.googleSheets.sheets.emails, row.id, {
+          showId:   targetShowId,
+          showName: targetShowName,
+        });
+        if (targetShowId) linked++;
+        else if (had) cleared++;
+      } catch (e) {
+        console.error('relink-all row update failed', row.id, e.message);
+      }
+    }
+
+    res.json({ success: true, processed, linked, cleared, unchanged, mode });
+  } catch (err) {
+    console.error('relink-all error:', err.message);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 // POST /api/emails/sync  — pull Gmail for one advance record
 app.post('/api/emails/sync', requireAuth, async (req, res) => {
   try {
@@ -1389,10 +1500,11 @@ async function runAutoSync() {
     const users = await sheets.getRows(config.googleSheets.sheets.users);
     const connected = users.filter(u => u.gmailRefreshToken);
     if (connected.length === 0) return;
-    const [shows, advances, existing] = await Promise.all([
+    const [shows, advances, existing, artists] = await Promise.all([
       sheets.getRows(config.googleSheets.sheets.shows),
       sheets.getRows(config.googleSheets.sheets.advancing),
       getStoredEmails(),
+      sheets.getRows(config.googleSheets.sheets.artists).catch(() => []),
     ]);
     if (shows.length === 0) return;
     const storedKeys = new Set(existing.map(e => `${e.sourceUserId || ''}|${e.gmailMessageId}`));
@@ -1429,7 +1541,7 @@ async function runAutoSync() {
           const parsed = gmail.parseMessage(msg);
           const meEmail = (user.gmailEmail || '').toLowerCase();
           const direction = meEmail && parsed.from.toLowerCase().includes(meEmail) ? 'outbound' : 'inbound';
-          const match = classifyEmailToShow(parsed, shows, advances);
+          const match = classifyEmailToShow(parsed, shows, advances, artists);
           if (match) linked++;
           toAppend.push({
             id:             `${Date.now()}${Math.random().toString(36).slice(2, 6)}`,
@@ -1682,10 +1794,11 @@ app.post('/api/emails/sync-mine', requireAuth, async (req, res) => {
     const client = gmail.getGmailClientForToken(u.gmailRefreshToken);
     const relevance = await buildInboxRelevanceFilter();
     const messageRefs = await gmail.searchEmails(`(in:inbox OR in:sent) ${relevance}`, 150, client);
-    const [existing, shows, advances] = await Promise.all([
+    const [existing, shows, advances, artists] = await Promise.all([
       getStoredEmails(),
       sheets.getRows(config.googleSheets.sheets.shows),
       sheets.getRows(config.googleSheets.sheets.advancing),
+      sheets.getRows(config.googleSheets.sheets.artists).catch(() => []),
     ]);
     // Dedup is per (sourceUserId, gmailMessageId) — the same message in two users' mailboxes
     // is stored once per user so visibility/threading stays correct.
@@ -1701,7 +1814,7 @@ app.post('/api/emails/sync-mine', requireAuth, async (req, res) => {
         const parsed = gmail.parseMessage(msg);
         const meEmail = (u.gmailEmail || '').toLowerCase();
         const direction = parsed.from.toLowerCase().includes(meEmail) ? 'outbound' : 'inbound';
-        const match = classifyEmailToShow(parsed, shows, advances);
+        const match = classifyEmailToShow(parsed, shows, advances, artists);
         if (match) classified++;
         const emailRecord = {
           id:             `${Date.now()}${Math.random().toString(36).slice(2, 6)}`,

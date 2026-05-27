@@ -2,8 +2,11 @@ import { useEffect, useState, useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import api from '../api'
 import GmailConnect from '../components/GmailConnect'
+import { useAuth } from '../context/AuthContext'
 
 export default function Email() {
+  const { effectiveRole } = useAuth()
+  const canRelink = ['admin', 'production_manager'].includes(effectiveRole)
   const [searchParams] = useSearchParams()
   const [advances, setAdvances]         = useState([])
   const [shows, setShows]               = useState([])
@@ -204,6 +207,36 @@ export default function Email() {
     } catch (err) {
       alert('Inbox sync failed: ' + (err.response?.data?.message || err.message))
     } finally { setSyncingInbox(false) }
+  }
+
+  // ── Re-link all stored emails to shows (admin/PM only) ─────────────────────
+  const [relinking, setRelinking] = useState(false)
+  async function handleRelinkAll() {
+    const ok = confirm(
+      'Unlink every stored email and re-match against current shows?\n\n' +
+      'The bot will look at each email\'s subject, snippet, date and sender/recipient ' +
+      'and try to match by:\n' +
+      '  • known advance contact email (highest confidence)\n' +
+      '  • artist name (incl. registry aliases)\n' +
+      '  • show date appearing in the subject/snippet\n' +
+      '  • email sent close to the show date\n\n' +
+      'Emails with no confident match will be left unlinked.'
+    )
+    if (!ok) return
+    setRelinking(true)
+    try {
+      const res = await api.post('/emails/relink-all', { mode: 'reset' })
+      const { processed = 0, linked = 0, cleared = 0, unchanged = 0 } = res.data || {}
+      alert(`Done.\n\nProcessed: ${processed}\nNewly linked: ${linked}\nCleared: ${cleared}\nUnchanged: ${unchanged}`)
+      if (viewMode === 'inbox')      await loadInbox()
+      else if (viewMode === 'mine')  await loadMine()
+      else if (selected) {
+        const r = await api.get(`/emails?showId=${selected.showId}`)
+        setEmails((r.data.data || []).sort((a, b) => new Date(a.date) - new Date(b.date)))
+      }
+    } catch (err) {
+      alert('Re-link failed: ' + (err.response?.data?.message || err.message))
+    } finally { setRelinking(false) }
   }
 
   function switchToInbox() {
@@ -465,6 +498,12 @@ export default function Email() {
                   {syncingMine ? '⟳ Syncing…' : '⟳ Sync My Gmail'}
                 </button>
               )}
+              {canRelink && (
+                <button className="btn btn-ghost btn-sm" onClick={handleRelinkAll} disabled={relinking}
+                  title="Unlink every email and re-match against current shows by date + artist name">
+                  {relinking ? '🔗 Re-linking…' : '🔗 Re-link all'}
+                </button>
+              )}
             </div>
             <div style={{ padding: 16 }}>
               <GmailConnect onChange={setGmailStatus} />
@@ -539,6 +578,16 @@ export default function Email() {
               >
                 {syncingInbox ? '⟳ Syncing…' : '⟳ Sync Gmail'}
               </button>
+              {canRelink && (
+                <button
+                  className="btn btn-ghost btn-sm"
+                  onClick={handleRelinkAll}
+                  disabled={relinking}
+                  title="Unlink every email and re-match against current shows by date + artist name"
+                >
+                  {relinking ? '🔗 Re-linking…' : '🔗 Re-link all'}
+                </button>
+              )}
               <button className="btn btn-primary btn-sm" onClick={() => {
                 setReplyData(null)
                 setForm({ to: '', cc: '', subject: '', body: '', attachments: [] })
