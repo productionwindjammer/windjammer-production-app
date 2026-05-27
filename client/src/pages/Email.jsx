@@ -1071,9 +1071,13 @@ export default function Email() {
 function EmailAssignControl({ email, advances, shows, open, onToggle, onAssign, submitting }) {
   const [showId, setShowId] = useState('')
   const [setAdv, setSetAdv] = useState(true)
+  const [showPast, setShowPast] = useState(false)
 
-  // Build a "Date — Artist/Event" label for each show, sorted by date asc
+  // Build a "Date — Artist/Event" label for each show, sorted by date asc.
+  // Hide past shows by default to keep the list focused on what crew is actively working.
+  const todayStr = new Date().toISOString().slice(0, 10)
   const options = [...shows]
+    .filter(s => showPast || !s.date || s.date >= todayStr)
     .sort((a, b) => (a.date || '').localeCompare(b.date || ''))
     .map(s => ({ id: s.id, label: `${s.date || ''} — ${s.artist || s.eventName || s.id}` }))
 
