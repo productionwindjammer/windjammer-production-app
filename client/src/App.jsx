@@ -19,11 +19,13 @@ import Settings from './pages/Settings'
 import Calendar from './pages/Calendar'
 import Artists from './pages/Artists'
 import { SettingsProvider } from './context/SettingsContext'
+import { SplitProvider } from './context/SplitContext'
 
 export default function App() {
   return (
     <SettingsProvider>
     <AuthProvider>
+    <SplitProvider>
       <BrowserRouter>
         <UpdatePrompt />
         <Routes>
@@ -49,6 +51,7 @@ export default function App() {
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Routes>
       </BrowserRouter>
+    </SplitProvider>
     </AuthProvider>
     </SettingsProvider>
   )

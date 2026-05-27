@@ -3,9 +3,11 @@ import { useState, useEffect } from 'react'
 import { useLocation } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useSettings } from '../context/SettingsContext'
+import { useSplit, isEmbedded } from '../context/SplitContext'
 import Sidebar from './Sidebar'
 import TopNav from './TopNav'
 import ViewAsSwitcher from './ViewAsSwitcher'
+import SplitPane from './SplitPane'
 
 const ROLE_LABELS = {
   admin: 'Admin',
@@ -20,6 +22,8 @@ const ROLE_LABELS = {
 export default function Layout() {
   const { user, logout, isAdmin, viewAsRole, setViewAsRole, effectiveRole } = useAuth()
   const { settings } = useSettings()
+  const split = useSplit()
+  const embedded = isEmbedded()
   const useTop = settings.menuPos === 'top'
   const impersonating = isAdmin && !!viewAsRole
   const [mobileOpen, setMobileOpen] = useState(false)
@@ -27,6 +31,18 @@ export default function Layout() {
 
   // Close the mobile drawer on every route change
   useEffect(() => { setMobileOpen(false) }, [location.pathname])
+
+  // When this window is the right pane of a split (embedded in an iframe),
+  // strip the chrome and just render the routed page full-bleed.
+  if (embedded) {
+    return (
+      <main className="main-content embedded">
+        <Outlet />
+      </main>
+    )
+  }
+
+  const splitOn = split.enabled
 
   return (
     <>
@@ -44,6 +60,22 @@ export default function Layout() {
         <div className="header-dot" />
         <h1>Windjammer Production</h1>
         <div className="header-right">
+          <button
+            type="button"
+            className={'btn btn-ghost btn-sm split-toggle' + (splitOn ? ' active' : '')}
+            title={splitOn ? 'Close split view' : 'Open split view'}
+            onClick={split.toggle}
+          >
+            ⊟ Split
+          </button>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm split-toggle"
+            title="Pop this page out into a new window"
+            onClick={() => split.popout(location.pathname + location.search)}
+          >
+            ↗ Pop out
+          </button>
           <ViewAsSwitcher />
           <div className="user-chip">
             <span><strong>{user?.name}</strong></span>
@@ -76,8 +108,11 @@ export default function Layout() {
             </div>
           </>
         )}
-        <main className="main-content">
-          <Outlet />
+        <main className={'main-content' + (splitOn ? ' split-host' : '')}>
+          <div className="split-left" style={splitOn ? { flexBasis: `${split.ratio * 100}%` } : undefined}>
+            <Outlet />
+          </div>
+          {splitOn && <SplitPane />}
         </main>
       </div>
     </>
