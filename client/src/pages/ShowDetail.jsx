@@ -1,10 +1,35 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import api from '../api'
 import Modal from '../components/Modal'
 import { useSettings } from '../context/SettingsContext'
+import { useAuth } from '../context/AuthContext'
 import { formatTime } from '../utils/time'
 import { getTicketStats } from '../utils/stages'
+
+const DOC_TYPES = [
+  { value: 'rider',       label: 'Tech Rider' },
+  { value: 'hospitality', label: 'Hospitality Rider' },
+  { value: 'stagePlot',   label: 'Stage Plot' },
+  { value: 'inputList',   label: 'Input List' },
+  { value: 'contract',    label: 'Contract' },
+  { value: 'w9',          label: 'W-9' },
+  { value: 'other',       label: 'Other' },
+]
+const DOC_TYPE_LABEL = Object.fromEntries(DOC_TYPES.map(t => [t.value, t.label]))
+
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      const result = reader.result || ''
+      const comma = String(result).indexOf(',')
+      resolve(comma >= 0 ? String(result).slice(comma + 1) : String(result))
+    }
+    reader.onerror = reject
+    reader.readAsDataURL(file)
+  })
+}
 
 const BLANK_ADV = {
   riderReceived: 'false', riderNotes: '', stagingChanges: '', capacityChanges: '',
@@ -33,6 +58,8 @@ export default function ShowDetail() {
   const { id } = useParams()
   const navigate = useNavigate()
   const { settings } = useSettings()
+  const { effectiveRole } = useAuth()
+  const canEditDocs = ['admin', 'production_manager'].includes(effectiveRole)
   const tf = settings.timeFormat || '12h'
 
   const [show, setShow]           = useState(null)
@@ -44,6 +71,13 @@ export default function ShowDetail() {
   const [copyingFrom, setCopyingFrom] = useState('')
   const [activeTab, setActiveTab] = useState('advancing')
   const [artistFilled, setArtistFilled] = useState(false)
+
+  // Documents
+  const [artists, setArtists]       = useState([])
+  const [docs, setDocs]             = useState([])
+  const [uploading, setUploading]   = useState(false)
+  const [uploadMeta, setUploadMeta] = useState({ type: 'rider', notes: '' })
+  const [ensuringArtist, setEnsuringArtist] = useState(false)
 
   // Show edit
   const [showModal, setShowModal]   = useState(false)
@@ -86,13 +120,15 @@ export default function ShowDetail() {
   async function loadAll() {
     setLoading(true)
     try {
-      const [showsRes, advRes, schedRes, laborRes, staffRes] = await Promise.all([
+      const [showsRes, advRes, schedRes, laborRes, staffRes, artistsRes] = await Promise.all([
         api.get('/shows'),
         api.get('/advancing'),
         api.get('/schedule'),
         api.get('/labor'),
         api.get('/staff'),
+        api.get('/artists').catch(() => ({ data: { data: [] } })),
       ])
+      setArtists(artistsRes.data.data || [])
 
       const shows = showsRes.data.data || []
       const thisShow = shows.find(s => s.id === id)
@@ -166,6 +202,86 @@ export default function ShowDetail() {
       setLoading(false)
     }
   }
+
+  // ── Documents (riders / stage plots / input lists / etc.) ─────────────────
+  // Match the show's headliner against the Artist Registry.
+  const artistId = useMemo(() => {
+    if (!show || !artists?.length) return ''
+    const name = (show.artist || '').trim().toLowerCase()
+    if (!name) return ''
+    const hit = artists.find(a => {
+      if ((a.name || '').trim().toLowerCase() === name) return true
+      const aliases = String(a.aliases || '').split(',').map(s => s.trim().toLowerCase())
+      return aliases.includes(name)
+    })
+    return hit?.id || ''
+  }, [show, artists])
+
+  async function reloadDocs(aid = artistId) {
+    if (!aid) { setDocs([]); return }
+    try {
+      const r = await api.get(`/artists/${aid}/documents`)
+      setDocs(r.data.data || [])
+    } catch { setDocs([]) }
+  }
+
+  useEffect(() => { reloadDocs(artistId) }, [artistId]) // eslint-disable-line
+
+  async function ensureArtistRegistry() {
+    if (!show?.artist) { alert('This show has no headliner name set. Edit the show and add one first.'); return }
+    setEnsuringArtist(true)
+    try {
+      const res = await api.post('/artists', {
+        name: show.artist,
+        aliases: '', agency: '', agent: '',
+        contactName: '', contactEmail: '', contactPhone: '',
+        notes: `Auto-created from show ${id} (${show.date || ''})`,
+      })
+      const created = res.data?.data
+      const list = (await api.get('/artists')).data.data || []
+      setArtists(list)
+      if (created?.id) await reloadDocs(created.id)
+    } catch (err) {
+      alert('Could not create artist registry entry: ' + (err?.response?.data?.message || err.message))
+    } finally { setEnsuringArtist(false) }
+  }
+
+  async function onUploadDoc(e) {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    if (!artistId) { alert('No artist registry entry for this headliner yet.'); return }
+    if (file.size > 25 * 1024 * 1024) { alert('Max file size is 25MB.'); return }
+    setUploading(true)
+    try {
+      const data = await fileToBase64(file)
+      await api.post(`/artists/${artistId}/documents`, {
+        filename: file.name,
+        mimeType: file.type || 'application/octet-stream',
+        data,
+        type:     uploadMeta.type,
+        year:     show.date ? show.date.slice(0, 4) : '',
+        notes:    uploadMeta.notes,
+        showId:   id,
+        showDate: show.date || '',
+      })
+      setUploadMeta({ type: 'rider', notes: '' })
+      await reloadDocs(artistId)
+    } catch (err) {
+      alert('Upload failed: ' + (err?.response?.data?.message || err.message))
+    } finally { setUploading(false) }
+  }
+
+  async function removeDoc(d) {
+    if (!confirm(`Delete "${d.name}"?\n\nThis also removes the file from Drive.`)) return
+    try { await api.delete(`/artist-documents/${d.id}`); await reloadDocs(artistId) }
+    catch (err) { alert('Delete failed: ' + (err?.response?.data?.message || err.message)) }
+  }
+
+  // Docs filed against this specific show (newest first)
+  const showDocs = (docs || [])
+    .filter(d => d.showId === id)
+    .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''))
 
   async function reloadSchedule() {
     const res = await api.get('/schedule')
@@ -649,6 +765,7 @@ export default function ShowDetail() {
           { key: 'advancing', label: '🎸 Advancing' },
           { key: 'schedule',  label: `📋 Day of Show${schedule.length ? ` (${schedule.length})` : ''}` },
           { key: 'labor',     label: `👷 Crew${labor.length ? ` · $${totalLaborCost.toFixed(0)}` : ''}` },
+          { key: 'documents', label: `📎 Documents${showDocs.length ? ` (${showDocs.length})` : ''}` },
         ].map(tab => (
           <button
             key={tab.key}
@@ -893,6 +1010,108 @@ export default function ShowDetail() {
               </div>
             )}
           </div>
+        </div>
+      )}
+
+      {/* ══════════════════════════════════════════════════════════════════════
+          DOCUMENTS TAB — riders, stage plots, input lists, etc.
+      ══════════════════════════════════════════════════════════════════════ */}
+      {activeTab === 'documents' && (
+        <div className="card" style={{ padding: 24 }}>
+          <div style={{ marginBottom: 16 }}>
+            <h3 style={{ margin: 0 }}>Show documents</h3>
+            <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.55)', marginTop: 4 }}>
+              Upload riders, stage plots, input lists or any file for this show. Files are stored in the artist's Drive folder and linked back to this date.
+            </div>
+          </div>
+
+          {!artistId ? (
+            <div style={{ padding: 16, border: '1px dashed rgba(255,255,255,0.2)', borderRadius: 8, color: 'rgba(255,255,255,0.7)' }}>
+              No Artist Registry entry found for <strong>{show.artist || '(no headliner set)'}</strong>.
+              {canEditDocs && show.artist && (
+                <div style={{ marginTop: 10 }}>
+                  <button className="btn btn-primary btn-sm" onClick={ensureArtistRegistry} disabled={ensuringArtist}>
+                    {ensuringArtist ? 'Creating…' : `+ Create registry entry for "${show.artist}"`}
+                  </button>
+                </div>
+              )}
+            </div>
+          ) : (
+            <>
+              {canEditDocs && (
+                <div style={{ padding: 14, background: 'rgba(255,255,255,0.04)', borderRadius: 8, marginBottom: 16 }}>
+                  <div className="form-row" style={{ alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                    <label>Type
+                      <select value={uploadMeta.type} onChange={e => setUploadMeta(m => ({ ...m, type: e.target.value }))}>
+                        {DOC_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+                      </select>
+                    </label>
+                    <label style={{ flex: 1, minWidth: 200 }}>Notes (optional)
+                      <input
+                        value={uploadMeta.notes}
+                        placeholder="e.g. v2 with updated input list"
+                        onChange={e => setUploadMeta(m => ({ ...m, notes: e.target.value }))}
+                      />
+                    </label>
+                    <label className="btn btn-primary" style={{ cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                      {uploading ? 'Uploading…' : '📎 Choose file'}
+                      <input type="file" hidden onChange={onUploadDoc} disabled={uploading} />
+                    </label>
+                  </div>
+                  <div style={{ marginTop: 8, fontSize: 12, color: 'rgba(255,255,255,0.5)' }}>
+                    Max 25MB. File is filed under {show.artist}'s registry and tagged to this show ({show.date}).
+                  </div>
+                </div>
+              )}
+
+              {showDocs.length === 0 ? (
+                <div className="empty-state" style={{ padding: 24, textAlign: 'center', color: 'rgba(255,255,255,0.55)' }}>
+                  No documents uploaded for this show yet.
+                  <div style={{ fontSize: 12, marginTop: 4 }}>
+                    Older riders &amp; stage plots from previous shows live on the <Link to={`/artists/${artistId}`}>artist page</Link>.
+                  </div>
+                </div>
+              ) : (
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Type</th>
+                        <th>File</th>
+                        <th>Notes</th>
+                        <th>Uploaded</th>
+                        <th></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {showDocs.map(d => (
+                        <tr key={d.id}>
+                          <td>{DOC_TYPE_LABEL[d.type] || d.type || 'Other'}</td>
+                          <td>
+                            <a href={d.webViewLink} target="_blank" rel="noreferrer">{d.name}</a>
+                          </td>
+                          <td className="text-muted">{d.notes || '—'}</td>
+                          <td className="text-muted" style={{ whiteSpace: 'nowrap' }}>
+                            {d.createdAt ? new Date(d.createdAt).toLocaleDateString() : '—'}
+                            {d.uploadedBy && <div style={{ fontSize: 11 }}>{d.uploadedBy}</div>}
+                          </td>
+                          <td>
+                            {canEditDocs && (
+                              <button className="btn btn-danger btn-sm" onClick={() => removeDoc(d)}>Del</button>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              <div style={{ marginTop: 14, fontSize: 12, color: 'rgba(255,255,255,0.45)' }}>
+                See all files for {show.artist} on the <Link to={`/artists/${artistId}`}>artist page →</Link>
+              </div>
+            </>
+          )}
         </div>
       )}
 
