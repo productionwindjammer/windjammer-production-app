@@ -25,6 +25,7 @@ module.exports = {
       artists:          'Artists',
       artistDocuments:  'ArtistDocuments',
       gmailLabelMappings: 'GmailLabelMappings',
+      gmailSyncedLabels:  'GmailSyncedLabels',
     }
   }
 };

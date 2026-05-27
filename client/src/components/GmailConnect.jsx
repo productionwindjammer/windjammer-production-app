@@ -89,6 +89,7 @@ export default function GmailConnect({ onChange }) {
           </button>
         </div>
         <LabelMappings />
+        <SyncedLabels />
       </div>
     )
   }
@@ -230,6 +231,108 @@ function LabelMappings() {
           {adding ? 'Linking…' : 'Link'}
         </button>
       </div>
+    </div>
+  )
+}
+
+// ── Synced labels (no auto-link) ─────────────────────────────────────────────
+// Pick any Gmail label to include in the sync. Parent labels automatically pull
+// in every child label (e.g. picking "Tours" also syncs "Tours/2026/Artist").
+function SyncedLabels() {
+  const [labels, setLabels] = useState([])
+  const [synced, setSynced] = useState([])
+  const [labelId, setLabelId] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [adding, setAdding]   = useState(false)
+  const [err, setErr]         = useState('')
+
+  async function loadAll() {
+    setLoading(true); setErr('')
+    try {
+      const [lr, sr] = await Promise.all([
+        api.get('/gmail/labels').catch(e => ({ data: { labels: [], message: e.response?.data?.message || e.message } })),
+        api.get('/gmail/synced-labels'),
+      ])
+      setLabels(lr.data.labels || [])
+      if (lr.data.message) setErr(lr.data.message)
+      setSynced(sr.data.labels || [])
+    } catch (e) { setErr(e.response?.data?.message || e.message) }
+    finally     { setLoading(false) }
+  }
+  useEffect(() => { loadAll() }, [])
+
+  async function handleAdd() {
+    if (!labelId) return
+    const label = labels.find(l => l.id === labelId)
+    setAdding(true)
+    try {
+      await api.post('/gmail/synced-labels', { labelId, labelName: label?.name || labelId })
+      setLabelId('')
+      await loadAll()
+    } catch (e) { alert('Could not add: ' + (e.response?.data?.message || e.message)) }
+    finally     { setAdding(false) }
+  }
+
+  async function handleDelete(id) {
+    if (!confirm('Stop syncing this label? Already-synced emails stay put.')) return
+    try { await api.delete(`/gmail/synced-labels/${id}`); await loadAll() }
+    catch (e) { alert('Remove failed: ' + (e.response?.data?.message || e.message)) }
+  }
+
+  const syncedIds = new Set(synced.map(s => s.labelId))
+  const availableLabels = labels.filter(l => !syncedIds.has(l.id))
+
+  // Show which children a picked parent will pull in
+  const picked = labels.find(l => l.id === labelId)
+  const children = picked
+    ? labels.filter(l => l.id !== picked.id && l.name.startsWith(picked.name + '/'))
+    : []
+
+  return (
+    <div className="card" style={{ padding: 12, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+        <div>
+          <div style={{ fontWeight: 600, fontSize: 14 }}>📥 Synced labels</div>
+          <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.55)' }}>
+            Bring extra Gmail labels into the app (no auto-link). Picking a parent label also syncs every child.
+          </div>
+        </div>
+        <button className="btn btn-ghost btn-sm" onClick={loadAll} disabled={loading}>{loading ? '…' : '↻'}</button>
+      </div>
+
+      {err && (
+        <div style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', color: '#fca5a5', padding: 8, borderRadius: 6, fontSize: 12, marginBottom: 8 }}>
+          {err}
+        </div>
+      )}
+
+      {synced.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 10 }}>
+          {synced.map(s => (
+            <span key={s.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'rgba(16,185,129,0.15)', color: '#a7f3d0', padding: '3px 4px 3px 10px', borderRadius: 12, fontSize: 12 }}>
+              🏷️ {s.labelName}
+              <button onClick={() => handleDelete(s.id)} title="Remove" style={{ background: 'transparent', border: 'none', color: '#fca5a5', cursor: 'pointer', padding: '0 4px', fontSize: 12 }}>✕</button>
+            </span>
+          ))}
+        </div>
+      )}
+
+      <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+        <select value={labelId} onChange={e => setLabelId(e.target.value)} style={{ flex: '1 1 200px', minWidth: 160, padding: '5px 7px', fontSize: 13 }} disabled={loading || availableLabels.length === 0}>
+          <option value="">{loading ? 'Loading labels…' : availableLabels.length === 0 ? 'No more labels' : '-- pick a Gmail label --'}</option>
+          {availableLabels.map(l => (
+            <option key={l.id} value={l.id}>{l.type === 'system' ? '📥 ' : '🏷️ '}{l.name}</option>
+          ))}
+        </select>
+        <button className="btn btn-primary btn-sm" onClick={handleAdd} disabled={!labelId || adding}>
+          {adding ? 'Adding…' : 'Sync'}
+        </button>
+      </div>
+      {children.length > 0 && (
+        <div style={{ marginTop: 6, fontSize: 11, color: 'rgba(255,255,255,0.55)' }}>
+          Will also pull: {children.map(c => c.name).join(', ')}
+        </div>
+      )}
     </div>
   )
 }

@@ -1413,11 +1413,61 @@ function buildLabelOrClause(mappings) {
   return parts.length ? ' OR ' + parts.join(' OR ') : '';
 }
 
+// Expand a list of synced-label rows so that any "parent" label (e.g. "Tours")
+// also pulls in every child ("Tours/2026", "Tours/2026/Artist", …).
+// `allLabels` is the full label listing fetched once from Gmail.
+function expandParentLabels(syncedRows, allLabels) {
+  if (!syncedRows?.length || !allLabels?.length) return syncedRows || [];
+  const byId = new Map(allLabels.map(l => [l.id, l]));
+  const out = [];
+  const seenIds = new Set();
+  for (const row of syncedRows) {
+    const lbl = byId.get(row.labelId);
+    if (!lbl) { // label deleted in Gmail — still try by name
+      if (!seenIds.has(row.labelId)) { seenIds.add(row.labelId); out.push(row); }
+      continue;
+    }
+    if (!seenIds.has(lbl.id)) { seenIds.add(lbl.id); out.push({ labelId: lbl.id, labelName: lbl.name }); }
+    const prefix = lbl.name + '/';
+    for (const cand of allLabels) {
+      if (cand.id === lbl.id) continue;
+      if (cand.name.startsWith(prefix) && !seenIds.has(cand.id)) {
+        seenIds.add(cand.id);
+        out.push({ labelId: cand.id, labelName: cand.name });
+      }
+    }
+  }
+  return out;
+}
+
+// Combined search clause for a user: mapped labels + opted-in synced labels.
+// When `client` is supplied we expand parent labels via a live Gmail label list.
+async function buildUserLabelClause(userId, client) {
+  let mappings = [];
+  let synced   = [];
+  try { mappings = await getLabelMappings(userId); } catch {}
+  try { synced   = await getSyncedLabels(userId); } catch {}
+  if (client && synced.length) {
+    try {
+      const allLabels = await gmail.listLabels(client);
+      synced = expandParentLabels(synced, allLabels);
+    } catch { /* best-effort — fall back to literal list */ }
+  }
+  return buildLabelOrClause([...mappings, ...synced]);
+}
+
 // If a parsed message carries any label mapped to a show, return that mapping.
 function matchLabelMapping(parsedLabelIds, mappings) {
   if (!mappings || mappings.length === 0 || !parsedLabelIds) return null;
   const set = new Set(parsedLabelIds);
   return mappings.find(m => set.has(m.labelId)) || null;
+}
+
+async function getSyncedLabels(userId) {
+  try {
+    const all = await sheets.getRows(config.googleSheets.sheets.gmailSyncedLabels);
+    return userId ? all.filter(r => r.userId === userId) : all;
+  } catch { return []; }
 }
 
 // Helper: sync Gmail for one show. If an advance contact email is known,
@@ -1777,7 +1827,6 @@ async function runAutoSync() {
       const tag = user.isHouseMailbox === 'true' ? '🏠 ' : '';
       console.log(`[auto-sync] ${tag}Scanning ${user.gmailEmail || user.username}…`);
       const userMappings = await getLabelMappings(user.id);
-      const labelClause = buildLabelOrClause(userMappings);
       let client;
       try {
         client = gmail.getGmailClientForToken(user.gmailRefreshToken);
@@ -1785,6 +1834,7 @@ async function runAutoSync() {
         console.error(`[auto-sync] Failed to build client for ${user.gmailEmail}: ${err.message}`);
         continue;
       }
+      const labelClause = await buildUserLabelClause(user.id, client);
       let messageRefs = [];
       try {
         messageRefs = await gmail.searchEmails(`(in:inbox OR in:sent${labelClause}) ${relevance}`, 150, client);
@@ -1863,7 +1913,7 @@ app.post('/api/emails/sync-inbox', requireAuth, async (req, res) => {
     const picked = await pickGmailClient(req);
     if (!picked) return res.status(503).json({ success: false, message: 'Gmail not configured.' });
     const userMappings = await getLabelMappings(picked.user?.id || '');
-    const labelClause = buildLabelOrClause(userMappings);
+    const labelClause = await buildUserLabelClause(picked.user?.id || '', picked.client);
     const relevance = await buildInboxRelevanceFilter();
     const messageRefs = await gmail.searchEmails(`(in:inbox OR in:sent${labelClause}) ${relevance}`, 150, picked.client);
     const existing = await getStoredEmails();
@@ -2147,6 +2197,47 @@ app.delete('/api/gmail/label-mappings/:id', requireAuth, async (req, res) => {
   }
 });
 
+// ── Per-user opt-in labels to sync (no auto-link — just bring them in) ──────
+// GET /api/gmail/synced-labels
+app.get('/api/gmail/synced-labels', requireAuth, async (req, res) => {
+  try { res.json({ success: true, labels: await getSyncedLabels(req.user.id) }); }
+  catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+
+// POST /api/gmail/synced-labels  { labelId, labelName }
+app.post('/api/gmail/synced-labels', requireAuth, async (req, res) => {
+  try {
+    const { labelId, labelName } = req.body || {};
+    if (!labelId || !labelName)
+      return res.status(400).json({ success: false, message: 'labelId and labelName are required.' });
+    const existing = await getSyncedLabels(req.user.id);
+    if (existing.some(r => r.labelId === labelId))
+      return res.json({ success: true, duplicate: true });
+    const row = {
+      id:        `${Date.now()}${Math.random().toString(36).slice(2, 6)}`,
+      userId:    req.user.id,
+      labelId,
+      labelName,
+      createdAt: new Date().toISOString(),
+    };
+    await sheets.appendRow(config.googleSheets.sheets.gmailSyncedLabels, row);
+    res.json({ success: true, label: row });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+
+// DELETE /api/gmail/synced-labels/:id
+app.delete('/api/gmail/synced-labels/:id', requireAuth, async (req, res) => {
+  try {
+    const all = await getSyncedLabels();
+    const row = all.find(r => r.id === req.params.id);
+    if (!row) return res.status(404).json({ success: false, message: 'Not found.' });
+    if (row.userId !== req.user.id && req.user.role !== 'admin')
+      return res.status(403).json({ success: false, message: 'Not yours.' });
+    await sheets.deleteRowById(config.googleSheets.sheets.gmailSyncedLabels, req.params.id);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+
 // POST /api/emails/sync-mine — sync current user's connected mailbox
 app.post('/api/emails/sync-mine', requireAuth, async (req, res) => {
   try {
@@ -2155,7 +2246,7 @@ app.post('/api/emails/sync-mine', requireAuth, async (req, res) => {
       return res.status(400).json({ success: false, message: 'Connect your Gmail first.' });
     const client = gmail.getGmailClientForToken(u.gmailRefreshToken);
     const userMappings = await getLabelMappings(req.user.id);
-    const labelClause = buildLabelOrClause(userMappings);
+    const labelClause = await buildUserLabelClause(req.user.id, client);
     const relevance = await buildInboxRelevanceFilter();
     const messageRefs = await gmail.searchEmails(`(in:inbox OR in:sent${labelClause}) ${relevance}`, 150, client);
     const [existing, shows, advances, artists] = await Promise.all([
