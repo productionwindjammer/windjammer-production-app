@@ -197,9 +197,28 @@ function getDriveRoot() {
 }
 
 async function getDriveClient() {
-  const auth = getAuth();
-  const client = await auth.getClient();
-  const drive = google.drive({ version: 'v3', auth: client });
+  // Prefer the OAuth user (e.g. productionwindjammer@gmail.com) for Drive when
+  // a refresh token is available. Service accounts have 0 storage quota, so
+  // files they create fail uploading even into folders shared with them.
+  // OAuth users have their own Drive quota (15GB free) and own the files
+  // they create, which sidesteps the quota error entirely.
+  let drive;
+  if (
+    process.env.GMAIL_CLIENT_ID &&
+    process.env.GMAIL_CLIENT_SECRET &&
+    process.env.GMAIL_REFRESH_TOKEN
+  ) {
+    const oauth = new google.auth.OAuth2(
+      process.env.GMAIL_CLIENT_ID,
+      process.env.GMAIL_CLIENT_SECRET
+    );
+    oauth.setCredentials({ refresh_token: process.env.GMAIL_REFRESH_TOKEN });
+    drive = google.drive({ version: 'v3', auth: oauth });
+  } else {
+    const auth = getAuth();
+    const client = await auth.getClient();
+    drive = google.drive({ version: 'v3', auth: client });
+  }
   const root = getDriveRoot();
 
   // Wrap files.create / files.delete / permissions.create so every call
