@@ -229,6 +229,10 @@ async function ensureArtistsFromShow(show) {
       await sheets.appendRow(config.googleSheets.sheets.artists, row);
       created.push(row.name);
       known.add(key);
+      // Best-effort: create the artist's Drive folder so docs have a home
+      ensureArtistFolder(row.id).catch(err =>
+        console.warn('[kickoff] artist folder creation failed for', row.name, err.message)
+      );
     } catch (err) {
       console.error('[kickoff] Failed to add artist', raw, err.message);
     }
@@ -403,7 +407,7 @@ crudRoutes(app, '/api/vendors',         'vendors');
 crudRoutes(app, '/api/vendor-bookings', 'vendorBookings');
 crudRoutes(app, '/api/settlement',      'settlement');
 crudRoutes(app, '/api/unavailability',  'unavailability', ['admin','production_manager']);
-crudRoutes(app, '/api/artists',         'artists',        ['admin','production_manager']);
+crudRoutes(app, '/api/artists',         'artists',        ['admin','production_manager'], { afterCreate: (row) => ensureArtistFolder(row.id) });
 // Note: artist-documents writes go through the upload endpoint below (which handles Drive too).
 // We expose only GET via crudRoutes-equivalent below to avoid orphaning Drive files on direct deletes.
 
