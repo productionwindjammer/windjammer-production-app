@@ -207,22 +207,22 @@ export default function Calendar() {
                     key={ci}
                     onClick={canEditUnav ? () => openAddUnav(key) : undefined}
                     style={{
-                      minHeight: 110, padding: 6,
+                      aspectRatio: '1 / 1', padding: 4, overflow: 'hidden',
                       borderLeft: ci === 0 ? 'none' : '1px solid rgba(255,255,255,0.06)',
                       background: isToday ? 'rgba(59,130,246,0.08)' : 'transparent',
                       opacity: isMonth ? 1 : 0.35,
                       cursor: canEditUnav ? 'pointer' : 'default',
-                      position: 'relative',
+                      position: 'relative', display: 'flex', flexDirection: 'column',
                     }}
                   >
-                    <div style={{ fontSize: 12, fontWeight: isToday ? 700 : 500, color: isToday ? '#60a5fa' : 'rgba(255,255,255,0.7)', marginBottom: 4, textAlign: 'right' }}>
+                    <div style={{ fontSize: 12, fontWeight: isToday ? 700 : 500, color: isToday ? '#60a5fa' : 'rgba(255,255,255,0.7)', marginBottom: 3, textAlign: 'right', flexShrink: 0 }}>
                       {d.getDate()}
                     </div>
                     {(() => {
                       const shown = items.slice(0, 3)
                       const hidden = items.length - shown.length
                       return (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: 1, minHeight: 0, overflow: 'hidden' }}>
                           {shown.map((it, i) => it.type === 'show' ? (
                             <ShowChip key={`s${i}`} show={it.show} tf={tf} onClick={e => { e.stopPropagation(); navigate(`/shows/${it.show.id}`) }} />
                           ) : (
@@ -304,14 +304,14 @@ function ShowChip({ show, tf, onClick }) {
         display: 'block', width: '100%', textAlign: 'left',
         background: colors.bg, color: colors.text,
         border: `1px solid ${colors.border}`, borderRadius: 4,
-        padding: '3px 6px', fontSize: 11, lineHeight: 1.3,
+        padding: '2px 5px', fontSize: 10.5, lineHeight: 1.2,
         cursor: 'pointer', opacity: dim,
         textDecoration: status === 'cancelled' ? 'line-through' : 'none',
-        whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+        overflow: 'hidden',
       }}
     >
-      {time && <span style={{ opacity: 0.85, marginRight: 4, fontVariantNumeric: 'tabular-nums' }}>{time}</span>}
-      {label}
+      <div style={{ fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</div>
+      {time && <div style={{ opacity: 0.85, fontVariantNumeric: 'tabular-nums', fontSize: 9.5 }}>{time}</div>}
     </button>
   )
 }
