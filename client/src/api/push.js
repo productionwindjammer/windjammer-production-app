@@ -2,8 +2,11 @@
 import api from './index'
 
 function urlBase64ToUint8Array(base64String) {
-  const padding = '='.repeat((4 - base64String.length % 4) % 4)
-  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/')
+  // Strip whitespace/quotes and keep only valid base64url chars.
+  const clean = String(base64String || '').trim().replace(/^['"]|['"]$/g, '').replace(/[^A-Za-z0-9_\-]/g, '')
+  if (!clean) throw new Error('Empty VAPID public key from server')
+  const padding = '='.repeat((4 - clean.length % 4) % 4)
+  const base64 = (clean + padding).replace(/-/g, '+').replace(/_/g, '/')
   const raw = window.atob(base64)
   const out = new Uint8Array(raw.length)
   for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i)

@@ -16,14 +16,20 @@ let vapidConfigured = false;
 
 function configure() {
   if (vapidConfigured) return true;
-  const pub = process.env.VAPID_PUBLIC_KEY;
-  const priv = process.env.VAPID_PRIVATE_KEY;
-  const sub = process.env.VAPID_SUBJECT || 'mailto:admin@example.com';
+  const clean = v => String(v || '').trim().replace(/^['"]|['"]$/g, '');
+  const pub = clean(process.env.VAPID_PUBLIC_KEY);
+  const priv = clean(process.env.VAPID_PRIVATE_KEY);
+  const sub = clean(process.env.VAPID_SUBJECT) || 'mailto:admin@example.com';
   if (!pub || !priv) {
     console.warn('[push] VAPID keys not set — push notifications disabled');
     return false;
   }
-  webpush.setVapidDetails(sub, pub, priv);
+  try {
+    webpush.setVapidDetails(sub, pub, priv);
+  } catch (e) {
+    console.warn('[push] Invalid VAPID keys:', e.message);
+    return false;
+  }
   vapidConfigured = true;
   return true;
 }
@@ -33,7 +39,9 @@ function isConfigured() {
 }
 
 function publicKey() {
-  return process.env.VAPID_PUBLIC_KEY || '';
+  // Strip surrounding whitespace/quotes — Railway/dotenv can leave these in.
+  const raw = process.env.VAPID_PUBLIC_KEY || '';
+  return raw.trim().replace(/^['"]|['"]$/g, '');
 }
 
 async function subscribe(userId, subscription, userAgent = '') {
