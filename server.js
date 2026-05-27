@@ -171,10 +171,80 @@ function crudRoutes(router, path, sheetKey, writeRoles = ['admin','production_ma
 //   2. Create the show's Google Drive folder (best-effort)
 //   3. If an advance contact email is already known, sync Gmail history and
 //      run the bot extractor so the advancer opens to pre-filled suggestions
+//   4. Make sure every artist on the bill exists in the Artist Registry
+
+// Split a free-text show title into individual artist names.
+// Handles separators commonly used on lineups: comma, semicolon, "/", "&",
+// " w/ ", " with ", " + ", " feat. ", " ft. ".
+function splitArtistNames(text) {
+  if (!text) return [];
+  return String(text)
+    .split(/\s*(?:,|;|\/| w\/ | with | feat\.? | ft\.? | \+ | & )\s*/i)
+    .map(s => s.trim())
+    .filter(s => s && s.length >= 2 && s.length <= 80);
+}
+
+// Make sure every artist named on a show exists in the Artist Registry.
+// Match is case-insensitive against existing artist.name and any aliases.
+// Newly created rows include createdAt and a small audit note.
+async function ensureArtistsFromShow(show) {
+  const candidates = [
+    ...splitArtistNames(show.artist),
+    ...splitArtistNames(show.eventName),
+  ];
+  if (candidates.length === 0) return [];
+
+  const existing = await sheets.getRows(config.googleSheets.sheets.artists);
+  const known = new Set();
+  for (const a of existing) {
+    if (a.name) known.add(a.name.toLowerCase().trim());
+    String(a.aliases || '').split(',').forEach(x => {
+      const t = x.trim().toLowerCase();
+      if (t) known.add(t);
+    });
+  }
+
+  const seen = new Set();
+  const created = [];
+  for (const raw of candidates) {
+    const key = raw.toLowerCase().trim();
+    if (!key || seen.has(key) || known.has(key)) continue;
+    seen.add(key);
+    const row = {
+      id:            `${Date.now()}${Math.random().toString(36).slice(2, 6)}`,
+      name:          raw,
+      aliases:       '',
+      agency:        '',
+      agent:         '',
+      contactName:   '',
+      contactEmail:  '',
+      contactPhone:  '',
+      notes:         `Auto-added from show ${show.id} (${show.date || ''})`,
+      driveFolderId: '',
+      createdAt:     new Date().toISOString(),
+    };
+    try {
+      await sheets.appendRow(config.googleSheets.sheets.artists, row);
+      created.push(row.name);
+      known.add(key);
+    } catch (err) {
+      console.error('[kickoff] Failed to add artist', raw, err.message);
+    }
+  }
+  if (created.length) {
+    console.log(`[kickoff] Added ${created.length} artist(s) to registry: ${created.join(', ')}`);
+  }
+  return created;
+}
+
 async function kickoffAdvanceForShow(show) {
   if (!show || !show.id) return;
   const showLabel = show.artist || show.eventName || `Show ${show.id}`;
   console.log(`[kickoff] Preparing advance for show ${show.id} — ${showLabel}`);
+
+  // 0. Ensure artists on the bill are in the registry (fire-and-forget safe)
+  try { await ensureArtistsFromShow(show); }
+  catch (err) { console.error('[kickoff] Artist registry sync failed:', err.message); }
 
   // 1. Create Advancing record if none exists for this showId
   let advanceId = null;
