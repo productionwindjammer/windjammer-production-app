@@ -214,22 +214,48 @@ async function getDriveClient() {
     );
     oauth.setCredentials({ refresh_token: process.env.GMAIL_REFRESH_TOKEN });
     drive = google.drive({ version: 'v3', auth: oauth });
+    console.log('[drive] using OAuth user auth');
   } else {
     const auth = getAuth();
     const client = await auth.getClient();
     drive = google.drive({ version: 'v3', auth: client });
+    console.log('[drive] using service account auth (no GMAIL_REFRESH_TOKEN set)');
   }
   const root = getDriveRoot();
 
   // Wrap files.create / files.delete / permissions.create so every call
   // automatically uses supportsAllDrives and parents into the root folder.
+  const usingOAuth = !!(
+    process.env.GMAIL_CLIENT_ID &&
+    process.env.GMAIL_CLIENT_SECRET &&
+    process.env.GMAIL_REFRESH_TOKEN
+  );
   const origCreate = drive.files.create.bind(drive.files);
-  drive.files.create = (params = {}, opts) => {
+  drive.files.create = async (params = {}, opts) => {
     const p = { ...params, supportsAllDrives: true };
     if (p.requestBody && !p.requestBody.parents && root) {
       p.requestBody = { ...p.requestBody, parents: [root] };
     }
-    return origCreate(p, opts);
+    try {
+      return await origCreate(p, opts);
+    } catch (err) {
+      // With OAuth + drive.file scope, the app can only write into folders it
+      // created itself. If the configured DRIVE_ROOT_FOLDER_ID is a folder the
+      // user created in the Drive UI, the parent will 404. Retry without the
+      // parent so the file lands in the user's My Drive root.
+      const msg = String(err.message || '');
+      if (
+        usingOAuth &&
+        p.requestBody &&
+        p.requestBody.parents &&
+        (msg.includes('File not found') || err.code === 404 || err.code === 403)
+      ) {
+        console.warn('[drive] parent folder not accessible via drive.file scope; uploading to My Drive root instead');
+        const { parents, ...body } = p.requestBody;
+        return origCreate({ ...p, requestBody: body }, opts);
+      }
+      throw err;
+    }
   };
 
   const origDelete = drive.files.delete.bind(drive.files);
