@@ -4,7 +4,7 @@
 //   - On update, notifies open clients so the UI can prompt a reload.
 //
 // Bump CACHE when you intentionally want to nuke all old caches.
-const CACHE = 'windjammer-v2';
+const CACHE = 'windjammer-v3';
 const SHELL = ['/manifest.webmanifest', '/icon-192.png', '/icon-512.png', '/apple-touch-icon.png'];
 
 self.addEventListener('install', e => {
@@ -28,10 +28,26 @@ self.addEventListener('message', e => {
   if (e.data && e.data.type === 'SKIP_WAITING') self.skipWaiting();
 });
 
+// Always returns a real Response so respondWith never sees null/undefined
+// (which would throw "Failed to convert value to 'Response'").
+function offlineResponse(message = 'Offline') {
+  return new Response(message, {
+    status: 503,
+    statusText: 'Offline',
+    headers: { 'Content-Type': 'text/plain' },
+  });
+}
+
 self.addEventListener('fetch', e => {
   const req = e.request;
   if (req.method !== 'GET') return;
-  const url = new URL(req.url);
+
+  let url;
+  try { url = new URL(req.url); }
+  catch { return; }
+
+  // Only handle same-origin requests; let the browser do its thing for everything else.
+  if (url.origin !== self.location.origin) return;
 
   // Never cache API or auth callbacks
   if (url.pathname.startsWith('/api/')) return;
@@ -40,16 +56,21 @@ self.addEventListener('fetch', e => {
   const isHtml =
     req.mode === 'navigate' ||
     (req.headers.get('accept') || '').includes('text/html');
+
   if (isHtml) {
     e.respondWith((async () => {
       try {
         const fresh = await fetch(req, { cache: 'no-store' });
-        const copy = fresh.clone();
-        caches.open(CACHE).then(c => c.put('/', copy)).catch(() => {});
+        // Cache the app shell under '/' so we can serve it offline for SPA routes
+        try {
+          const copy = fresh.clone();
+          const cache = await caches.open(CACHE);
+          await cache.put('/', copy);
+        } catch {}
         return fresh;
       } catch {
-        const cached = await caches.match('/') || await caches.match(req);
-        return cached || new Response('Offline', { status: 503, statusText: 'Offline' });
+        const cached = (await caches.match('/')) || (await caches.match(req));
+        return cached || offlineResponse('Offline');
       }
     })());
     return;
@@ -57,11 +78,26 @@ self.addEventListener('fetch', e => {
 
   // Static assets: cache-first, refresh in background
   e.respondWith((async () => {
-    const cached = await caches.match(req);
-    const network = fetch(req).then(res => {
-      if (res && res.ok) caches.open(CACHE).then(c => c.put(req, res.clone())).catch(() => {});
-      return res;
-    }).catch(() => null);
-    return cached || network || new Response('', { status: 504 });
+    try {
+      const cached = await caches.match(req);
+      if (cached) {
+        // Refresh in the background, but don't block the response on it.
+        fetch(req).then(res => {
+          if (res && res.ok) caches.open(CACHE).then(c => c.put(req, res.clone())).catch(() => {});
+        }).catch(() => {});
+        return cached;
+      }
+      const res = await fetch(req);
+      if (res && res.ok) {
+        try {
+          const copy = res.clone();
+          const cache = await caches.open(CACHE);
+          await cache.put(req, copy);
+        } catch {}
+      }
+      return res || offlineResponse('Resource unavailable');
+    } catch {
+      return offlineResponse('Resource unavailable');
+    }
   })());
 });
