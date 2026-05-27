@@ -733,6 +733,10 @@ app.post('/api/push/unsubscribe', requireAuth, async (req, res) => {
 // that notifications are wired correctly.
 app.post('/api/push/test', requireAuth, async (req, res) => {
   try {
+    if (!push.isConfigured()) {
+      return res.json({ success: true, sent: 0, skipped: 'no-vapid',
+        message: 'Server has no VAPID keys configured. Set VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY / VAPID_SUBJECT in your environment and restart.' });
+    }
     const result = await push.sendToUser(req.user.id, {
       title: 'Windjammer test notification',
       body: 'Push is working on this device.',

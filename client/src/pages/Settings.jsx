@@ -275,7 +275,16 @@ function NotificationsCard() {
     setBusy(true); setMsg(null)
     try {
       const { data } = await sendTestPush()
-      setMsg({ kind: data?.sent ? 'ok' : 'err', text: data?.sent ? 'Test sent — check for the banner.' : 'Server reported 0 devices reached.' })
+      if (data?.sent) {
+        setMsg({ kind: 'ok', text: `Test sent to ${data.sent} device${data.sent === 1 ? '' : 's'} — check for the banner.` })
+      } else {
+        const reason = data?.message ||
+          (data?.skipped === 'no-vapid' ? 'Server has no VAPID keys configured.' :
+           data?.skipped === 'no-subs' ? 'This account has no subscribed devices on the server yet — click “Enable on this device” first.' :
+           data?.skipped === 'pref-off' ? 'Notifications are turned off for this event type.' :
+           'Server reported 0 devices reached.')
+        setMsg({ kind: 'err', text: reason })
+      }
     } catch (err) {
       setMsg({ kind: 'err', text: err.response?.data?.message || err.message })
     } finally { setBusy(false) }
