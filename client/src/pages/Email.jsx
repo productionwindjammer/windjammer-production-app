@@ -37,6 +37,48 @@ export default function Email() {
   const [assigningId, setAssigningId]   = useState(null) // email.id whose picker is open
   const [assignSubmitting, setAssignSubmitting] = useState(false)
 
+  // Multi-select state for bulk-linking many emails to a single show
+  const [selectedIds, setSelectedIds] = useState(() => new Set())
+  const [bulkShowId, setBulkShowId]   = useState('')
+  const [bulkShowPast, setBulkShowPast] = useState(false)
+  const [bulkSubmitting, setBulkSubmitting] = useState(false)
+
+  function toggleSelected(id) {
+    setSelectedIds(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
+  }
+  function clearSelection() { setSelectedIds(new Set()); setBulkShowId('') }
+  function selectAllVisible(rows) {
+    setSelectedIds(prev => {
+      const next = new Set(prev)
+      for (const r of rows) next.add(r.id)
+      return next
+    })
+  }
+
+  async function handleBulkLink() {
+    if (!bulkShowId || selectedIds.size === 0) return
+    setBulkSubmitting(true)
+    try {
+      const ids = [...selectedIds]
+      const res = await api.post('/emails/assign-bulk', { ids, showId: bulkShowId })
+      const { showName, linked } = res.data
+      // Patch both lists so the show-name chip appears immediately
+      const idSet = new Set(ids)
+      setInboxEmails(list => list.map(e => idSet.has(e.id) ? { ...e, showId: bulkShowId, showName } : e))
+      setEmails(list => list.map(e => idSet.has(e.id) ? { ...e, showId: bulkShowId, showName } : e))
+      clearSelection()
+      alert(`Linked ${linked} email${linked !== 1 ? 's' : ''} to "${showName}".`)
+    } catch (err) {
+      alert('Bulk link failed: ' + (err.response?.data?.message || err.message))
+    } finally {
+      setBulkSubmitting(false)
+    }
+  }
+
   // Load the current user's private emails into the inbox view
   async function loadMine() {
     setLoadingInbox(true)
@@ -509,6 +551,18 @@ export default function Email() {
               <GmailConnect onChange={setGmailStatus} />
             </div>
             <div style={{ flex: 1, overflowY: 'auto', padding: '8px 0' }}>
+              {selectedIds.size > 0 && (
+                <BulkLinkBar
+                  count={selectedIds.size}
+                  shows={shows}
+                  showId={bulkShowId} setShowId={setBulkShowId}
+                  showPast={bulkShowPast} setShowPast={setBulkShowPast}
+                  submitting={bulkSubmitting}
+                  onLink={handleBulkLink}
+                  onClear={clearSelection}
+                  onSelectAll={() => selectAllVisible(inboxEmails)}
+                />
+              )}
               {!gmailStatus?.connected ? (
                 <div className="empty-state" style={{ marginTop: 16 }}>
                   Connect your Gmail above to start pulling your own messages.
@@ -525,7 +579,18 @@ export default function Email() {
                     margin: '5px 12px', borderRadius: 8,
                     border: '1px solid rgba(255,255,255,0.08)',
                     padding: '10px 14px',
+                    display: 'flex', gap: 10, alignItems: 'flex-start',
+                    background: selectedIds.has(email.id) ? 'rgba(59,130,246,0.10)' : undefined,
                   }}>
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.has(email.id)}
+                      onChange={() => toggleSelected(email.id)}
+                      onClick={e => e.stopPropagation()}
+                      style={{ marginTop: 3, flexShrink: 0, cursor: 'pointer' }}
+                      title="Select for bulk link"
+                    />
+                    <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
                       <span style={{ fontWeight: 600, fontSize: 13 }}>
                         {email.direction === 'outbound' ? `To: ${email.to}` : email.from}
@@ -551,6 +616,7 @@ export default function Email() {
                         onAssign={handleAssignEmailToShow}
                         submitting={assignSubmitting}
                       />
+                    </div>
                     </div>
                   </div>
                 ))
@@ -595,6 +661,18 @@ export default function Email() {
               }}>✉️ Compose</button>
             </div>
             <div style={{ flex: 1, overflowY: 'auto', padding: '8px 0' }}>
+              {selectedIds.size > 0 && (
+                <BulkLinkBar
+                  count={selectedIds.size}
+                  shows={shows}
+                  showId={bulkShowId} setShowId={setBulkShowId}
+                  showPast={bulkShowPast} setShowPast={setBulkShowPast}
+                  submitting={bulkSubmitting}
+                  onLink={handleBulkLink}
+                  onClear={clearSelection}
+                  onSelectAll={() => selectAllVisible(inboxEmails)}
+                />
+              )}
               {loadingInbox ? (
                 <div className="loading">Loading inbox…</div>
               ) : inboxEmails.length === 0 ? (
@@ -609,12 +687,22 @@ export default function Email() {
                     <div key={email.id} style={{
                       margin: '5px 12px', borderRadius: 8,
                       border: '1px solid rgba(255,255,255,0.08)',
-                      background: isExpanded ? 'rgba(255,255,255,0.04)' : 'transparent',
+                      background: selectedIds.has(email.id)
+                        ? 'rgba(59,130,246,0.10)'
+                        : (isExpanded ? 'rgba(255,255,255,0.04)' : 'transparent'),
                       overflow: 'hidden',
                     }}>
                       <div onClick={() => handleSelectEmail(email)} style={{
                         padding: '10px 14px', cursor: 'pointer', display: 'flex', gap: 10, alignItems: 'flex-start',
                       }}>
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.has(email.id)}
+                          onChange={() => toggleSelected(email.id)}
+                          onClick={e => e.stopPropagation()}
+                          style={{ marginTop: 4, flexShrink: 0, cursor: 'pointer' }}
+                          title="Select for bulk link"
+                        />
                         <div style={{
                           width: 8, height: 8, borderRadius: '50%', marginTop: 5, flexShrink: 0,
                           background: email.direction === 'outbound' ? '#3b82f6' : '#10b981',
@@ -1119,6 +1207,44 @@ function EmailAssignControl({ email, advances, shows, open, onToggle, onAssign, 
         {submitting ? 'Linking…' : 'Link'}
       </button>
       <button className="btn btn-ghost btn-sm" onClick={onToggle} disabled={submitting}>Cancel</button>
+    </div>
+  )
+}
+
+// Sticky bar shown when one or more emails are selected via the row checkboxes.
+// Lets the user pick a show once and link every selected email to it.
+function BulkLinkBar({ count, shows, showId, setShowId, showPast, setShowPast, submitting, onLink, onClear, onSelectAll }) {
+  const todayStr = new Date().toISOString().slice(0, 10)
+  const options = [...shows]
+    .filter(s => showPast || !s.date || s.date >= todayStr)
+    .sort((a, b) => (a.date || '').localeCompare(b.date || ''))
+    .map(s => ({ id: s.id, label: `${s.date || ''} — ${s.artist || s.eventName || s.id}` }))
+
+  return (
+    <div style={{
+      position: 'sticky', top: 0, zIndex: 5,
+      padding: '10px 16px', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap',
+      background: 'rgba(59,130,246,0.15)', borderBottom: '1px solid rgba(59,130,246,0.4)',
+    }}>
+      <strong style={{ fontSize: 13 }}>{count} selected</strong>
+      <button className="btn btn-ghost btn-sm" onClick={onSelectAll} title="Add all visible emails to selection">+ All visible</button>
+      <select
+        value={showId}
+        onChange={e => setShowId(e.target.value)}
+        style={{ padding: '5px 8px', fontSize: 12, minWidth: 240 }}
+      >
+        <option value="">-- pick a show --</option>
+        {options.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
+      </select>
+      <label style={{ fontSize: 11, display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer', color: 'rgba(255,255,255,0.65)' }}>
+        <input type="checkbox" checked={showPast} onChange={e => setShowPast(e.target.checked)} />
+        Show all (incl. past)
+      </label>
+      <div style={{ flex: 1 }} />
+      <button className="btn btn-primary btn-sm" disabled={!showId || submitting} onClick={onLink}>
+        {submitting ? 'Linking…' : `🔗 Link ${count} to show`}
+      </button>
+      <button className="btn btn-ghost btn-sm" onClick={onClear} disabled={submitting}>Clear</button>
     </div>
   )
 }

@@ -1528,6 +1528,37 @@ app.post('/api/emails/:id/assign', requireAuth, requireRole('admin', 'production
   }
 });
 
+// POST /api/emails/assign-bulk — link many stored emails to one show in a
+// single request. Body: { ids: string[], showId: string }
+// Returns: { success, showId, showName, linked, missing }
+app.post('/api/emails/assign-bulk', requireAuth, requireRole('admin', 'production_manager', 'promoter'), async (req, res) => {
+  try {
+    const { ids, showId } = req.body || {};
+    if (!Array.isArray(ids) || ids.length === 0) return res.status(400).json({ success: false, message: 'ids[] required' });
+    if (!showId) return res.status(400).json({ success: false, message: 'showId required' });
+
+    const shows = await sheets.getRows(config.googleSheets.sheets.shows);
+    const show = shows.find(s => s.id === showId);
+    if (!show) return res.status(404).json({ success: false, message: 'Show not found' });
+    const showName = `${show.date || ''} — ${show.artist || show.eventName || ''}`.trim();
+
+    const all = await getStoredEmails();
+    const present = new Set(all.map(e => e.id));
+    const valid = ids.filter(id => present.has(id));
+    const missing = ids.filter(id => !present.has(id));
+
+    // Sheets API has no bulk update; run sequentially to stay under quota.
+    for (const id of valid) {
+      await sheets.updateRowById(config.googleSheets.sheets.emails, id, { showId, showName });
+    }
+
+    res.json({ success: true, showId, showName, linked: valid.length, missing });
+  } catch (err) {
+    console.error('Bulk assign email error:', err.message);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 // POST /api/emails/relink-all  — clear all show links and re-classify every
 // stored email against the current shows + advances + artist registry.
 // Body: { mode?: 'reset' | 'fill' }
