@@ -182,10 +182,62 @@ async function deleteRowById(sheetName, id) {
   });
 }
 
+// Root folder (or Shared Drive) ID where this app's files live.
+// Set DRIVE_ROOT_FOLDER_ID to either:
+//   • a Shared Drive ID (preferred — service account writes use the drive's quota), or
+//   • a regular Drive folder ID shared with the service account from a user
+//     account (files use that user's quota, anyone-link permissions work).
+function getDriveRoot() {
+  return (
+    process.env.DRIVE_ROOT_FOLDER_ID ||
+    process.env.SHARED_DRIVE_ID ||
+    process.env.GDRIVE_SHARED_DRIVE_ID ||
+    ''
+  );
+}
+
 async function getDriveClient() {
   const auth = getAuth();
   const client = await auth.getClient();
-  return google.drive({ version: 'v3', auth: client });
+  const drive = google.drive({ version: 'v3', auth: client });
+  const root = getDriveRoot();
+
+  // Wrap files.create / files.delete / permissions.create so every call
+  // automatically uses supportsAllDrives and parents into the root folder.
+  const origCreate = drive.files.create.bind(drive.files);
+  drive.files.create = (params = {}, opts) => {
+    const p = { ...params, supportsAllDrives: true };
+    if (p.requestBody && !p.requestBody.parents && root) {
+      p.requestBody = { ...p.requestBody, parents: [root] };
+    }
+    return origCreate(p, opts);
+  };
+
+  const origDelete = drive.files.delete.bind(drive.files);
+  drive.files.delete = (params = {}, opts) =>
+    origDelete({ ...params, supportsAllDrives: true }, opts);
+
+  const origPerm = drive.permissions.create.bind(drive.permissions);
+  drive.permissions.create = async (params = {}, opts) => {
+    try {
+      return await origPerm({ ...params, supportsAllDrives: true }, opts);
+    } catch (err) {
+      // Shared Drives often forbid "anyone with link" perms by policy — log
+      // and continue. The file is still accessible to anyone with access to
+      // the Shared Drive itself.
+      console.warn('[drive] permissions.create skipped:', err.message);
+      return { data: null };
+    }
+  };
+
+  const origList = drive.files.list.bind(drive.files);
+  drive.files.list = (params = {}, opts) =>
+    origList(
+      { ...params, supportsAllDrives: true, includeItemsFromAllDrives: true },
+      opts
+    );
+
+  return drive;
 }
 
-module.exports = { getRows, appendRow, appendRows, updateRowById, deleteRowById, getDriveClient, ensureHeaders, ensureSheet };
+module.exports = { getRows, appendRow, appendRows, updateRowById, deleteRowById, getDriveClient, getDriveRoot, ensureHeaders, ensureSheet };
