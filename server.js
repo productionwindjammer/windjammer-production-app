@@ -10,7 +10,7 @@ const bot     = require('./advancingBot');
 
 const app = express();
 app.set('trust proxy', true);
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '50mb' }));
 
 // Serve React build in production.
 // Hashed assets get long cache; HTML and sw.js MUST always be fresh so users
@@ -292,6 +292,9 @@ crudRoutes(app, '/api/vendors',         'vendors');
 crudRoutes(app, '/api/vendor-bookings', 'vendorBookings');
 crudRoutes(app, '/api/settlement',      'settlement');
 crudRoutes(app, '/api/unavailability',  'unavailability', ['admin','production_manager']);
+crudRoutes(app, '/api/artists',         'artists',        ['admin','production_manager']);
+// Note: artist-documents writes go through the upload endpoint below (which handles Drive too).
+// We expose only GET via crudRoutes-equivalent below to avoid orphaning Drive files on direct deletes.
 
 // Staff: auto-provision a default user account when an admin adds a staff
 // member with an email address. The account is created with a random unknown
@@ -871,6 +874,120 @@ app.post('/api/emails/save-to-drive', requireAuth, async (req, res) => {
     res.status(500).json({ success: false, message: err.message });
   }
 });
+
+// ── Artist Registry — Document storage (Drive-backed) ────────────────────────
+// One folder per artist (lazily created). Each document is a row in the
+// ArtistDocuments sheet referencing a Drive fileId. Everyone can read; PM+
+// uploads and deletes (which also removes the Drive file).
+async function ensureArtistFolder(artistId) {
+  const artists = await sheets.getRows(config.googleSheets.sheets.artists);
+  const artist  = artists.find(a => a.id === artistId);
+  if (!artist) return { artist: null, folderId: null };
+  if (artist.driveFolderId) return { artist, folderId: artist.driveFolderId };
+
+  const drive = await sheets.getDriveClient();
+  const folder = await drive.files.create({
+    requestBody: {
+      name: `Windjammer — Artist — ${artist.name || artist.id}`,
+      mimeType: 'application/vnd.google-apps.folder',
+    },
+    fields: 'id',
+  });
+  const folderId = folder.data.id;
+  await drive.permissions.create({
+    fileId: folderId,
+    requestBody: { role: 'reader', type: 'anyone' },
+  });
+  await sheets.updateRowById(config.googleSheets.sheets.artists, artistId, { driveFolderId: folderId });
+  return { artist: { ...artist, driveFolderId: folderId }, folderId };
+}
+
+// List all documents for an artist (auth-only)
+app.get('/api/artists/:id/documents', requireAuth, async (req, res) => {
+  try {
+    const rows = await sheets.getRows(config.googleSheets.sheets.artistDocuments);
+    const docs = rows.filter(d => d.artistId === req.params.id);
+    res.json({ success: true, data: docs });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Upload a document to an artist's folder (PM+)
+// Body: { filename, mimeType, data (base64), type, year, notes }
+app.post('/api/artists/:id/documents',
+  requireAuth, requireRole('admin','production_manager'),
+  async (req, res) => {
+    try {
+      const { filename, mimeType, data, type, year, notes } = req.body || {};
+      if (!filename || !mimeType || !data)
+        return res.status(400).json({ success: false, message: 'filename, mimeType, data required' });
+
+      const { artist, folderId } = await ensureArtistFolder(req.params.id);
+      if (!artist) return res.status(404).json({ success: false, message: 'Artist not found' });
+
+      const drive  = await sheets.getDriveClient();
+      const buffer = Buffer.from(data, 'base64');
+      const readable = Readable.from(buffer);
+      const uploaded = await drive.files.create({
+        requestBody: { name: filename, mimeType, parents: [folderId] },
+        media: { mimeType, body: readable },
+        fields: 'id,webViewLink',
+      });
+      await drive.permissions.create({
+        fileId: uploaded.data.id,
+        requestBody: { role: 'reader', type: 'anyone' },
+      });
+
+      const record = {
+        id:          Date.now().toString(),
+        artistId:    req.params.id,
+        artistName:  artist.name || '',
+        name:        filename,
+        type:        type || 'other',
+        year:        year ? String(year) : '',
+        notes:       notes || '',
+        mimeType,
+        driveFileId: uploaded.data.id,
+        webViewLink: uploaded.data.webViewLink || `https://drive.google.com/file/d/${uploaded.data.id}/view`,
+        uploadedBy:  req.user?.name || req.user?.email || '',
+        createdAt:   new Date().toISOString(),
+      };
+      await sheets.appendRow(config.googleSheets.sheets.artistDocuments, record);
+
+      res.json({ success: true, data: record });
+    } catch (err) {
+      console.error('Artist doc upload error:', err.message);
+      res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
+
+// Delete a document — removes both the sheet row and the Drive file (PM+)
+app.delete('/api/artist-documents/:id',
+  requireAuth, requireRole('admin','production_manager'),
+  async (req, res) => {
+    try {
+      const rows = await sheets.getRows(config.googleSheets.sheets.artistDocuments);
+      const doc = rows.find(d => d.id === req.params.id);
+      if (!doc) return res.status(404).json({ success: false, message: 'Document not found' });
+
+      if (doc.driveFileId) {
+        try {
+          const drive = await sheets.getDriveClient();
+          await drive.files.delete({ fileId: doc.driveFileId });
+        } catch (e) {
+          console.warn(`[artist-doc] Drive delete failed for ${doc.driveFileId}: ${e.message}`);
+        }
+      }
+      await sheets.deleteRowById(config.googleSheets.sheets.artistDocuments, req.params.id);
+      res.json({ success: true });
+    } catch (err) {
+      console.error('Artist doc delete error:', err.message);
+      res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
 
 // ── Gmail / Email Integration ────────────────────────────────────────────────
 

@@ -17,6 +17,7 @@ import Email from './pages/Email'
 import Users from './pages/Users'
 import Settings from './pages/Settings'
 import Calendar from './pages/Calendar'
+import Artists from './pages/Artists'
 import { SettingsProvider } from './context/SettingsContext'
 
 export default function App() {
@@ -34,6 +35,8 @@ export default function App() {
             <Route path="/shows"       element={<Shows />} />
             <Route path="/shows/:id"   element={<ShowDetail />} />
             <Route path="/calendar"    element={<Calendar />} />
+            <Route path="/artists"     element={<Artists />} />
+            <Route path="/artists/:id" element={<Artists />} />
             <Route path="/advancing"   element={<Advancing />} />
             <Route path="/day-of-show" element={<DayOfShow />} />
             <Route path="/vendors"     element={<Vendors />} />

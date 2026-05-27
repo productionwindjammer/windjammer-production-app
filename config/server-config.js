@@ -20,8 +20,10 @@ module.exports = {
       settlement:     'Settlement',
       staff:          'Staff',
       techpack:       'TechPack',
-      emails:         'Emails',
-      unavailability: 'Unavailability',
+      emails:           'Emails',
+      unavailability:   'Unavailability',
+      artists:          'Artists',
+      artistDocuments:  'ArtistDocuments',
     }
   }
 };
