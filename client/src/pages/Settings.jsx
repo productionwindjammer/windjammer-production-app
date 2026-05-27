@@ -303,12 +303,16 @@ function NotificationsCard() {
 
       {!supported && (
         <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>
-          This browser does not support push notifications. Install the app to your home screen (iOS 16.4+, Android, Desktop Chrome/Edge) to enable them.
+          This browser does not support push notifications. Try Chrome, Edge, or Firefox on desktop, or install the app to your home screen on iOS 16.4+ / Android.
         </div>
       )}
 
       {supported && (
         <>
+          <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 10 }}>
+            Notifications work on desktop (Chrome/Edge/Firefox/Safari) and on mobile when the app is installed to your home screen.
+            Click <strong>Enable on this device</strong> on every device where you want to receive alerts.
+          </div>
           <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10, marginBottom: 12 }}>
             <span style={{ fontSize: 13, color: 'var(--text-muted)' }}>
               This device: <strong style={{ color: subscribed ? 'var(--success)' : 'var(--text-muted)' }}>
