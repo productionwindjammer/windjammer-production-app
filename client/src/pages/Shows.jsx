@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import api from '../api'
 import Modal from '../components/Modal'
 import { useSettings } from '../context/SettingsContext'
+import { useAuth } from '../context/AuthContext'
 import { formatTime } from '../utils/time'
 
 const DEFAULT_PROMOTER = 'Scottie Frier'
@@ -15,9 +16,13 @@ const BLANK = {
 
 export default function Shows() {
   const { settings } = useSettings()
+  const { user, effectiveRole } = useAuth()
+  const role = effectiveRole || user?.role || ''
+  const canSeeLaborCost = ['admin', 'production_manager', 'venue_management'].includes(role)
   const tf = settings.timeFormat || '12h'
   const navigate = useNavigate()
   const [shows, setShows]       = useState([])
+  const [labor, setLabor]       = useState([])
   const [loading, setLoading]   = useState(true)
   const [modal, setModal]       = useState(false)
   const [editing, setEditing]   = useState(null)
@@ -40,8 +45,11 @@ export default function Shows() {
   async function load() {
     setLoading(true)
     try {
-      const res = await api.get('/shows')
-      setShows((res.data.data || []).sort((a, b) => new Date(a.date) - new Date(b.date)))
+      const requests = [api.get('/shows')]
+      if (canSeeLaborCost) requests.push(api.get('/labor'))
+      const results = await Promise.all(requests)
+      setShows((results[0].data.data || []).sort((a, b) => new Date(a.date) - new Date(b.date)))
+      if (results[1]) setLabor(results[1].data.data || [])
     } finally { setLoading(false) }
   }
 
@@ -141,6 +149,20 @@ export default function Shows() {
      .replace(/\s*\((monday|tuesday|wednesday|thursday|friday|saturday|sunday)\)\s*$/i, '')
      .trim().toLowerCase()
 
+  const laborCostByShow = useMemo(() => {
+    const m = new Map()
+    for (const l of labor) {
+      const id = l.showId
+      if (!id) continue
+      const rate = parseFloat(l.rate || 0) || 0
+      let amt = 0
+      if ((l.payType || 'day') === 'day') amt = (parseFloat(l.days || 0) || 0) * rate
+      else                                amt = (parseFloat(l.hours || 0) || 0) * rate
+      m.set(id, (m.get(id) || 0) + amt)
+    }
+    return m
+  }, [labor])
+
   const filtered = (() => {
     // Local-midnight start of today, so a show dated today is still visible.
     const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0)
@@ -217,12 +239,13 @@ export default function Shows() {
                   <th>Capacity</th>
                   <th>Status</th>
                   <th>Tour Manager</th>
+                  {canSeeLaborCost && <th>Labor Cost</th>}
                   <th></th>
                 </tr>
               </thead>
               <tbody>
                 {filtered.length === 0 && (
-                  <tr><td colSpan={8}><div className="empty-state">No shows found</div></td></tr>
+                  <tr><td colSpan={canSeeLaborCost ? 9 : 8}><div className="empty-state">No shows found</div></td></tr>
                 )}
                 {filtered.map(show => (
                   <tr key={show.id} style={{ cursor: 'pointer' }} onClick={() => navigate(`/shows/${show.id}`)}>
@@ -233,6 +256,14 @@ export default function Shows() {
                     <td data-label="Capacity" className="text-muted">{show.capacity || '—'}</td>
                     <td data-label="Status"><span className={`badge badge-${show.status || 'pending'}`}>{show.status || 'pending'}</span></td>
                     <td data-label="Tour Manager" className="text-muted">{show.tourManager || '—'}</td>
+                    {canSeeLaborCost && (() => {
+                      const cost = laborCostByShow.get(show.id) || 0
+                      return (
+                        <td data-label="Labor Cost" style={{fontWeight:600,color: cost > 0 ? '#16a34a' : 'var(--text-muted)'}}>
+                          {cost > 0 ? `$${cost.toLocaleString(undefined, {minimumFractionDigits:0, maximumFractionDigits:0})}` : '—'}
+                        </td>
+                      )
+                    })()}
                       <td data-label="Actions" onClick={e => e.stopPropagation()}>
                       <div className="actions-cell">
                         <button className="btn btn-ghost btn-sm" onClick={() => openEdit(show)}>Edit</button>

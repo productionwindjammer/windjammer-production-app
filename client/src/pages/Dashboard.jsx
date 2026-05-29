@@ -66,23 +66,28 @@ export default function Dashboard() {
 
   const [shows, setShows] = useState([])
   const [labor, setLabor] = useState([])
+  const [advancing, setAdvancing] = useState([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     const requests = [api.get('/shows')]
-    if (isCrew || isManager) requests.push(api.get('/labor'))
-    Promise.all(requests)
+    if (isCrew || isManager || isVenue) requests.push(api.get('/labor'))
+    else requests.push(null)
+    if (isVenue || isManager) requests.push(api.get('/advancing'))
+    else requests.push(null)
+    Promise.all(requests.map(r => r || Promise.resolve(null)))
       .then(results => {
         setShows(results[0].data.data || [])
         if (results[1]) setLabor(results[1].data.data || [])
+        if (results[2]) setAdvancing(results[2].data.data || [])
       })
       .finally(() => setLoading(false))
-  }, [isCrew, isManager])
+  }, [isCrew, isManager, isVenue])
 
   if (loading) return <div className="loading">Loading dashboard…</div>
 
   if (isPromoter) return <PromoterDashboard user={user} shows={shows} navigate={navigate} tf={tf} />
-  if (isVenue)    return <VenueDashboard    user={user} shows={shows} navigate={navigate} tf={tf} />
+  if (isVenue)    return <VenueDashboard    user={user} shows={shows} labor={labor} advancing={advancing} navigate={navigate} tf={tf} />
   if (isCrew)     return <CrewDashboard     user={user} shows={shows} labor={labor} navigate={navigate} />
   return <ManagerDashboard user={user} shows={shows} labor={labor} navigate={navigate} isManager={isManager} />
 }
@@ -610,14 +615,50 @@ function PromoterDashboard({ user, shows, navigate, tf }) {
  * dashboard (occupancy, revenue indicators, etc.) is planned for a later
  * pass — this stub keeps the role usable in the meantime.
  */
-function VenueDashboard({ user, shows, navigate }) {
+function VenueDashboard({ user, shows, labor, advancing, navigate }) {
   const today = startOfToday()
-  const upcomingRaw = shows.filter(s => {
+  const upcomingShows = shows.filter(s => {
     const d = parseDate(s.date); return d && d >= today && s.status !== 'cancelled'
   })
-  const upcoming = useMemo(() => groupShowRuns(upcomingRaw), [shows])
+  const upcoming = useMemo(() => groupShowRuns(upcomingShows), [shows])
   const thisWeek = upcoming.filter(s => (parseDate(s.date) - today) / 86400000 <= 7)
   const greeting = user?.name ? `Hi ${user.name.split(' ')[0]}` : 'Welcome'
+
+  // Per-show labor cost (only counts shows that haven't passed yet)
+  const upcomingShowIds = new Set(upcomingShows.map(s => s.id))
+  const laborByShow = useMemo(() => {
+    const m = new Map()
+    for (const l of labor) {
+      if (!upcomingShowIds.has(l.showId)) continue
+      const rate = parseFloat(l.rate || 0) || 0
+      const amt = (l.payType || 'day') === 'day'
+        ? (parseFloat(l.days  || 0) || 0) * rate
+        : (parseFloat(l.hours || 0) || 0) * rate
+      const cur = m.get(l.showId) || { cost: 0, count: 0 }
+      m.set(l.showId, { cost: cur.cost + amt, count: cur.count + 1 })
+    }
+    return m
+  }, [labor, shows])
+
+  const totalUpcomingLabor = Array.from(laborByShow.values()).reduce((s, v) => s + v.cost, 0)
+  const thisWeekLabor = thisWeek.reduce((s, show) => s + (laborByShow.get(show.id)?.cost || 0), 0)
+
+  // Advance review queue: anything not yet approved on an upcoming show
+  const reviewQueue = useMemo(() => {
+    return (advancing || [])
+      .filter(a => upcomingShowIds.has(a.showId))
+      .map(a => ({
+        ...a,
+        show: shows.find(s => s.id === a.showId),
+      }))
+      .filter(a => a.show)
+      .sort((a, b) => new Date(a.show.date) - new Date(b.show.date))
+  }, [advancing, shows])
+
+  const pendingReview = reviewQueue.filter(a => (a.mgmtStatus || 'pending') === 'pending')
+  const changesRequested = reviewQueue.filter(a => a.mgmtStatus === 'changes_requested')
+
+  const fmtMoney = n => `$${Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
 
   return (
     <div>
@@ -634,17 +675,96 @@ function VenueDashboard({ user, shows, navigate }) {
           <div className="stat-value">{upcoming.length}</div>
           <div className="stat-sub">{thisWeek.length} this week</div>
         </div>
+        <div className="stat-card">
+          <div className="stat-label">Labor — This Week</div>
+          <div className="stat-value" style={{ color: '#16a34a' }}>{fmtMoney(thisWeekLabor)}</div>
+          <div className="stat-sub">scheduled crew cost</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label">Labor — All Upcoming</div>
+          <div className="stat-value" style={{ color: '#16a34a' }}>{fmtMoney(totalUpcomingLabor)}</div>
+          <div className="stat-sub">across {upcoming.length} show{upcoming.length !== 1 ? 's' : ''}</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label">Advances Awaiting Review</div>
+          <div className="stat-value" style={{ color: pendingReview.length ? 'var(--warning)' : 'inherit' }}>{pendingReview.length}</div>
+          <div className="stat-sub">{changesRequested.length} flagged for changes</div>
+        </div>
       </div>
 
-      <div className="card">
-        <div className="card-header">
-          <span className="card-title">Coming Soon</span>
-          <button className="btn btn-ghost btn-sm" onClick={() => navigate('/shows')}>View shows</button>
+      <div className="two-col-grid">
+        <div className="card">
+          <div className="card-header">
+            <span className="card-title">Advance Reviews</span>
+            <button className="btn btn-ghost btn-sm" onClick={() => navigate('/advancing')}>Open Advancing</button>
+          </div>
+          {reviewQueue.length === 0 ? (
+            <div className="empty-state">No upcoming advances to review.</div>
+          ) : (
+            <ul className="todo-list">
+              {reviewQueue.slice(0, 8).map(a => {
+                const status = a.mgmtStatus || 'pending'
+                const badge = status === 'approved'
+                  ? { txt: '✅ Approved', bg: '#d1fae5', fg: '#065f46' }
+                  : status === 'changes_requested'
+                    ? { txt: '⚠️ Changes', bg: '#fee2e2', fg: '#991b1b' }
+                    : { txt: '⏳ Pending', bg: '#e5e7eb', fg: '#374151' }
+                return (
+                  <li key={a.id} className="todo-item" onClick={() => navigate('/advancing')}>
+                    <span className="todo-badge" style={{ background: badge.bg, color: badge.fg }}>{badge.txt.split(' ')[0]}</span>
+                    <div className="todo-body">
+                      <div className="todo-title">{a.show.artist || a.show.eventName || a.showName}</div>
+                      <div className="todo-meta">
+                        {a.show.date} · {a.show.stage === 'inside' ? 'Inside Stage' : 'Beach Stage'}
+                        {a.advanceContact ? ` · ${a.advanceContact}` : ''}
+                      </div>
+                    </div>
+                    <span className="badge" style={{ background: badge.bg, color: badge.fg }}>{badge.txt}</span>
+                  </li>
+                )
+              })}
+            </ul>
+          )}
         </div>
-        <div className="empty-state">
-          A dedicated venue-management dashboard (occupancy, revenue, staffing
-          overview) is on the roadmap. For now, jump into Shows to browse the
-          full calendar.
+
+        <div className="card">
+          <div className="card-header">
+            <span className="card-title">Labor Cost by Show</span>
+            <button className="btn btn-ghost btn-sm" onClick={() => navigate('/shows')}>All shows</button>
+          </div>
+          {upcoming.length === 0 ? (
+            <div className="empty-state">No upcoming shows.</div>
+          ) : (
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th>Show</th>
+                    <th>Stage</th>
+                    <th style={{ textAlign: 'right' }}>Crew</th>
+                    <th style={{ textAlign: 'right' }}>Cost</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {upcoming.slice(0, 10).map(s => {
+                    const info = laborByShow.get(s.id) || { cost: 0, count: 0 }
+                    return (
+                      <tr key={s.id} style={{ cursor: 'pointer' }} onClick={() => navigate(`/shows/${s.id}`)}>
+                        <td className="text-muted">{s.date}</td>
+                        <td><strong>{s.artist || s.eventName || '—'}</strong></td>
+                        <td><span className={`badge badge-${s.stage}`}>{s.stage === 'inside' ? 'Inside' : 'Beach'}</span></td>
+                        <td style={{ textAlign: 'right' }} className="text-muted">{info.count || '—'}</td>
+                        <td style={{ textAlign: 'right', fontWeight: 600, color: info.cost > 0 ? '#16a34a' : 'var(--text-muted)' }}>
+                          {info.cost > 0 ? fmtMoney(info.cost) : '—'}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       </div>
     </div>

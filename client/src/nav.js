@@ -7,7 +7,7 @@ export const NAV_ITEMS = [
   { label: 'Shows',        path: '/shows',         icon: '🎭' },
   { label: 'Calendar',     path: '/calendar',      icon: '🗓️' },
   { label: 'Artists',      path: '/artists',       icon: '🎤' },
-  { label: 'Advancing',    path: '/advancing',     icon: '📋', sub: true, roles: ['admin', 'production_manager', 'promoter'] },
+  { label: 'Advancing',    path: '/advancing',     icon: '📋', sub: true, roles: ['admin', 'production_manager', 'promoter', 'venue_management'] },
   { label: 'Day of Show',  path: '/day-of-show',   icon: '📅', sub: true },
   { label: 'Vendors',      path: '/vendors',       icon: '🏢', roles: ['admin', 'production_manager'] },
   { label: 'Staff',        path: '/staff',         icon: '👥', roles: ['admin', 'production_manager'] },

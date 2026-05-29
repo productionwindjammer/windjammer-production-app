@@ -16,6 +16,7 @@ const BLANK = {
   cateringNotes: '', hospitalityNotes: '',
   localCrewNeeds: '', advancingComplete: 'false',
   advanceContact: '', advancePhone: '', advanceEmail: '',
+  mgmtStatus: 'pending', mgmtNotes: '', mgmtReviewedBy: '', mgmtReviewedAt: '',
   notes: ''
 }
 
@@ -84,8 +85,15 @@ export default function Advancing() {
   async function handleSave() {
     setSaving(true)
     try {
-      if (editing) await api.put(`/advancing/${editing.id}`, form)
-      else await api.post('/advancing', form)
+      const payload = { ...form }
+      // Stamp reviewer info whenever the mgmt status changes from the original
+      const prevStatus = editing?.mgmtStatus || 'pending'
+      if ((payload.mgmtStatus || 'pending') !== prevStatus) {
+        payload.mgmtReviewedBy = user?.name || user?.email || ''
+        payload.mgmtReviewedAt = new Date().toISOString()
+      }
+      if (editing) await api.put(`/advancing/${editing.id}`, payload)
+      else await api.post('/advancing', payload)
       await load()
       setModal(false)
     } finally { setSaving(false) }
@@ -432,13 +440,14 @@ export default function Advancing() {
                   <th>Curfew</th>
                   <th>Contact</th>
                   <th>Bot Analysis</th>
+                  <th>Mgmt Review</th>
                   <th>Complete</th>
                   <th></th>
                 </tr>
               </thead>
               <tbody>
                 {filtered.length === 0 && (
-                  <tr><td colSpan={8}><div className="empty-state">No advance records found</div></td></tr>
+                  <tr><td colSpan={9}><div className="empty-state">No advance records found</div></td></tr>
                 )}
                 {filtered.map(r => {
                   const bot = getBotStatus(r);
@@ -476,6 +485,14 @@ export default function Advancing() {
                             >↺</button>
                           </div>
                         )}
+                      </td>
+                      <td>
+                        {(() => {
+                          const s = r.mgmtStatus || 'pending'
+                          if (s === 'approved')          return <span className="badge" style={{background:'#d1fae5',color:'#065f46'}}>✅ Approved</span>
+                          if (s === 'changes_requested') return <span className="badge" style={{background:'#fee2e2',color:'#991b1b'}}>⚠️ Changes</span>
+                          return <span className="badge" style={{background:'#e5e7eb',color:'#374151'}}>⏳ Pending</span>
+                        })()}
                       </td>
                       <td>
                         <span className={`badge badge-${r.advancingComplete === 'true' ? 'confirmed' : 'pending'}`}>
@@ -617,6 +634,31 @@ export default function Advancing() {
               <label>Additional Notes</label>
               <textarea value={f.notes} onChange={set('notes')} />
             </div>
+
+            <hr style={{margin:'0.5rem 0',border:'none',borderTop:'1px solid var(--border, #e5e7eb)'}} />
+            <div style={{fontSize:12,fontWeight:600,textTransform:'uppercase',letterSpacing:'0.08em',color:'var(--text-muted)'}}>Venue Management Review</div>
+            <div className="form-row">
+              <div className="form-group">
+                <label>Review Status</label>
+                <select value={f.mgmtStatus || 'pending'} onChange={set('mgmtStatus')}>
+                  <option value="pending">⏳ Pending review</option>
+                  <option value="approved">✅ Approved</option>
+                  <option value="changes_requested">⚠️ Changes requested</option>
+                </select>
+              </div>
+              <div className="form-group">
+                <label>Last reviewed</label>
+                <input
+                  value={f.mgmtReviewedBy ? `${f.mgmtReviewedBy}${f.mgmtReviewedAt ? ' · ' + new Date(f.mgmtReviewedAt).toLocaleString() : ''}` : ''}
+                  placeholder="— not yet reviewed—"
+                  readOnly
+                />
+              </div>
+            </div>
+            <div className="form-group">
+              <label>Management Notes</label>
+              <textarea value={f.mgmtNotes || ''} onChange={set('mgmtNotes')} placeholder="Approval notes, conditions, or changes needed…" />
+            </div>
           </div>
         </Modal>
       )}
@@ -642,7 +684,26 @@ export default function Advancing() {
               <span className={`badge badge-${viewRecord.advancingComplete === 'true' ? 'confirmed' : 'pending'}`}>{viewRecord.advancingComplete === 'true' ? 'Advancing Complete' : 'Advancing Open'}</span>
               {viewRecord.curfew && <span className="badge">Curfew: {viewRecord.curfew}</span>}
               {viewRecord.soundRestrictions && <span className="badge badge-pending">🔇 {viewRecord.soundRestrictions}</span>}
+              {(() => {
+                const s = viewRecord.mgmtStatus || 'pending'
+                if (s === 'approved')          return <span className="badge" style={{background:'#d1fae5',color:'#065f46'}}>✅ Mgmt Approved</span>
+                if (s === 'changes_requested') return <span className="badge" style={{background:'#fee2e2',color:'#991b1b'}}>⚠️ Mgmt: Changes Requested</span>
+                return <span className="badge" style={{background:'#e5e7eb',color:'#374151'}}>⏳ Mgmt Review Pending</span>
+              })()}
             </div>
+
+            {(viewRecord.mgmtNotes || viewRecord.mgmtReviewedBy) && (
+              <div style={{background:'#f8fafc',border:'1px solid #e2e8f0',borderRadius:8,padding:'0.75rem'}}>
+                <div style={{fontSize:12,fontWeight:700,textTransform:'uppercase',letterSpacing:'0.08em',color:'#475569',marginBottom:6}}>Management Review</div>
+                {viewRecord.mgmtNotes && <div style={{whiteSpace:'pre-wrap',marginBottom:6}}>{viewRecord.mgmtNotes}</div>}
+                {viewRecord.mgmtReviewedBy && (
+                  <div className="text-muted" style={{fontSize:12}}>
+                    Reviewed by {viewRecord.mgmtReviewedBy}
+                    {viewRecord.mgmtReviewedAt ? ` · ${new Date(viewRecord.mgmtReviewedAt).toLocaleString()}` : ''}
+                  </div>
+                )}
+              </div>
+            )}
 
             {viewRecord.advanceContact && (
               <div>
