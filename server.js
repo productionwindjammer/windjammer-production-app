@@ -411,34 +411,8 @@ async function notifyShiftAssigned(record) {
   }
 }
 
-// Notify production team when venue management updates the review status on
-// an advancing record (Approved / Changes Requested / Pending).
-async function notifyMgmtReviewChange(next, prev) {
-  try {
-    if (!next) return;
-    const prevStatus = prev?.mgmtStatus || '';
-    const nextStatus = next.mgmtStatus || '';
-    if (prevStatus === nextStatus) return;
-    if (!nextStatus || nextStatus === 'pending') return;
-    const users = await sheets.getRows(config.googleSheets.sheets.users).catch(() => []);
-    const targets = users.filter(u => ['admin', 'production_manager'].includes(u.role) && u.active !== 'false');
-    const showLabel = next.showName || next.showId || 'a show';
-    const statusLabel = nextStatus === 'approved' ? '✅ Approved'
-      : nextStatus === 'changes_requested' ? '⚠️ Changes requested'
-      : nextStatus;
-    const body = `${statusLabel} by ${next.mgmtReviewedBy || 'venue management'} · ${showLabel}`;
-    await Promise.all(targets.map(u => push.sendToUser(
-      u.id,
-      { title: 'Advance reviewed', body, url: '/advancing', tag: `mgmt-review-${next.id}` },
-      'showUpdates'
-    ).catch(err => console.warn('[push] mgmt review notify failed:', err.message))));
-  } catch (err) {
-    console.warn('[push] notifyMgmtReviewChange error:', err.message);
-  }
-}
-
 crudRoutes(app, '/api/shows',           'shows',     ['admin','production_manager','promoter'], { afterCreate: kickoffAdvanceForShow });
-crudRoutes(app, '/api/advancing',       'advancing', ['admin','production_manager','promoter','venue_management'], { afterUpdate: notifyMgmtReviewChange });
+crudRoutes(app, '/api/advancing',       'advancing', ['admin','production_manager','promoter','venue_management']);
 crudRoutes(app, '/api/schedule',        'schedule');
 crudRoutes(app, '/api/labor',           'labor',     ['admin','production_manager'], { afterCreate: notifyShiftAssigned });
 crudRoutes(app, '/api/vendors',         'vendors');

@@ -16,11 +16,27 @@ const BLANK = {
   cateringNotes: '', hospitalityNotes: '',
   localCrewNeeds: '', advancingComplete: 'false',
   advanceContact: '', advancePhone: '', advanceEmail: '',
-  mgmtStatus: 'pending', mgmtNotes: '', mgmtReviewedBy: '', mgmtReviewedAt: '',
   notes: ''
 }
 
 const SCHED_BLANK = { showId: '', showName: '', stage: 'inside', label: '', time: '', responsible: '', notes: '' }
+
+// Default day-of-show timeline seeded the first time a show's schedule is opened.
+// Times are intentionally blank so users fill in based on the actual show.
+const DEFAULT_SCHEDULE_TEMPLATE = [
+  { label: 'Crew Call / Load-In',     responsible: 'Production' },
+  { label: 'Local Crew Call',         responsible: 'Stagehands' },
+  { label: 'Stage Set / Backline In', responsible: 'Stage' },
+  { label: 'Line Check',              responsible: 'Audio' },
+  { label: 'Artist Arrival',          responsible: 'Tour' },
+  { label: 'Sound Check',             responsible: 'Audio' },
+  { label: 'Catering / Dinner',       responsible: 'Hospitality' },
+  { label: 'House Open / Doors',      responsible: 'FOH' },
+  { label: 'Opener Set',              responsible: 'Stage' },
+  { label: 'Changeover',              responsible: 'Stage' },
+  { label: 'Headliner Set',           responsible: 'Stage' },
+  { label: 'Load-Out',                responsible: 'Production' },
+]
 
 export default function Advancing() {
   const { user } = useAuth()
@@ -86,12 +102,6 @@ export default function Advancing() {
     setSaving(true)
     try {
       const payload = { ...form }
-      // Stamp reviewer info whenever the mgmt status changes from the original
-      const prevStatus = editing?.mgmtStatus || 'pending'
-      if ((payload.mgmtStatus || 'pending') !== prevStatus) {
-        payload.mgmtReviewedBy = user?.name || user?.email || ''
-        payload.mgmtReviewedAt = new Date().toISOString()
-      }
       if (editing) await api.put(`/advancing/${editing.id}`, payload)
       else await api.post('/advancing', payload)
       await load()
@@ -171,14 +181,27 @@ export default function Advancing() {
     try { setExtractedData(r.botExtracted ? JSON.parse(r.botExtracted) : null) }
     catch { setExtractedData(null) }
     setExtEdits({})
-    // Load schedule items for this show
+    // Load schedule items for this show; seed defaults if none exist yet.
     setLoadingSchedule(true)
-    api.get('/schedule').then(res => {
+    api.get('/schedule').then(async res => {
       const all = res.data.data || []
-      setSchedItems(
-        all.filter(i => i.showId === r.showId)
-           .sort((a, b) => (a.time || '').localeCompare(b.time || ''))
-      )
+      const mine = all.filter(i => i.showId === r.showId)
+      if (mine.length === 0 && r.showId) {
+        try {
+          const seeded = await Promise.all(DEFAULT_SCHEDULE_TEMPLATE.map(t => api.post('/schedule', {
+            ...SCHED_BLANK,
+            ...t,
+            showId:   r.showId,
+            showName: r.showName || getShowLabel(r),
+            stage:    r.stage || 'inside',
+          }).then(resp => resp.data.data).catch(() => null)))
+          setSchedItems(seeded.filter(Boolean))
+        } catch {
+          setSchedItems([])
+        }
+      } else {
+        setSchedItems(mine.sort((a, b) => (a.time || '').localeCompare(b.time || '')))
+      }
     }).finally(() => setLoadingSchedule(false))
   }
 
@@ -224,6 +247,75 @@ export default function Advancing() {
         .filter(i => i.showId === viewRecord.showId)
         .sort((a, b) => (a.time || '').localeCompare(b.time || ''))
     )
+  }
+
+  // Open a print-ready day sheet in a new window. Clean white background, bold
+  // type, sized for letter paper.
+  function printDaySheet() {
+    if (!viewRecord) return
+    const show = shows.find(s => s.id === viewRecord.showId)
+    const title = viewRecord.showName || getShowLabel(viewRecord)
+    const dateLine = show?.date ? new Date(show.date + 'T00:00:00').toLocaleDateString(undefined, { weekday:'long', year:'numeric', month:'long', day:'numeric' }) : ''
+    const stageLine = viewRecord.stage === 'beach' ? 'Beach Stage' : 'Inside Stage'
+    const curfew = viewRecord.curfew ? `Curfew: ${viewRecord.curfew}` : ''
+    const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]))
+    const rows = (schedItems.length ? schedItems : [{}]).map(it => `
+      <tr>
+        <td class="time">${it.time ? esc(formatTime(it.time, tf)) : '&nbsp;'}</td>
+        <td class="label">${esc(it.label || '')}</td>
+        <td class="resp">${esc(it.responsible || '')}</td>
+        <td class="notes">${esc(it.notes || '')}</td>
+      </tr>`).join('')
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>Day Sheet — ${esc(title)}</title>
+<style>
+  @page { size: letter; margin: 0.5in; }
+  * { box-sizing: border-box; }
+  html, body { background: #fff; color: #000; margin: 0; padding: 0; }
+  body { font-family: Arial, Helvetica, sans-serif; font-size: 13pt; line-height: 1.35; padding: 18px 22px; }
+  .hdr { border-bottom: 3px solid #000; padding-bottom: 10px; margin-bottom: 14px; }
+  h1 { margin: 0 0 4px; font-size: 22pt; font-weight: 900; letter-spacing: 0.5px; text-transform: uppercase; }
+  .sub { font-size: 12pt; font-weight: 700; }
+  .meta { display: flex; gap: 22px; flex-wrap: wrap; margin-top: 6px; font-size: 11pt; font-weight: 700; }
+  table { width: 100%; border-collapse: collapse; margin-top: 6px; }
+  th, td { border: 1px solid #000; padding: 8px 10px; text-align: left; vertical-align: top; }
+  thead th { background: #000; color: #fff; font-size: 11pt; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; }
+  tbody td { font-size: 13pt; }
+  tbody td.time { font-weight: 900; white-space: nowrap; width: 1%; }
+  tbody td.label { font-weight: 700; }
+  tbody td.resp { font-weight: 700; width: 18%; }
+  tbody td.notes { width: 32%; }
+  tbody tr { page-break-inside: avoid; }
+  .foot { margin-top: 14px; font-size: 9pt; color: #000; text-align: right; }
+  @media print { .noprint { display: none; } }
+  .noprint { margin: 10px 0 16px; }
+  .noprint button { font-size: 11pt; font-weight: 700; padding: 6px 14px; cursor: pointer; }
+</style></head><body>
+  <div class="noprint">
+    <button onclick="window.print()">Print</button>
+    <button onclick="window.close()">Close</button>
+  </div>
+  <div class="hdr">
+    <h1>Day of Show Schedule</h1>
+    <div class="sub">${esc(title)}</div>
+    <div class="meta">
+      ${dateLine ? `<span>${esc(dateLine)}</span>` : ''}
+      <span>${esc(stageLine)}</span>
+      ${curfew ? `<span>${esc(curfew)}</span>` : ''}
+      ${viewRecord.advanceContact ? `<span>Contact: ${esc(viewRecord.advanceContact)}${viewRecord.advancePhone ? ' · ' + esc(viewRecord.advancePhone) : ''}</span>` : ''}
+    </div>
+  </div>
+  <table>
+    <thead><tr><th>Time</th><th>Event / Task</th><th>Responsible</th><th>Notes</th></tr></thead>
+    <tbody>${rows}</tbody>
+  </table>
+  <div class="foot">Printed ${esc(new Date().toLocaleString())}</div>
+  <script>window.addEventListener('load', () => setTimeout(() => window.print(), 250));<\/script>
+</body></html>`
+    const w = window.open('', '_blank', 'width=900,height=1100')
+    if (!w) { alert('Pop-up blocked. Please allow pop-ups to print the day sheet.'); return }
+    w.document.open()
+    w.document.write(html)
+    w.document.close()
   }
 
   // ── Production notes ────────────────────────────────────────────────────────
@@ -404,10 +496,36 @@ export default function Advancing() {
     try {
       const b = r.botNotes ? JSON.parse(r.botNotes) : null
       if (!b) return null
-      const flags   = (b.issues || []).filter(i => i.status === 'flag').length
-      const reviews = (b.issues || []).filter(i => i.status === 'review').length
+      const open    = (b.issues || []).filter(i => !i.resolution)
+      const flags   = open.filter(i => i.status === 'flag').length
+      const reviews = open.filter(i => i.status === 'review').length
       return { flags, reviews, total: b.issues?.length || 0, summary: b.summary, analyzedAt: b.analyzedAt }
     } catch { return null }
+  }
+
+  // Acknowledge or dismiss a bot-flagged issue on the currently viewed record.
+  async function resolveIssue(index, resolution) {
+    if (!viewRecord) return
+    let src = botResult
+    if (!src && viewRecord.botNotes) {
+      try { src = typeof viewRecord.botNotes === 'string' ? JSON.parse(viewRecord.botNotes) : viewRecord.botNotes } catch { src = null }
+    }
+    if (!src || !Array.isArray(src.issues)) return
+    const stamp = new Date().toISOString()
+    const who = user?.name || user?.email || ''
+    const issues = src.issues.map((it, i) => i === index
+      ? (resolution ? { ...it, resolution, resolvedBy: who, resolvedAt: stamp } : (() => {
+          const { resolution: _r, resolvedBy: _b, resolvedAt: _a, ...rest } = it
+          return rest
+        })())
+      : it)
+    const updated = { ...src, issues }
+    const botNotes = JSON.stringify(updated)
+    setBotResult(updated)
+    setViewRecord(v => v ? { ...v, botNotes } : v)
+    setRecords(rs => rs.map(r => r.id === viewRecord.id ? { ...r, botNotes } : r))
+    try { await api.put(`/advancing/${viewRecord.id}`, { botNotes }) }
+    catch (err) { console.warn('resolveIssue failed:', err?.message || err) }
   }
 
   return (
@@ -440,14 +558,13 @@ export default function Advancing() {
                   <th>Curfew</th>
                   <th>Contact</th>
                   <th>Bot Analysis</th>
-                  <th>Mgmt Review</th>
                   <th>Complete</th>
                   <th></th>
                 </tr>
               </thead>
               <tbody>
                 {filtered.length === 0 && (
-                  <tr><td colSpan={9}><div className="empty-state">No advance records found</div></td></tr>
+                  <tr><td colSpan={8}><div className="empty-state">No advance records found</div></td></tr>
                 )}
                 {filtered.map(r => {
                   const bot = getBotStatus(r);
@@ -485,14 +602,6 @@ export default function Advancing() {
                             >↺</button>
                           </div>
                         )}
-                      </td>
-                      <td>
-                        {(() => {
-                          const s = r.mgmtStatus || 'pending'
-                          if (s === 'approved')          return <span className="badge" style={{background:'#d1fae5',color:'#065f46'}}>✅ Approved</span>
-                          if (s === 'changes_requested') return <span className="badge" style={{background:'#fee2e2',color:'#991b1b'}}>⚠️ Changes</span>
-                          return <span className="badge" style={{background:'#e5e7eb',color:'#374151'}}>⏳ Pending</span>
-                        })()}
                       </td>
                       <td>
                         <span className={`badge badge-${r.advancingComplete === 'true' ? 'confirmed' : 'pending'}`}>
@@ -634,31 +743,6 @@ export default function Advancing() {
               <label>Additional Notes</label>
               <textarea value={f.notes} onChange={set('notes')} />
             </div>
-
-            <hr style={{margin:'0.5rem 0',border:'none',borderTop:'1px solid var(--border, #e5e7eb)'}} />
-            <div style={{fontSize:12,fontWeight:600,textTransform:'uppercase',letterSpacing:'0.08em',color:'var(--text-muted)'}}>Venue Management Review</div>
-            <div className="form-row">
-              <div className="form-group">
-                <label>Review Status</label>
-                <select value={f.mgmtStatus || 'pending'} onChange={set('mgmtStatus')}>
-                  <option value="pending">⏳ Pending review</option>
-                  <option value="approved">✅ Approved</option>
-                  <option value="changes_requested">⚠️ Changes requested</option>
-                </select>
-              </div>
-              <div className="form-group">
-                <label>Last reviewed</label>
-                <input
-                  value={f.mgmtReviewedBy ? `${f.mgmtReviewedBy}${f.mgmtReviewedAt ? ' · ' + new Date(f.mgmtReviewedAt).toLocaleString() : ''}` : ''}
-                  placeholder="— not yet reviewed—"
-                  readOnly
-                />
-              </div>
-            </div>
-            <div className="form-group">
-              <label>Management Notes</label>
-              <textarea value={f.mgmtNotes || ''} onChange={set('mgmtNotes')} placeholder="Approval notes, conditions, or changes needed…" />
-            </div>
           </div>
         </Modal>
       )}
@@ -684,26 +768,7 @@ export default function Advancing() {
               <span className={`badge badge-${viewRecord.advancingComplete === 'true' ? 'confirmed' : 'pending'}`}>{viewRecord.advancingComplete === 'true' ? 'Advancing Complete' : 'Advancing Open'}</span>
               {viewRecord.curfew && <span className="badge">Curfew: {viewRecord.curfew}</span>}
               {viewRecord.soundRestrictions && <span className="badge badge-pending">🔇 {viewRecord.soundRestrictions}</span>}
-              {(() => {
-                const s = viewRecord.mgmtStatus || 'pending'
-                if (s === 'approved')          return <span className="badge" style={{background:'#d1fae5',color:'#065f46'}}>✅ Mgmt Approved</span>
-                if (s === 'changes_requested') return <span className="badge" style={{background:'#fee2e2',color:'#991b1b'}}>⚠️ Mgmt: Changes Requested</span>
-                return <span className="badge" style={{background:'#e5e7eb',color:'#374151'}}>⏳ Mgmt Review Pending</span>
-              })()}
             </div>
-
-            {(viewRecord.mgmtNotes || viewRecord.mgmtReviewedBy) && (
-              <div style={{background:'#f8fafc',border:'1px solid #e2e8f0',borderRadius:8,padding:'0.75rem'}}>
-                <div style={{fontSize:12,fontWeight:700,textTransform:'uppercase',letterSpacing:'0.08em',color:'#475569',marginBottom:6}}>Management Review</div>
-                {viewRecord.mgmtNotes && <div style={{whiteSpace:'pre-wrap',marginBottom:6}}>{viewRecord.mgmtNotes}</div>}
-                {viewRecord.mgmtReviewedBy && (
-                  <div className="text-muted" style={{fontSize:12}}>
-                    Reviewed by {viewRecord.mgmtReviewedBy}
-                    {viewRecord.mgmtReviewedAt ? ` · ${new Date(viewRecord.mgmtReviewedAt).toLocaleString()}` : ''}
-                  </div>
-                )}
-              </div>
-            )}
 
             {viewRecord.advanceContact && (
               <div>
@@ -829,22 +894,50 @@ export default function Advancing() {
                 }
                 return (
                   <div style={{display:'grid',gap:'0.5rem'}}>
-                    {issues.map((issue, i) => (
-                      <div key={i} style={{
-                        padding:'0.75rem',
-                        borderRadius:6,
-                        borderLeft:`4px solid ${issue.status === 'flag' ? '#ef4444' : '#f59e0b'}`,
-                        background: issue.status === 'flag' ? '#fef2f2' : '#fffbeb'
-                      }}>
-                        <div style={{display:'flex',gap:'0.5rem',alignItems:'baseline'}}>
-                          <span style={{fontWeight:600}}>{issue.category}</span>
-                          <span style={{fontSize:'0.75rem',fontWeight:600,color:issue.status==='flag'?'#991b1b':'#92400e'}}>
-                            {issue.status === 'flag' ? '🚩 Follow-up Needed' : '⚠️ Verify Specs'}
-                          </span>
+                    {issues.map((issue, i) => {
+                      const resolved = issue.resolution === 'acknowledged' || issue.resolution === 'dismissed'
+                      const borderColor = resolved ? '#cbd5e1' : (issue.status === 'flag' ? '#ef4444' : '#f59e0b')
+                      const bg = resolved ? '#f8fafc' : (issue.status === 'flag' ? '#fef2f2' : '#fffbeb')
+                      return (
+                        <div key={i} style={{
+                          padding:'0.75rem',
+                          borderRadius:6,
+                          borderLeft:`4px solid ${borderColor}`,
+                          background: bg,
+                          opacity: resolved ? 0.75 : 1
+                        }}>
+                          <div style={{display:'flex',gap:'0.5rem',alignItems:'baseline',flexWrap:'wrap'}}>
+                            <span style={{fontWeight:600,textDecoration: resolved ? 'line-through' : 'none'}}>{issue.category}</span>
+                            <span style={{fontSize:'0.75rem',fontWeight:600,color:issue.status==='flag'?'#991b1b':'#92400e'}}>
+                              {issue.status === 'flag' ? '🚩 Follow-up Needed' : '⚠️ Verify Specs'}
+                            </span>
+                            {issue.resolution === 'acknowledged' && (
+                              <span className="badge" style={{background:'#d1fae5',color:'#065f46'}}>✅ Acknowledged</span>
+                            )}
+                            {issue.resolution === 'dismissed' && (
+                              <span className="badge" style={{background:'#e5e7eb',color:'#374151'}}>🚫 Dismissed</span>
+                            )}
+                          </div>
+                          <div style={{marginTop:'0.25rem',fontSize:'0.9rem'}}>{issue.note}</div>
+                          {resolved && (issue.resolvedBy || issue.resolvedAt) && (
+                            <div className="text-muted" style={{fontSize:'0.75rem',marginTop:4}}>
+                              by {issue.resolvedBy || 'unknown'}
+                              {issue.resolvedAt ? ` · ${new Date(issue.resolvedAt).toLocaleString()}` : ''}
+                            </div>
+                          )}
+                          <div style={{display:'flex',gap:6,marginTop:8}}>
+                            {!resolved ? (
+                              <>
+                                <button className="btn btn-ghost btn-sm" onClick={() => resolveIssue(i, 'acknowledged')}>✅ Acknowledge</button>
+                                <button className="btn btn-ghost btn-sm" onClick={() => resolveIssue(i, 'dismissed')}>🚫 Dismiss</button>
+                              </>
+                            ) : (
+                              <button className="btn btn-ghost btn-sm" onClick={() => resolveIssue(i, null)}>↺ Reopen</button>
+                            )}
+                          </div>
                         </div>
-                        <div style={{marginTop:'0.25rem',fontSize:'0.9rem'}}>{issue.note}</div>
-                      </div>
-                    ))}
+                      )
+                    })}
                   </div>
                 );
               })()}
@@ -871,7 +964,10 @@ export default function Advancing() {
             <div>
               <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:'0.5rem'}}>
                 <strong>Day of Show Schedule</strong>
-                <button className="btn btn-ghost btn-sm" onClick={openSchedAdd}>+ Add Item</button>
+                <div style={{display:'flex',gap:6}}>
+                  <button className="btn btn-ghost btn-sm" onClick={printDaySheet} disabled={loadingSchedule}>🖨️ Print</button>
+                  <button className="btn btn-ghost btn-sm" onClick={openSchedAdd}>+ Add Item</button>
+                </div>
               </div>
               {loadingSchedule ? (
                 <div className="text-muted" style={{fontSize:'0.9rem'}}>Loading…</div>
