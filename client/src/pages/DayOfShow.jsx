@@ -16,6 +16,7 @@ export default function DayOfShow() {
   const tf = settings.timeFormat || '12h'
   const [items, setItems]     = useState([])
   const [shows, setShows]     = useState([])
+  const [advances, setAdvances] = useState([])
   const [loading, setLoading] = useState(true)
   const [modal, setModal]     = useState(false)
   const [editing, setEditing] = useState(null)
@@ -66,16 +67,26 @@ export default function DayOfShow() {
   }
 
   useEffect(() => {
-    Promise.all([api.get('/schedule'), api.get('/shows')]).then(([sc, s]) => {
+    Promise.all([
+      api.get('/schedule'),
+      api.get('/shows'),
+      api.get('/advancing').catch(() => ({ data: { data: [] } })),
+    ]).then(([sc, s, a]) => {
       setItems(sc.data.data || [])
       setShows(s.data.data || [])
+      setAdvances(a.data.data || [])
     }).finally(() => setLoading(false))
   }, [])
 
   async function load() {
-    const [sc, s] = await Promise.all([api.get('/schedule'), api.get('/shows')])
+    const [sc, s, a] = await Promise.all([
+      api.get('/schedule'),
+      api.get('/shows'),
+      api.get('/advancing').catch(() => ({ data: { data: [] } })),
+    ])
     setItems(sc.data.data || [])
     setShows(s.data.data || [])
+    setAdvances(a.data.data || [])
   }
 
   function openAdd() { setEditing(null); setForm(BLANK); setModal(true) }
@@ -104,6 +115,15 @@ export default function DayOfShow() {
   const filtered = items
     .filter(i => !selectedShow || i.showId === selectedShow)
     .sort((a, b) => (a.time || '').localeCompare(b.time || ''))
+
+  const currentAdvance = selectedShow ? advances.find(a => a.showId === selectedShow) : null
+  const botBanner = (() => {
+    if (!currentAdvance?.botAutoApplied) return null
+    const count = currentAdvance.botAutoAppliedCount || ''
+    let when = currentAdvance.botAutoApplied
+    try { when = new Date(currentAdvance.botAutoApplied).toLocaleString() } catch {}
+    return { count, when }
+  })()
 
   function handlePrint() {
     // Group filtered items by show so "All Shows" prints one page per show.
@@ -198,6 +218,12 @@ export default function DayOfShow() {
           Show all (incl. past)
         </label>
       </div>
+
+      {botBanner && (
+        <div className="alert" style={{ background:'rgba(99,102,241,0.12)', border:'1px solid rgba(99,102,241,0.35)', color:'#c7d2fe', padding:'10px 14px', borderRadius:8, marginBottom:12, fontSize:13 }}>
+          🤖 Auto-filled by the bot{botBanner.count ? <> (<strong>{botBanner.count}</strong> item{botBanner.count === '1' ? '' : 's'})</> : null} on {botBanner.when}. Review and edit as needed.
+        </div>
+      )}
 
       <div className="card">
         {loading ? <div className="loading">Loading…</div> : (

@@ -170,26 +170,32 @@ function ManagerDashboard({ user, shows, labor, navigate, isManager }) {
       <div className="two-col-grid">
         <div className="card">
           <div className="card-header">
-            <span className="card-title">Your To-Do List</span>
+            <span className="card-title">Shows Requiring Attention</span>
             {isManager && (
               <button className="btn btn-ghost btn-sm" onClick={() => navigate('/advancing')}>Advancing</button>
             )}
           </div>
           {todos.length === 0 ? (
-            <div className="empty-state">🎉 All caught up — no open action items.</div>
+            <div className="empty-state">🎉 All caught up — nothing needs you right now.</div>
           ) : (
-            <ul className="todo-list">
-              {todos.map(t => (
-                <li key={`${t.showId}-${t.kind}`} className="todo-item" onClick={() => navigate(`/shows/${t.showId}`)}>
-                  <span className={`todo-badge todo-${t.severity}`}>{t.icon}</span>
-                  <div className="todo-body">
-                    <div className="todo-title">{t.title}</div>
-                    <div className="todo-meta">{t.subtitle}</div>
-                  </div>
-                  <span className="todo-date">{t.dateLabel}</span>
-                </li>
-              ))}
-            </ul>
+            <div style={{ display:'flex', alignItems:'center', gap:16, padding:'12px 4px' }}>
+              <span style={{
+                display:'inline-flex', alignItems:'center', justifyContent:'center',
+                minWidth:64, height:64, padding:'0 14px',
+                borderRadius:'50%', background:'rgba(245,158,11,0.15)',
+                border:'2px solid var(--warning)', color:'var(--warning)',
+                fontSize:28, fontWeight:700, lineHeight:1,
+              }}>{todoShowCount(todos)}</span>
+              <div style={{ flex:1 }}>
+                <div style={{ fontSize:15, fontWeight:600, marginBottom:2 }}>
+                  {todoShowCount(todos)} show{todoShowCount(todos) === 1 ? '' : 's'} need{todoShowCount(todos) === 1 ? 's' : ''} attention
+                </div>
+                <div style={{ fontSize:13, color:'rgba(255,255,255,0.6)' }}>
+                  {todos.length} open item{todos.length === 1 ? '' : 's'} across advancing, labor, and prep.
+                </div>
+              </div>
+              <button className="btn btn-primary btn-sm" onClick={() => navigate('/advancing')}>Review</button>
+            </div>
           )}
         </div>
 
@@ -211,6 +217,12 @@ function ManagerDashboard({ user, shows, labor, navigate, isManager }) {
       </div>
     </div>
   )
+}
+
+function todoShowCount(todos) {
+  const ids = new Set()
+  for (const t of todos) if (t.showId) ids.add(t.showId)
+  return ids.size || todos.length
 }
 
 function buildTodoList(upcomingShows, laborRows) {

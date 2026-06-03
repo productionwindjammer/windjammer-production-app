@@ -2803,6 +2803,7 @@ async function runBotForAdvance(advance, ctx = {}) {
   const shows    = ctx.shows    || await sheets.getRows(config.googleSheets.sheets.shows);
   const artists  = ctx.artists  || await sheets.getRows(config.googleSheets.sheets.artists).catch(() => []);
   const allEmails = ctx.allEmails || await getStoredEmails();
+  const scheduleRows = ctx.scheduleRows || await sheets.getRows(config.googleSheets.sheets.schedule).catch(() => []);
   const show     = shows.find(s => s.id === advance.showId);
   const artist   = show ? findArtistForShow(show, artists) : null;
 
@@ -2843,11 +2844,61 @@ async function runBotForAdvance(advance, ctx = {}) {
   const extracted = bot.extractFromEmails(fullEmails);
   const schedule  = bot.extractSchedule(fullEmails);
 
+  // Auto-apply schedule when confidence is high enough and the show has no
+  // existing schedule rows yet — saves the PM a manual review step. Items
+  // with at least medium confidence are applied; we require at least one high
+  // confidence item and 3 total items as a quality gate.
+  let autoApplied = 0;
+  let autoAppliedAt = null;
+  const alreadyAutoApplied = !!advance.botAutoApplied;
+  const existingForShow = scheduleRows.filter(r => r.showId === advance.showId);
+  const items = Array.isArray(schedule.items) ? schedule.items : [];
+  const highCount = items.filter(i => i.confidence === 'high').length;
+  const usableItems = items
+    .filter(i => i.confidence === 'high' || i.confidence === 'medium')
+    .filter(i => i.label && i.time);
+  const canAutoApply =
+    show && !alreadyAutoApplied && existingForShow.length === 0 &&
+    usableItems.length >= 3 && highCount >= 1;
+
+  if (canAutoApply) {
+    const showName = `${show.date || ''} \u2014 ${show.artist || show.eventName || ''}`.trim();
+    const stage = show.stage || 'inside';
+    const rows = usableItems.map((it, i) => ({
+      id:          `${Date.now()}${i}${Math.random().toString(36).slice(2, 5)}`,
+      showId:      advance.showId,
+      showName,
+      stage,
+      date:        show.date || '',
+      eventType:   'time',
+      label:       String(it.label || '').slice(0, 200),
+      time:        String(it.time  || '').slice(0, 8),
+      duration:    '',
+      responsible: String(it.responsible || '').slice(0, 80),
+      notes:       String(it.notes       || '').slice(0, 400),
+      createdAt:   new Date().toISOString(),
+    }));
+    try {
+      await sheets.appendRows(config.googleSheets.sheets.schedule, rows);
+      autoApplied = rows.length;
+      autoAppliedAt = new Date().toISOString();
+      // Keep in-memory list current so subsequent advances in the same pass
+      // don't double-apply against this show.
+      scheduleRows.push(...rows);
+    } catch (e) {
+      console.error(`[runBotForAdvance] auto-apply failed for advance ${advance.id}: ${e.message}`);
+    }
+  }
+
   const patch = {
     botExtracted: JSON.stringify(extracted),
     botSchedule:  JSON.stringify(schedule),
     botLastRun:   new Date().toISOString(),
   };
+  if (autoApplied) {
+    patch.botAutoApplied      = autoAppliedAt;
+    patch.botAutoAppliedCount = String(autoApplied);
+  }
   try {
     await sheets.updateRowById(config.googleSheets.sheets.advancing, advance.id, patch);
   } catch (e) {
@@ -2857,7 +2908,8 @@ async function runBotForAdvance(advance, ctx = {}) {
     advanceId: advance.id,
     showId:    advance.showId,
     fieldCount: Object.keys(extracted.fields || {}).length,
-    scheduleItemCount: (schedule.items || []).length,
+    scheduleItemCount: items.length,
+    autoApplied,
   };
 }
 
@@ -2866,18 +2918,19 @@ async function runBotForAdvance(advance, ctx = {}) {
 // within Gmail/Sheets rate limits.
 async function runBotPassForShows(showIds = []) {
   if (!showIds.length) return [];
-  const [shows, artists, advances, allEmails] = await Promise.all([
+  const [shows, artists, advances, allEmails, scheduleRows] = await Promise.all([
     sheets.getRows(config.googleSheets.sheets.shows),
     sheets.getRows(config.googleSheets.sheets.artists).catch(() => []),
     sheets.getRows(config.googleSheets.sheets.advancing),
     getStoredEmails(),
+    sheets.getRows(config.googleSheets.sheets.schedule).catch(() => []),
   ]);
   const wanted = new Set(showIds);
   const targets = advances.filter(a => wanted.has(a.showId));
   const results = [];
   for (const adv of targets) {
     try {
-      const r = await runBotForAdvance(adv, { shows, artists, allEmails });
+      const r = await runBotForAdvance(adv, { shows, artists, allEmails, scheduleRows });
       if (r) results.push(r);
     } catch (e) {
       console.error(`[runBotPassForShows] advance ${adv.id}: ${e.message}`);
@@ -2921,6 +2974,7 @@ app.post('/api/sync/login-kickoff', requireAuth, async (req, res) => {
       botAdvancesProcessed: botResults.length,
       botFieldsFound:    botResults.reduce((n, r) => n + (r.fieldCount || 0), 0),
       botScheduleItems:  botResults.reduce((n, r) => n + (r.scheduleItemCount || 0), 0),
+      botAutoApplied:    botResults.reduce((n, r) => n + (r.autoApplied || 0), 0),
       elapsedMs: Date.now() - started,
     });
   } catch (err) {
