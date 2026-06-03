@@ -52,6 +52,7 @@ export default function Advancing() {
   const [form, setForm]           = useState(BLANK)
   const [saving, setSaving]       = useState(false)
   const [filter, setFilter]       = useState('')
+  const [showCompletedPast, setShowCompletedPast] = useState(false)
   const [showPastShows, setShowPastShows] = useState(false)
 
   // Bot
@@ -476,9 +477,20 @@ export default function Advancing() {
   const set = k => e => setForm(v => ({ ...v, [k]: e.target.value }))
   const f = form
 
-  const filtered = records.filter(r =>
-    !filter || (r.showName || r.showId || '').toLowerCase().includes(filter.toLowerCase())
-  )
+  const filtered = records.filter(r => {
+    if (filter && !(r.showName || r.showId || '').toLowerCase().includes(filter.toLowerCase())) return false
+    if (showCompletedPast) return true
+    // Hide once advancing is marked complete
+    if (r.advancingComplete === 'true' || r.advancingComplete === true) return false
+    // Hide once the show date has arrived or passed
+    const s = shows.find(s => s.id === r.showId)
+    if (s?.date) {
+      const d = new Date(s.date + 'T12:00:00')
+      const today = new Date(); today.setHours(0, 0, 0, 0)
+      if (d <= today) return false
+    }
+    return true
+  })
 
   function getShowLabel(r) {
     if (r.showName) return r.showName
@@ -544,6 +556,10 @@ export default function Advancing() {
           value={filter}
           onChange={e => setFilter(e.target.value)}
         />
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'rgba(255,255,255,0.7)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+          <input type="checkbox" checked={showCompletedPast} onChange={e => setShowCompletedPast(e.target.checked)} />
+          Show completed &amp; past
+        </label>
       </div>
 
       <div className="card">
