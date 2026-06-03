@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import api from '../api'
+import Modal from '../components/Modal'
 import { useAuth } from '../context/AuthContext'
 import { useSettings } from '../context/SettingsContext'
 import { formatTime } from '../utils/time'
@@ -67,26 +68,50 @@ export default function Dashboard() {
   const [shows, setShows] = useState([])
   const [labor, setLabor] = useState([])
   const [advancing, setAdvancing] = useState([])
+  const [artists, setArtists]     = useState([])
+  const [emails, setEmails]       = useState([])
   const [loading, setLoading] = useState(true)
+  // Bumped whenever a promoter action saves new data, so the dashboard
+  // refresh is independent from the initial fetch.
+  const [reloadKey, setReloadKey] = useState(0)
 
   useEffect(() => {
     const requests = [api.get('/shows')]
     if (isCrew || isManager || isVenue) requests.push(api.get('/labor'))
     else requests.push(null)
-    if (isVenue || isManager) requests.push(api.get('/advancing'))
+    if (isVenue || isManager || isPromoter) requests.push(api.get('/advancing'))
     else requests.push(null)
+    if (isPromoter || isManager) {
+      requests.push(api.get('/artists').catch(() => ({ data: { data: [] } })))
+      requests.push(api.get('/emails?limit=40').catch(() => ({ data: { data: [] } })))
+    } else {
+      requests.push(null); requests.push(null)
+    }
     Promise.all(requests.map(r => r || Promise.resolve(null)))
       .then(results => {
         setShows(results[0].data.data || [])
         if (results[1]) setLabor(results[1].data.data || [])
         if (results[2]) setAdvancing(results[2].data.data || [])
+        if (results[3]) setArtists(results[3].data.data || [])
+        if (results[4]) setEmails(results[4].data.data || [])
       })
       .finally(() => setLoading(false))
-  }, [isCrew, isManager, isVenue])
+  }, [isCrew, isManager, isVenue, isPromoter, reloadKey])
 
   if (loading) return <div className="loading">Loading dashboard…</div>
 
-  if (isPromoter) return <PromoterDashboard user={user} shows={shows} navigate={navigate} tf={tf} />
+  if (isPromoter) return (
+    <PromoterDashboard
+      user={user}
+      shows={shows}
+      advancing={advancing}
+      artists={artists}
+      emails={emails}
+      navigate={navigate}
+      tf={tf}
+      onReload={() => setReloadKey(k => k + 1)}
+    />
+  )
   if (isVenue)    return <VenueDashboard    user={user} shows={shows} labor={labor} advancing={advancing} navigate={navigate} tf={tf} />
   if (isCrew)     return <CrewDashboard     user={user} shows={shows} labor={labor} navigate={navigate} />
   return <ManagerDashboard user={user} shows={shows} labor={labor} navigate={navigate} isManager={isManager} />
@@ -365,206 +390,216 @@ function CrewDashboard({ user, shows, labor, navigate }) {
     </div>
   )
 }
-
 /* ────────────────────────────────────────────────────────────── Promoter ── */
 
 /**
- * Promoter view: focuses on the four things a promoter actually opens the
- * app for — ticket sales pace, shows still needing attention (status not yet
- * confirmed / missing times), the upcoming week at a glance, and a roll-up
- * of recently advanced shows that are now production-ready.
- *
- * The single in-house promoter sees ALL upcoming shows here; clicking any
- * row jumps to that show's detail page where they can edit dates, ticket
- * counts, status, and TM contact info (write access is granted server-side).
+ * Promoter view: deliberately simple. The promoter is the least technical
+ * person in the workflow — their two jobs are (1) add shows and (2) make sure
+ * each artist has an advance contact production can talk to. Everything else
+ * on this page is read-only visibility so they can see what's happening.
  */
-function PromoterDashboard({ user, shows, navigate, tf }) {
+const QUICK_BLANK = { date: '', artist: '', stage: 'inside', showTime: '', notes: '' }
+const CONTACT_BLANK = { contactName: '', contactEmail: '', contactPhone: '' }
+
+function PromoterDashboard({ user, shows, advancing, artists, emails, navigate, tf, onReload }) {
   const today = startOfToday()
   const upcomingRaw = shows.filter(s => {
     const d = parseDate(s.date); return d && d >= today && s.status !== 'cancelled'
   })
   const upcoming = useMemo(() => groupShowRuns(upcomingRaw), [shows])
-  const thisWeek = upcoming.filter(s => (parseDate(s.date) - today) / 86400000 <= 7)
-
-  // "Needs attention" = not yet confirmed/settled, OR missing doors/show time,
-  //                     OR no TM/promoter contact on file.
-  const needsAttention = upcoming
-    .map(s => {
-      const reasons = []
-      const stat = (s.status || 'pending').toLowerCase()
-      if (stat === 'pending' || stat === 'advancing') reasons.push(stat === 'pending' ? 'Hold — not confirmed' : 'Advancing')
-      if (!s.showTime && !s.doorsTime) reasons.push('No doors / show time')
-      if (!s.tourManager && !s.promoter && !s.advanceEmail && !s.advanceContact) reasons.push('No advance contact')
-      return reasons.length ? { ...s, _reasons: reasons } : null
-    })
-    .filter(Boolean)
-    .slice(0, 12)
-
-  const recentlyAdvanced = upcoming
-    .filter(s => s.advancingComplete === 'true' || s.advancingComplete === true)
-    .slice(0, 8)
-
-  // Sales totals over the next 14 days — useful pulse for promoter
-  const next14 = upcoming.filter(s => (parseDate(s.date) - today) / 86400000 <= 14)
-  const salesPulse = next14.reduce((acc, s) => {
-    const { sold, capacity } = getTicketStats(s)
-    acc.sold     += sold
-    acc.capacity += (capacity || 0)
-    return acc
-  }, { sold: 0, capacity: 0 })
-  const pulsePct = salesPulse.capacity
-    ? Math.round((salesPulse.sold / salesPulse.capacity) * 100)
-    : null
-
+  const next30 = upcoming.filter(s => (parseDate(s.date) - today) / 86400000 <= 30)
   const greeting = user?.name ? `Hi ${user.name.split(' ')[0]}` : 'Welcome'
+
+  // ─── Quick Add Show ─────────────────────────────────────────────
+  const [addOpen, setAddOpen]   = useState(false)
+  const [addForm, setAddForm]   = useState(QUICK_BLANK)
+  const [addSaving, setAddSaving] = useState(false)
+  function openQuickAdd() { setAddForm(QUICK_BLANK); setAddOpen(true) }
+  async function saveQuickAdd() {
+    if (!addForm.date || !addForm.artist) { alert('Date and Artist are required.'); return }
+    setAddSaving(true)
+    try {
+      await api.post('/shows', { ...addForm, status: 'pending', eventName: addForm.artist })
+      setAddOpen(false); onReload()
+    } catch (e) {
+      alert('Could not add show: ' + (e?.response?.data?.message || e.message))
+    } finally { setAddSaving(false) }
+  }
+
+  // ─── Connect Contact (per artist) ───────────────────────────────
+  const [contactArtist, setContactArtist] = useState(null)
+  const [contactForm, setContactForm]     = useState(CONTACT_BLANK)
+  const [contactSaving, setContactSaving] = useState(false)
+  function openContact(artist) {
+    setContactArtist(artist)
+    setContactForm({
+      contactName:  artist?.contactName  || '',
+      contactEmail: artist?.contactEmail || '',
+      contactPhone: artist?.contactPhone || '',
+    })
+  }
+  async function saveContact() {
+    if (!contactArtist) return
+    setContactSaving(true)
+    try {
+      await api.put(`/artists/${contactArtist.id}`, contactForm)
+      setContactArtist(null); onReload()
+    } catch (e) {
+      alert('Could not save contact: ' + (e?.response?.data?.message || e.message))
+    } finally { setContactSaving(false) }
+  }
+  // Quick-create an artist record from a show that has none on file yet,
+  // then immediately open the contact modal for it.
+  async function addArtistFromShow(show) {
+    const name = (show.artist || show.eventName || '').trim()
+    if (!name) { alert('This show has no artist name yet — edit the show first.'); return }
+    try {
+      const res = await api.post('/artists', { name })
+      const artist = res.data?.data || { id: '', name, contactName: '', contactEmail: '', contactPhone: '' }
+      openContact(artist)
+      onReload()
+    } catch (e) {
+      alert('Could not create artist: ' + (e?.response?.data?.message || e.message))
+    }
+  }
+
+  // ─── "Needs contacts" worklist ──────────────────────────────────
+  // For every upcoming show: find the artist by name and flag it if no
+  // contact email/phone is on file.
+  const artistByName = useMemo(() => {
+    const m = new Map()
+    for (const a of artists) m.set((a.name || '').trim().toLowerCase(), a)
+    return m
+  }, [artists])
+  const needsContact = useMemo(() => upcoming
+    .map(s => {
+      const name = (s.artist || s.eventName || '').trim()
+      if (!name) return { show: s, artist: null, missing: 'name' }
+      const a = artistByName.get(name.toLowerCase())
+      if (!a) return { show: s, artist: null, missing: 'artist' }
+      if (!a.contactEmail && !a.contactPhone) return { show: s, artist: a, missing: 'contact' }
+      return null
+    })
+    .filter(Boolean), [upcoming, artistByName])
+
+  // ─── Advance status per show ─────────────────────────────────────
+  const advanceByShow = useMemo(() => {
+    const m = new Map()
+    for (const a of advancing) m.set(a.showId, a)
+    return m
+  }, [advancing])
+
+  function advanceStatusFor(show) {
+    const adv = advanceByShow.get(show.id)
+    if (!adv) return { tag: 'not started', tone: 'low' }
+    let extracted = null, schedule = null
+    try { extracted = adv.botExtracted ? JSON.parse(adv.botExtracted) : null } catch {}
+    try { schedule  = adv.botSchedule  ? JSON.parse(adv.botSchedule)  : null } catch {}
+    const fieldCount = extracted ? Object.keys(extracted.fields || {}).length : 0
+    const itemCount  = schedule  ? (schedule.items  || []).length             : 0
+    if (adv.advancingComplete === 'true' || adv.advancingComplete === true)
+      return { tag: 'ready', tone: 'success', detail: 'Production has confirmed.' }
+    if (fieldCount || itemCount)
+      return {
+        tag: 'in progress', tone: 'warning',
+        detail: `Bot has ${fieldCount} suggestion${fieldCount === 1 ? '' : 's'}${itemCount ? ` · ${itemCount} schedule item${itemCount === 1 ? '' : 's'}` : ''}.`,
+      }
+    return { tag: 'advancing', tone: 'inside', detail: adv.botLastRun ? 'Waiting on more info from artist team.' : 'Production has opened the advance.' }
+  }
+
+  // ─── Recent emails roll-up (promoter is cc'd anyway) ─────────────
+  const recentEmails = useMemo(() =>
+    [...emails]
+      .sort((a, b) => (Date.parse(b.date) || 0) - (Date.parse(a.date) || 0))
+      .slice(0, 8)
+  , [emails])
 
   return (
     <div>
       <div className="page-header">
         <div>
-          <div className="page-title">{greeting} — promoter overview</div>
-          <div className="page-subtitle">The Windjammer · all upcoming shows</div>
+          <div className="page-title">{greeting}</div>
+          <div className="page-subtitle">The Windjammer · promoter overview</div>
         </div>
-        <button className="btn btn-primary" onClick={() => navigate('/shows')}>+ Manage shows</button>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <button className="btn btn-primary" onClick={openQuickAdd}>+ Add Show</button>
+          <button className="btn btn-ghost" onClick={() => navigate('/artists')}>Manage Contacts</button>
+        </div>
       </div>
 
       <div className="stat-grid">
         <div className="stat-card">
           <div className="stat-label">Upcoming Shows</div>
           <div className="stat-value">{upcoming.length}</div>
-          <div className="stat-sub">{thisWeek.length} this week</div>
+          <div className="stat-sub">{next30.length} in next 30 days</div>
         </div>
-        <div className="stat-card">
-          <div className="stat-label">Needs Attention</div>
-          <div className="stat-value" style={{ color: 'var(--warning)' }}>{needsAttention.length}</div>
-          <div className="stat-sub">holds, missing times, etc.</div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-label">Sales (next 14 days)</div>
-          <div className="stat-value">{salesPulse.sold.toLocaleString()}</div>
-          <div className="stat-sub">
-            {salesPulse.capacity
-              ? `of ${salesPulse.capacity.toLocaleString()} cap · ${pulsePct}%`
-              : 'no capacity data'}
+        <div className="stat-card" style={needsContact.length ? { borderColor: 'var(--warning)' } : null}>
+          <div className="stat-label">Needs Advance Contact</div>
+          <div className="stat-value" style={{ color: needsContact.length ? 'var(--warning)' : '#86efac' }}>
+            {needsContact.length}
           </div>
+          <div className="stat-sub">artists production can't reach yet</div>
         </div>
         <div className="stat-card">
-          <div className="stat-label">Production-Ready</div>
-          <div className="stat-value" style={{ color: '#86efac' }}>{recentlyAdvanced.length}</div>
-          <div className="stat-sub">advanced & confirmed</div>
+          <div className="stat-label">Production In Progress</div>
+          <div className="stat-value">{upcoming.filter(s => { const t = advanceStatusFor(s).tag; return t === 'in progress' || t === 'advancing' }).length}</div>
+          <div className="stat-sub">shows being advanced now</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label">Production Ready</div>
+          <div className="stat-value" style={{ color: '#86efac' }}>{upcoming.filter(s => advanceStatusFor(s).tag === 'ready').length}</div>
+          <div className="stat-sub">confirmed by production</div>
         </div>
       </div>
 
-      <div className="two-col-grid">
-        <div className="card">
-          <div className="card-header">
-            <span className="card-title">Needs Your Attention</span>
-            <button className="btn btn-ghost btn-sm" onClick={() => navigate('/shows')}>All shows</button>
-          </div>
-          {needsAttention.length === 0 ? (
-            <div className="empty-state">🎉 Every upcoming show is confirmed and contacts on file.</div>
-          ) : (
-            <ul className="todo-list">
-              {needsAttention.map(s => {
-                const d = parseDate(s.date)
-                const days = d ? Math.round((d - today) / 86400000) : null
-                const dateLabel = days == null ? '' : days === 0 ? 'Today' : days === 1 ? 'Tomorrow' : `${days}d`
-                const severity = days != null && days <= 7 ? 'high' : days != null && days <= 21 ? 'med' : 'low'
-                return (
-                  <li key={s.id} className="todo-item" onClick={() => navigate(`/shows/${s.id}`)}>
-                    <span className={`todo-badge todo-${severity}`}>⚠️</span>
-                    <div className="todo-body">
-                      <div className="todo-title">{s.artist || s.eventName || 'Untitled show'}</div>
-                      <div className="todo-meta">{s._reasons.join(' · ')}</div>
-                    </div>
-                    <span className="todo-date">{dateLabel}</span>
-                  </li>
-                )
-              })}
-            </ul>
-          )}
-        </div>
-
-        <div className="card">
-          <div className="card-header">
-            <span className="card-title">This Week</span>
-            <button className="btn btn-ghost btn-sm" onClick={() => navigate('/shows')}>All shows</button>
-          </div>
-          {thisWeek.length === 0 ? (
-            <div className="empty-state">No shows in the next 7 days</div>
-          ) : (
-            <div className="form-grid">
-              {thisWeek.map(show => (
-                <ShowRow key={show.id} show={show} tf={tf} onClick={() => navigate(`/shows/${show.id}`)} />
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-
+      {/* ── Action item: connect contacts ─────────────────────────── */}
       <div className="card">
         <div className="card-header">
-          <span className="card-title">Ticket Sales</span>
-          <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Click any show to update sold count</span>
+          <span className="card-title">⚠️ Connect Production with Advance Contacts</span>
+          <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Your most important job</span>
         </div>
-        {upcoming.length === 0 ? (
-          <div className="empty-state">No upcoming shows on the books.</div>
+        {needsContact.length === 0 ? (
+          <div className="empty-state">🎉 Every upcoming artist has someone production can reach. You're all set.</div>
         ) : (
           <div className="table-wrap">
             <table>
               <thead>
                 <tr>
                   <th>Date</th>
-                  <th>Artist</th>
-                  <th>Stage</th>
-                  <th>Sold / Cap</th>
-                  <th style={{ width: '28%' }}>% Sold</th>
+                  <th>Show</th>
                   <th>Status</th>
+                  <th style={{ width: 200 }}></th>
                 </tr>
               </thead>
               <tbody>
-                {upcoming.map(s => {
-                  const d = parseDate(s.date)
-                  const { sold, capacity, pct } = getTicketStats(s)
-                  const stat = (s.status || 'pending').toLowerCase()
-                  const isRun = (s._nights || 1) > 1
-                  const barColor = pct == null ? '#666' : pct >= 80 ? '#22c55e' : pct >= 40 ? '#eab308' : '#ef4444'
+                {needsContact.map(({ show, artist, missing }) => {
+                  const d = parseDate(show.date)
+                  const dateLabel = d ? d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }) : '—'
+                  const label =
+                    missing === 'name'    ? 'No artist name on show'   :
+                    missing === 'artist'  ? 'Artist not in registry'   :
+                                            'No phone or email on file'
                   return (
-                    <tr key={s.id} style={{ cursor: 'pointer' }} onClick={() => navigate(`/shows/${s.id}`)}>
+                    <tr key={show.id + ':' + (artist?.id || missing)}>
+                      <td><strong>{dateLabel}</strong></td>
+                      <td>{show.artist || show.eventName || '—'}</td>
+                      <td><span className="badge badge-warning">{label}</span></td>
                       <td>
-                        <strong>{d ? d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }) : '—'}</strong>
-                        {isRun && (
-                          <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                            {s._nights} nights ({dateRangeLabel(s._dates)})
-                          </div>
+                        {missing === 'contact' && (
+                          <button className="btn btn-primary btn-sm" onClick={() => openContact(artist)}>
+                            Add Contact
+                          </button>
                         )}
-                      </td>
-                      <td>{s.artist || s.eventName || '—'}</td>
-                      <td>
-                        {s.stage && (
-                          <span className={`badge badge-${s.stage}`}>
-                            {s.stage === 'inside' ? 'Inside' : 'Beach'}
-                          </span>
+                        {missing === 'artist' && (
+                          <button className="btn btn-primary btn-sm" onClick={() => addArtistFromShow(show)}>
+                            Create Artist
+                          </button>
                         )}
-                      </td>
-                      <td style={{ whiteSpace: 'nowrap' }}>
-                        <strong>{sold.toLocaleString()}</strong>
-                        {capacity ? <span style={{ color: 'var(--text-muted)' }}> / {capacity.toLocaleString()}</span> : null}
-                      </td>
-                      <td>
-                        {pct == null ? (
-                          <span className="text-muted" style={{ fontSize: 12 }}>—</span>
-                        ) : (
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                            <div style={{ flex: 1, height: 6, background: 'rgba(255,255,255,0.08)', borderRadius: 3, overflow: 'hidden' }}>
-                              <div style={{ width: `${pct}%`, height: '100%', background: barColor, transition: 'width 0.3s' }} />
-                            </div>
-                            <span style={{ fontSize: 12, fontWeight: 600, minWidth: 34, textAlign: 'right' }}>{pct}%</span>
-                          </div>
+                        {missing === 'name' && (
+                          <button className="btn btn-ghost btn-sm" onClick={() => navigate(`/shows/${show.id}`)}>
+                            Open Show
+                          </button>
                         )}
-                      </td>
-                      <td>
-                        <span className={`badge badge-${stat}`} style={{ textTransform: 'capitalize' }}>{stat}</span>
                       </td>
                     </tr>
                   )
@@ -575,38 +610,163 @@ function PromoterDashboard({ user, shows, navigate, tf }) {
         )}
       </div>
 
-      <div className="card">
-        <div className="card-header">
-          <span className="card-title">Recently Advanced</span>
-          <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Production has these ready</span>
-        </div>
-        {recentlyAdvanced.length === 0 ? (
-          <div className="empty-state">No shows have been advanced yet.</div>
-        ) : (
-          <ul className="todo-list">
-            {recentlyAdvanced.map(s => {
-              const d = parseDate(s.date)
-              const dateLabel = d ? d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : ''
-              return (
-                <li key={s.id} className="todo-item" onClick={() => navigate(`/shows/${s.id}`)}>
-                  <span className="todo-badge todo-low">✓</span>
-                  <div className="todo-body">
-                    <div className="todo-title">{s.artist || s.eventName || 'Untitled show'}</div>
-                    <div className="todo-meta">
-                      {s.stage === 'inside' ? 'Inside Stage' : s.stage === 'beach' ? 'Beach Stage' : ''}
-                      {s.showTime ? ` · Show ${formatTime(s.showTime, tf)}` : ''}
+      <div className="two-col-grid">
+        {/* ── What production is doing ─────────────────────────────── */}
+        <div className="card">
+          <div className="card-header">
+            <span className="card-title">What Production Is Working On</span>
+            <button className="btn btn-ghost btn-sm" onClick={() => navigate('/shows')}>All shows</button>
+          </div>
+          {next30.length === 0 ? (
+            <div className="empty-state">No shows in the next 30 days.</div>
+          ) : (
+            <ul className="todo-list">
+              {next30.slice(0, 10).map(s => {
+                const d = parseDate(s.date)
+                const status = advanceStatusFor(s)
+                const dateLabel = d ? d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : ''
+                return (
+                  <li key={s.id} className="todo-item" onClick={() => navigate(`/shows/${s.id}`)}>
+                    <span className={`todo-badge todo-${status.tone === 'success' ? 'low' : status.tone === 'warning' ? 'med' : 'low'}`}>
+                      {status.tag === 'ready' ? '✓' : status.tag === 'in progress' ? '⚙️' : '·'}
+                    </span>
+                    <div className="todo-body">
+                      <div className="todo-title">{s.artist || s.eventName || 'Untitled show'}</div>
+                      <div className="todo-meta">
+                        <span className={`badge badge-${status.tone}`} style={{ marginRight: 6 }}>{status.tag}</span>
+                        {status.detail || ''}
+                      </div>
                     </div>
-                  </div>
-                  <span className="todo-date">{dateLabel}</span>
-                </li>
-              )
-            })}
-          </ul>
-        )}
+                    <span className="todo-date">{dateLabel}</span>
+                  </li>
+                )
+              })}
+            </ul>
+          )}
+        </div>
+
+        {/* ── Recent emails (visibility) ───────────────────────────── */}
+        <div className="card">
+          <div className="card-header">
+            <span className="card-title">Recent Emails</span>
+            <button className="btn btn-ghost btn-sm" onClick={() => navigate('/email')}>Inbox</button>
+          </div>
+          {recentEmails.length === 0 ? (
+            <div className="empty-state">No emails synced yet.</div>
+          ) : (
+            <ul className="todo-list">
+              {recentEmails.map(e => {
+                const d = e.date ? new Date(e.date) : null
+                const when = d ? d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : ''
+                return (
+                  <li key={e.id} className="todo-item" onClick={() => navigate('/email')}>
+                    <span className="todo-badge todo-low">✉️</span>
+                    <div className="todo-body">
+                      <div className="todo-title" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {e.subject || '(no subject)'}
+                      </div>
+                      <div className="todo-meta" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {(e.from || '').replace(/<.+>/, '').trim() || e.from || '—'}
+                        {e.showName ? ` · ${e.showName}` : ''}
+                      </div>
+                    </div>
+                    <span className="todo-date">{when}</span>
+                  </li>
+                )
+              })}
+            </ul>
+          )}
+        </div>
       </div>
+
+      {/* ── Quick-add show modal ────────────────────────────────── */}
+      {addOpen && (
+        <Modal
+          title="Add a Show"
+          onClose={() => setAddOpen(false)}
+          footer={
+            <>
+              <button className="btn btn-ghost" onClick={() => setAddOpen(false)}>Cancel</button>
+              <button className="btn btn-primary" onClick={saveQuickAdd} disabled={addSaving}>
+                {addSaving ? 'Saving…' : 'Add Show'}
+              </button>
+            </>
+          }
+        >
+          <div className="form-grid">
+            <div className="form-row">
+              <div className="form-group">
+                <label>Date *</label>
+                <input type="date" value={addForm.date} onChange={e => setAddForm(f => ({ ...f, date: e.target.value }))} />
+              </div>
+              <div className="form-group">
+                <label>Stage</label>
+                <select value={addForm.stage} onChange={e => setAddForm(f => ({ ...f, stage: e.target.value }))}>
+                  <option value="inside">Inside Stage</option>
+                  <option value="beach">Beach Stage</option>
+                </select>
+              </div>
+            </div>
+            <div className="form-group">
+              <label>Artist *</label>
+              <input value={addForm.artist} placeholder="Headliner / event name" autoFocus
+                onChange={e => setAddForm(f => ({ ...f, artist: e.target.value }))} />
+            </div>
+            <div className="form-group">
+              <label>Show Time</label>
+              <input type="time" value={addForm.showTime} onChange={e => setAddForm(f => ({ ...f, showTime: e.target.value }))} />
+            </div>
+            <div className="form-group">
+              <label>Notes</label>
+              <textarea value={addForm.notes} onChange={e => setAddForm(f => ({ ...f, notes: e.target.value }))} placeholder="Anything production should know up front…" />
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+              You can fill in tickets, support, and contacts later from the show page.
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* ── Add / edit contact modal ────────────────────────────── */}
+      {contactArtist && (
+        <Modal
+          title={`Advance Contact — ${contactArtist.name || 'Artist'}`}
+          onClose={() => setContactArtist(null)}
+          footer={
+            <>
+              <button className="btn btn-ghost" onClick={() => setContactArtist(null)}>Cancel</button>
+              <button className="btn btn-primary" onClick={saveContact} disabled={contactSaving}>
+                {contactSaving ? 'Saving…' : 'Save Contact'}
+              </button>
+            </>
+          }
+        >
+          <div className="form-grid">
+            <div className="form-group">
+              <label>Tour Manager / Contact Name</label>
+              <input value={contactForm.contactName} autoFocus
+                onChange={e => setContactForm(f => ({ ...f, contactName: e.target.value }))} />
+            </div>
+            <div className="form-group">
+              <label>Email</label>
+              <input type="email" value={contactForm.contactEmail}
+                onChange={e => setContactForm(f => ({ ...f, contactEmail: e.target.value }))} />
+            </div>
+            <div className="form-group">
+              <label>Phone</label>
+              <input value={contactForm.contactPhone}
+                onChange={e => setContactForm(f => ({ ...f, contactPhone: e.target.value }))} />
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+              Once saved, production can email this contact directly and the bot will start pulling info from their replies.
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   )
 }
+
 
 /* ─────────────────────────────────────────────────────────────── Venue ── */
 

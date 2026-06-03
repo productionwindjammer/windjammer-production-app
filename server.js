@@ -412,6 +412,75 @@ async function notifyShiftAssigned(record) {
 }
 
 crudRoutes(app, '/api/shows',           'shows',     ['admin','production_manager','promoter'], { afterCreate: kickoffAdvanceForShow });
+
+// ── Artist defaults: shared helpers ──────────────────────────────────────────
+// The artist registry now owns long-term production info (rider, production
+// needs, backline, hospitality, catering, advance contact). Per-show Advancing
+// rows can still override any of these for one-off changes, but when an
+// Advancing field is blank we fall back to the artist record.
+const ARTIST_DEFAULT_FIELDS = [
+  'riderNotes', 'productionNeeds', 'backlineNotes',
+  'hospitalityNotes', 'cateringNotes',
+  'advanceContact', 'advancePhone', 'advanceEmail',
+];
+
+// Find the artist row that matches a show. Match is case-insensitive against
+// name and aliases — same logic the Artists page uses to find shows.
+function findArtistForShow(show, artists) {
+  if (!show || !artists?.length) return null;
+  const key = String(show.artist || show.eventName || '').trim().toLowerCase();
+  if (!key) return null;
+  for (const a of artists) {
+    const name = String(a.name || '').trim().toLowerCase();
+    if (!name) continue;
+    if (name === key) return a;
+    const aliases = String(a.aliases || '').split(',').map(s => s.trim().toLowerCase());
+    if (aliases.includes(key)) return a;
+    if (name && (key.includes(name) || name.includes(key))) return a;
+  }
+  return null;
+}
+
+function pickArtistDefaults(artist) {
+  if (!artist) return {};
+  const out = {};
+  for (const k of ARTIST_DEFAULT_FIELDS) {
+    if (artist[k] && String(artist[k]).trim()) out[k] = artist[k];
+  }
+  // Fall back to the artist's legacy contact fields when the advance-specific
+  // ones aren't filled in.
+  if (!out.advanceContact && artist.contactName) out.advanceContact = artist.contactName;
+  if (!out.advanceEmail   && artist.contactEmail) out.advanceEmail  = artist.contactEmail;
+  if (!out.advancePhone   && artist.contactPhone) out.advancePhone  = artist.contactPhone;
+  return out;
+}
+
+// Enriched GET /api/advancing — each row gets `artistDefaults` and `artistId`
+// so the UI can show artist-level fallbacks without a second fetch.
+app.get('/api/advancing', requireAuth, async (req, res) => {
+  try {
+    const [advances, shows, artists] = await Promise.all([
+      sheets.getRows(config.googleSheets.sheets.advancing),
+      sheets.getRows(config.googleSheets.sheets.shows),
+      sheets.getRows(config.googleSheets.sheets.artists).catch(() => []),
+    ]);
+    const showMap = new Map(shows.map(s => [s.id, s]));
+    const data = advances.map(a => {
+      const show   = showMap.get(a.showId);
+      const artist = findArtistForShow(show, artists);
+      return {
+        ...a,
+        artistId:       artist?.id || '',
+        artistName:     artist?.name || '',
+        artistDefaults: pickArtistDefaults(artist),
+      };
+    });
+    res.json({ success: true, data });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 crudRoutes(app, '/api/advancing',       'advancing', ['admin','production_manager','promoter','venue_management']);
 crudRoutes(app, '/api/schedule',        'schedule');
 crudRoutes(app, '/api/labor',           'labor',     ['admin','production_manager'], { afterCreate: notifyShiftAssigned });
@@ -419,7 +488,7 @@ crudRoutes(app, '/api/vendors',         'vendors');
 crudRoutes(app, '/api/vendor-bookings', 'vendorBookings');
 crudRoutes(app, '/api/settlement',      'settlement');
 crudRoutes(app, '/api/unavailability',  'unavailability', ['admin','production_manager']);
-crudRoutes(app, '/api/artists',         'artists',        ['admin','production_manager'], { afterCreate: (row) => ensureArtistFolder(row.id) });
+crudRoutes(app, '/api/artists',         'artists',        ['admin','production_manager','promoter'], { afterCreate: (row) => ensureArtistFolder(row.id) });
 // Note: artist-documents writes go through the upload endpoint below (which handles Drive too).
 // We expose only GET via crudRoutes-equivalent below to avoid orphaning Drive files on direct deletes.
 
@@ -959,6 +1028,136 @@ app.post('/api/advancing/:id/accept-extraction',
   }
 );
 
+// ── Run-of-Show / Day Sheet extractor ───────────────────────────────────────
+// POST /api/schedule/extract  body: { showId }
+// Scans emails linked to the show (and artist) that look like a ROS or day
+// sheet, parses the timed lines, and returns proposed schedule items. Does NOT
+// write to the schedule sheet — the UI reviews + accepts.
+app.post('/api/schedule/extract', requireAuth, requireRole('admin','production_manager','promoter'), async (req, res) => {
+  try {
+    const { showId } = req.body || {};
+    if (!showId) return res.status(400).json({ success: false, message: 'showId required' });
+
+    const [shows, artists] = await Promise.all([
+      sheets.getRows(config.googleSheets.sheets.shows),
+      sheets.getRows(config.googleSheets.sheets.artists).catch(() => []),
+    ]);
+    const show = shows.find(s => s.id === showId);
+    if (!show) return res.status(404).json({ success: false, message: 'Show not found' });
+    const artist = findArtistForShow(show, artists);
+
+    // Gather every email linked to the show OR to the artist
+    const storedEmails = await getStoredEmails();
+    const linked = storedEmails.filter(e =>
+      (e.showId   && e.showId   === showId) ||
+      (artist && e.artistId && e.artistId === artist.id)
+    );
+    // Score-filter to schedule-looking emails first, then take the most recent ~20
+    // so we don't burn Gmail quota on the entire mailbox.
+    const candidates = linked
+      .map(e => ({ e, score: ((e.subject || '') + ' ' + (e.snippet || '')).toLowerCase() }))
+      .filter(({ score }) => /\b(ros|run of show|day sheet|daysheet|schedule|itinerary|timeline)\b/.test(score))
+      .map(({ e }) => e)
+      .sort((a, b) => (Date.parse(b.date) || 0) - (Date.parse(a.date) || 0))
+      .slice(0, 20);
+
+    // Pull full bodies (best-effort) so the parser has real lines to work with.
+    const fullEmails = [];
+    if (gmail.isConfigured() && candidates.length) {
+      const picked = await pickGmailClient(req).catch(() => null);
+      const client = picked?.client;
+      for (const e of candidates) {
+        try {
+          const msg = await gmail.getMessage(e.gmailMessageId, client);
+          const parsed = gmail.parseMessage(msg);
+          fullEmails.push({
+            gmailMessageId: e.gmailMessageId,
+            subject:        parsed.subject || e.subject,
+            from:           parsed.from    || e.from,
+            date:           parsed.date    || e.date,
+            snippet:        e.snippet,
+            textBody:       parsed.textBody,
+            htmlBody:       parsed.htmlBody,
+            direction:      e.direction,
+          });
+        } catch {
+          fullEmails.push({ ...e }); // fall back to snippet-only
+        }
+      }
+    } else {
+      fullEmails.push(...candidates);
+    }
+
+    const result = bot.extractSchedule(fullEmails);
+    res.json({
+      success: true,
+      showId,
+      artistId:   artist?.id   || '',
+      artistName: artist?.name || '',
+      linkedEmailCount: linked.length,
+      candidateCount:   candidates.length,
+      ...result,
+    });
+  } catch (err) {
+    console.error('Schedule extract error:', err.message);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// POST /api/schedule/apply  body: { showId, items: [{time,label,responsible,notes,stage?}], replaceExisting?: bool }
+// Writes accepted schedule items to the schedule sheet. When replaceExisting
+// is true, every existing schedule row for the show is deleted first so the
+// imported day sheet becomes the canonical timeline.
+app.post('/api/schedule/apply', requireAuth, requireRole('admin','production_manager','promoter'), async (req, res) => {
+  try {
+    const { showId, items, replaceExisting } = req.body || {};
+    if (!showId) return res.status(400).json({ success: false, message: 'showId required' });
+    if (!Array.isArray(items) || items.length === 0)
+      return res.status(400).json({ success: false, message: 'items[] required' });
+
+    const shows = await sheets.getRows(config.googleSheets.sheets.shows);
+    const show = shows.find(s => s.id === showId);
+    if (!show) return res.status(404).json({ success: false, message: 'Show not found' });
+    const showName = `${show.date || ''} \u2014 ${show.artist || show.eventName || ''}`.trim();
+    const stage = show.stage || 'inside';
+
+    let deleted = 0;
+    if (replaceExisting) {
+      const existing = await sheets.getRows(config.googleSheets.sheets.schedule);
+      const mine = existing.filter(r => r.showId === showId);
+      for (const r of mine) {
+        try {
+          await sheets.deleteRowById(config.googleSheets.sheets.schedule, r.id);
+          deleted++;
+        } catch (e) { console.warn('schedule delete failed', r.id, e.message); }
+      }
+    }
+
+    const rows = items.map((it, i) => ({
+      id:          `${Date.now()}${i}${Math.random().toString(36).slice(2, 5)}`,
+      showId,
+      showName,
+      stage:       it.stage || stage,
+      date:        show.date || '',
+      eventType:   'time',
+      label:       String(it.label || '').slice(0, 200),
+      time:        String(it.time  || '').slice(0, 8),
+      duration:    '',
+      responsible: String(it.responsible || '').slice(0, 80),
+      notes:       String(it.notes       || '').slice(0, 400),
+      createdAt:   new Date().toISOString(),
+    })).filter(r => r.label && r.time);
+
+    if (rows.length === 0) return res.status(400).json({ success: false, message: 'No valid items to apply' });
+
+    await sheets.appendRows(config.googleSheets.sheets.schedule, rows);
+    res.json({ success: true, applied: rows.length, deleted });
+  } catch (err) {
+    console.error('Schedule apply error:', err.message);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 // ── Production Notes — send via Gmail ────────────────────────────────────────
 app.post('/api/production-notes/send', requireAuth, async (req, res) => {
   if (!gmail.isConfigured())
@@ -1211,6 +1410,171 @@ app.delete('/api/artist-documents/:id',
   }
 );
 
+// POST /api/artists/:id/promote-from-advance
+// Copy production-defaults fields from an Advancing record up to the artist.
+// Body: { advanceId, fields: ['riderNotes','productionNeeds',...] }
+// Only the listed fields are written; anything not in ARTIST_DEFAULT_FIELDS is ignored.
+app.post('/api/artists/:id/promote-from-advance',
+  requireAuth, requireRole('admin','production_manager'),
+  async (req, res) => {
+    try {
+      const { advanceId, fields } = req.body || {};
+      if (!advanceId || !Array.isArray(fields) || fields.length === 0)
+        return res.status(400).json({ success: false, message: 'advanceId and fields[] required' });
+
+      const [advances, artists] = await Promise.all([
+        sheets.getRows(config.googleSheets.sheets.advancing),
+        sheets.getRows(config.googleSheets.sheets.artists),
+      ]);
+      const adv    = advances.find(a => a.id === advanceId);
+      const artist = artists.find(a => a.id === req.params.id);
+      if (!adv)    return res.status(404).json({ success: false, message: 'Advance record not found' });
+      if (!artist) return res.status(404).json({ success: false, message: 'Artist not found' });
+
+      const updates = {};
+      for (const k of fields) {
+        if (!ARTIST_DEFAULT_FIELDS.includes(k)) continue;
+        if (adv[k] !== undefined && String(adv[k]).trim()) updates[k] = adv[k];
+      }
+      if (Object.keys(updates).length === 0)
+        return res.json({ success: true, updated: 0, message: 'Nothing to promote.' });
+
+      await sheets.updateRowById(config.googleSheets.sheets.artists, req.params.id, updates);
+      res.json({ success: true, updated: Object.keys(updates).length, fields: updates });
+    } catch (err) {
+      console.error('Promote-to-artist error:', err.message);
+      res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
+
+// POST /api/shows/:id/migrate-attachments-to-artist
+// Move every file currently in the show's Drive folder into the matched
+// artist's folder, and record an ArtistDocuments row for each so the file
+// appears in the artist history (still tagged with this show).
+async function migrateOneShowToArtist(show, artists, drive, uploadedBy) {
+  if (!show || !show.driveFolderId) return { skipped: 'no-folder' };
+  const artist = findArtistForShow(show, artists);
+  if (!artist) return { skipped: 'no-artist-match' };
+
+  // Make sure artist folder exists
+  const { folderId: artistFolderId } = await ensureArtistFolder(artist.id);
+  if (!artistFolderId) return { skipped: 'artist-folder-failed' };
+
+  // List files in the show folder
+  const listed = await drive.files.list({
+    q: `'${show.driveFolderId}' in parents and trashed = false`,
+    fields: 'files(id,name,mimeType,webViewLink,parents)',
+    pageSize: 200,
+  });
+  const files = listed.data.files || [];
+  if (files.length === 0) return { skipped: 'no-files', artist: artist.id };
+
+  // Avoid double-inserting ArtistDocument rows
+  const existingDocs = await sheets.getRows(config.googleSheets.sheets.artistDocuments);
+  const knownFileIds = new Set(existingDocs.map(d => d.driveFileId).filter(Boolean));
+
+  // Heuristic doc-type classifier based on filename
+  function classifyType(name) {
+    const n = (name || '').toLowerCase();
+    if (/(^|[\s_\-])rider/.test(n) && /hosp/.test(n)) return 'hospitality';
+    if (/hospitality/.test(n))                         return 'hospitality';
+    if (/rider/.test(n))                               return 'rider';
+    if (/stage[\s_\-]?plot/.test(n))                   return 'stagePlot';
+    if (/input[\s_\-]?list|patch/.test(n))             return 'inputList';
+    if (/contract|deal[\s_\-]?memo/.test(n))           return 'contract';
+    if (/w[\s_\-]?9/.test(n))                          return 'w9';
+    return 'other';
+  }
+
+  let moved = 0;
+  for (const f of files) {
+    try {
+      // Move (re-parent) the file: remove the show folder as parent, add the artist folder.
+      const parentsList = (f.parents || []).join(',');
+      await drive.files.update({
+        fileId: f.id,
+        addParents:    artistFolderId,
+        removeParents: parentsList || show.driveFolderId,
+        fields: 'id, parents',
+      });
+      if (!knownFileIds.has(f.id)) {
+        const record = {
+          id:          `${Date.now()}${Math.random().toString(36).slice(2, 6)}`,
+          artistId:    artist.id,
+          artistName:  artist.name || '',
+          name:        f.name,
+          type:        classifyType(f.name),
+          year:        (show.date || '').slice(0, 4),
+          notes:       `Migrated from show folder (${show.date || ''})`,
+          showId:      show.id,
+          showDate:    show.date || '',
+          mimeType:    f.mimeType || 'application/octet-stream',
+          driveFileId: f.id,
+          webViewLink: f.webViewLink || `https://drive.google.com/file/d/${f.id}/view`,
+          uploadedBy:  uploadedBy || 'migration',
+          createdAt:   new Date().toISOString(),
+        };
+        await sheets.appendRow(config.googleSheets.sheets.artistDocuments, record);
+        knownFileIds.add(f.id);
+      }
+      moved++;
+    } catch (err) {
+      console.warn(`[migrate] file ${f.id} (${f.name}) failed: ${err.message}`);
+    }
+  }
+  return { moved, total: files.length, artist: artist.id, artistName: artist.name };
+}
+
+app.post('/api/shows/:id/migrate-attachments-to-artist',
+  requireAuth, requireRole('admin','production_manager'),
+  async (req, res) => {
+    try {
+      const [shows, artists] = await Promise.all([
+        sheets.getRows(config.googleSheets.sheets.shows),
+        sheets.getRows(config.googleSheets.sheets.artists),
+      ]);
+      const show = shows.find(s => s.id === req.params.id);
+      if (!show) return res.status(404).json({ success: false, message: 'Show not found' });
+      const drive = await sheets.getDriveClient();
+      const result = await migrateOneShowToArtist(show, artists, drive, req.user?.name || req.user?.email || '');
+      res.json({ success: true, ...result });
+    } catch (err) {
+      console.error('Migrate attachments error:', err.message);
+      res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
+
+// Admin: migrate every show's folder into its matched artist folder in one shot.
+app.post('/api/admin/migrate-all-show-attachments',
+  requireAuth, requireRole('admin'),
+  async (req, res) => {
+    try {
+      const [shows, artists] = await Promise.all([
+        sheets.getRows(config.googleSheets.sheets.shows),
+        sheets.getRows(config.googleSheets.sheets.artists),
+      ]);
+      const drive = await sheets.getDriveClient();
+      const eligible = shows.filter(s => s.driveFolderId);
+      const summary = { totalShows: eligible.length, migrated: 0, files: 0, skipped: [] };
+      for (const show of eligible) {
+        const r = await migrateOneShowToArtist(show, artists, drive, req.user?.name || req.user?.email || '');
+        if (r.skipped) {
+          summary.skipped.push({ showId: show.id, artist: show.artist || show.eventName || '', reason: r.skipped });
+        } else {
+          summary.migrated++;
+          summary.files += r.moved || 0;
+        }
+      }
+      res.json({ success: true, ...summary });
+    } catch (err) {
+      console.error('Migrate-all error:', err.message);
+      res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
+
 // ── Gmail / Email Integration ────────────────────────────────────────────────
 
 // Helper: safely get stored emails, returns [] if sheet doesn't exist yet
@@ -1300,113 +1664,10 @@ function dateVariants(dateStr) {
   ].map(s => s.toLowerCase());
 }
 
-// Classify a parsed email to the most likely show based on contact email,
-// artist name (incl. registry aliases), event name, and date appearances in
-// subject/snippet/from/to + the email's own send date.
-// Returns { showId, showName, reason } or null if no confident match.
+// Classify a parsed email to the most likely show.
+// Thin wrapper around bot.classifyEmailToShow so server callers don't change.
 function classifyEmailToShow(parsed, shows, advances = [], artists = []) {
-  const haystackParts = [
-    parsed.subject || '',
-    parsed.snippet || '',
-    parsed.from || '',
-    parsed.to || '',
-    parsed.cc || '',
-  ].map(s => String(s).toLowerCase());
-  const hay = haystackParts.join(' \n ');
-  const fromTo = `${parsed.from || ''} ${parsed.to || ''} ${parsed.cc || ''}`.toLowerCase();
-
-  // Parse the email's send date (used to weight shows that are temporally close)
-  let emailDate = null;
-  if (parsed.date) {
-    const d = new Date(parsed.date);
-    if (!isNaN(d)) emailDate = d;
-  }
-
-  // Build a map of show.artist -> alias list (lowercased) from the artist registry
-  // so "goose" matches a show whose artist is "Goose (full band)" via the alias entry.
-  const aliasMap = new Map(); // key: show artist lowercase -> [aliases...]
-  for (const a of artists) {
-    const name = (a.name || '').toLowerCase().trim();
-    if (!name) continue;
-    const aliases = String(a.aliases || '')
-      .split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
-    aliasMap.set(name, aliases);
-  }
-
-  // 1) Advance contact email match (highest confidence)
-  for (const adv of advances) {
-    const ae = (adv.advanceEmail || '').toLowerCase().trim();
-    if (ae && fromTo.includes(ae)) {
-      const show = shows.find(s => s.id === adv.showId);
-      const showName = show
-        ? `${show.date || ''} — ${show.artist || show.eventName || ''}`.trim().replace(/^—\s*/, '')
-        : (adv.showName || '');
-      return { showId: adv.showId, showName, reason: `contact:${ae}` };
-    }
-  }
-
-  // 2) Score every show by artist/event/date hits, longer tokens win.
-  let best = null;
-  for (const s of shows) {
-    let score = 0;
-    const hits = [];
-    const artist = (s.artist || '').toLowerCase().trim();
-    const event  = (s.eventName || '').toLowerCase().trim();
-
-    // Artist hit (direct or via alias from artist registry)
-    let artistHit = false;
-    if (artist && artist.length >= 3 && hay.includes(artist)) {
-      score += 10 + artist.length; hits.push(`artist:${artist}`); artistHit = true;
-    } else if (artist) {
-      const aliases = aliasMap.get(artist) || [];
-      for (const al of aliases) {
-        if (al.length >= 3 && hay.includes(al)) {
-          score += 10 + al.length; hits.push(`alias:${al}`); artistHit = true; break;
-        }
-      }
-    }
-
-    if (event && event.length >= 4 && hay.includes(event)) {
-      score += 8 + event.length; hits.push(`event:${event}`);
-    }
-
-    // Date appearance in subject/snippet
-    let dateInBody = false;
-    if (s.date) {
-      for (const v of dateVariants(s.date)) {
-        if (v.length >= 4 && hay.includes(v)) {
-          score += 5; hits.push(`date:${v}`); dateInBody = true; break;
-        }
-      }
-    }
-
-    // Temporal proximity: email sent within 60 days before or 14 days after the show.
-    // Only a small nudge — used as a tie-breaker between same-named shows in different years.
-    if (emailDate && s.date) {
-      const sd = new Date(s.date);
-      if (!isNaN(sd)) {
-        const diffDays = (sd - emailDate) / 86400000;
-        if (diffDays >= -14 && diffDays <= 60) {
-          score += 3; hits.push('proximity');
-          // If we also matched on artist, treat date proximity as a stronger confirmation
-          if (artistHit) { score += 5; }
-        }
-      }
-    }
-
-    if (score > 0 && (!best || score > best.score)) {
-      best = { score, show: s, reason: hits.join('+'), artistHit, dateInBody };
-    }
-  }
-
-  // Require either a clear artist/event hit OR a date appearance in the body.
-  if (!best) return null;
-  if (!best.artistHit && !best.dateInBody && best.score < 10) return null;
-  if (best.score < 10) return null;
-
-  const s = best.show;
-  const showName = `${s.date || ''} — ${s.artist || s.eventName || ''}`.trim().replace(/^—\s*/, '');
-  return { showId: s.id, showName, reason: best.reason };
+  return bot.classifyEmailToShow(parsed, shows, advances, artists);
 }
 
 // Build a Gmail search clause from a list of label mappings. Returns either
@@ -1500,6 +1761,18 @@ async function syncEmailsForShow(showId, advanceEmail, showName, client = null, 
     return 0;
   }
 
+  // Resolve the show's artist once so every appended row tags it.
+  let artistId = '', artistName = '';
+  try {
+    const [shows, artists] = await Promise.all([
+      sheets.getRows(config.googleSheets.sheets.shows),
+      sheets.getRows(config.googleSheets.sheets.artists).catch(() => []),
+    ]);
+    const show = shows.find(s => s.id === showId);
+    const artist = findArtistForShow(show, artists);
+    if (artist) { artistId = artist.id; artistName = artist.name || ''; }
+  } catch { /* artist lookup is best-effort */ }
+
   // Dedup by source+messageId so the same message in two mailboxes is stored separately.
   if (!storedKeys) {
     const existing = await getStoredEmails();
@@ -1523,6 +1796,8 @@ async function syncEmailsForShow(showId, advanceEmail, showName, client = null, 
         id:              `${Date.now()}${Math.random().toString(36).slice(2, 6)}`,
         showId,
         showName:        showName || '',
+        artistId,
+        artistName,
         gmailThreadId:   parsed.gmailThreadId,
         gmailMessageId:  parsed.gmailMessageId,
         from:            parsed.from,
@@ -1551,13 +1826,15 @@ async function syncEmailsForShow(showId, advanceEmail, showName, client = null, 
   return newCount;
 }
 
-// GET /api/emails?showId=xxx  — list stored emails (with per-user visibility)
+// GET /api/emails?showId=xxx | ?artistId=xxx  — list stored emails
 app.get('/api/emails', requireAuth, async (req, res) => {
   try {
-    const { showId } = req.query;
+    const { showId, artistId } = req.query;
     const all = await getStoredEmails();
     const visible = await filterEmailsByVisibility(all, req.user);
-    const data = showId ? visible.filter(e => e.showId === showId) : visible;
+    let data = visible;
+    if (showId)   data = data.filter(e => e.showId === showId);
+    if (artistId) data = data.filter(e => e.artistId === artistId);
     res.json({ success: true, data });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -1572,26 +1849,47 @@ app.get('/api/emails', requireAuth, async (req, res) => {
 app.post('/api/emails/:id/assign', requireAuth, requireRole('admin', 'production_manager', 'promoter'), async (req, res) => {
   try {
     const { id } = req.params;
-    const { showId, setAdvanceEmail } = req.body;
-    if (!showId) return res.status(400).json({ success: false, message: 'showId required' });
+    const { showId, artistId: bodyArtistId, setAdvanceEmail } = req.body;
+    if (!showId && !bodyArtistId) return res.status(400).json({ success: false, message: 'showId or artistId required' });
 
     // Look up the email row
     const all = await getStoredEmails();
     const email = all.find(e => e.id === id);
     if (!email) return res.status(404).json({ success: false, message: 'Email not found' });
 
-    // Look up the show for its display name
-    const shows = await sheets.getRows(config.googleSheets.sheets.shows);
-    const show = shows.find(s => s.id === showId);
-    if (!show) return res.status(404).json({ success: false, message: 'Show not found' });
-    const showName = `${show.date || ''} — ${show.artist || show.eventName || ''}`.trim();
+    const [shows, artists] = await Promise.all([
+      sheets.getRows(config.googleSheets.sheets.shows),
+      sheets.getRows(config.googleSheets.sheets.artists).catch(() => []),
+    ]);
 
-    // Update the email row
-    await sheets.updateRowById(config.googleSheets.sheets.emails, id, { showId, showName });
+    let updates = {};
+    let show = null;
+    let showName = '';
+    if (showId) {
+      show = shows.find(s => s.id === showId);
+      if (!show) return res.status(404).json({ success: false, message: 'Show not found' });
+      showName = `${show.date || ''} — ${show.artist || show.eventName || ''}`.trim();
+      updates.showId = showId;
+      updates.showName = showName;
+    }
+
+    // Resolve the artist: prefer explicit body value, else derive from the show.
+    let artist = null;
+    if (bodyArtistId) artist = artists.find(a => a.id === bodyArtistId) || null;
+    if (!artist && show) artist = findArtistForShow(show, artists);
+    if (artist) {
+      updates.artistId = artist.id;
+      updates.artistName = artist.name || '';
+    } else if (bodyArtistId && !showId) {
+      // artistId was provided but didn't match — fail loudly
+      return res.status(404).json({ success: false, message: 'Artist not found' });
+    }
+
+    await sheets.updateRowById(config.googleSheets.sheets.emails, id, updates);
 
     // Optionally set advance email on the Advancing record
     let advanceEmailSet = null;
-    if (setAdvanceEmail) {
+    if (setAdvanceEmail && showId) {
       // Extract just the address from "Name <addr@x.com>" if present
       const raw = email.direction === 'outbound' ? email.to : email.from;
       const m = (raw || '').match(/<([^>]+)>/);
@@ -1606,26 +1904,55 @@ app.post('/api/emails/:id/assign', requireAuth, requireRole('admin', 'production
       }
     }
 
-    res.json({ success: true, showId, showName, advanceEmailSet });
+    res.json({
+      success: true,
+      showId: updates.showId || '',
+      showName,
+      artistId: updates.artistId || '',
+      artistName: updates.artistName || '',
+      advanceEmailSet,
+    });
   } catch (err) {
     console.error('Assign email error:', err.message);
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-// POST /api/emails/assign-bulk — link many stored emails to one show in a
-// single request. Body: { ids: string[], showId: string }
-// Returns: { success, showId, showName, linked, missing }
+// POST /api/emails/assign-bulk — link many stored emails to one show OR one
+// artist in a single request. Body: { ids: string[], showId?: string, artistId?: string }
+// At least one of showId / artistId must be provided. If both are supplied,
+// the show's matched artist is used (body artistId is ignored when showId is set).
+// Returns: { success, showId, showName, artistId, artistName, linked, missing }
 app.post('/api/emails/assign-bulk', requireAuth, requireRole('admin', 'production_manager', 'promoter'), async (req, res) => {
   try {
-    const { ids, showId } = req.body || {};
+    const { ids, showId, artistId: bodyArtistId } = req.body || {};
     if (!Array.isArray(ids) || ids.length === 0) return res.status(400).json({ success: false, message: 'ids[] required' });
-    if (!showId) return res.status(400).json({ success: false, message: 'showId required' });
+    if (!showId && !bodyArtistId) return res.status(400).json({ success: false, message: 'showId or artistId required' });
 
-    const shows = await sheets.getRows(config.googleSheets.sheets.shows);
-    const show = shows.find(s => s.id === showId);
-    if (!show) return res.status(404).json({ success: false, message: 'Show not found' });
-    const showName = `${show.date || ''} — ${show.artist || show.eventName || ''}`.trim();
+    const [shows, artists] = await Promise.all([
+      sheets.getRows(config.googleSheets.sheets.shows),
+      sheets.getRows(config.googleSheets.sheets.artists).catch(() => []),
+    ]);
+
+    const updates = {};
+    let show = null, showName = '';
+    if (showId) {
+      show = shows.find(s => s.id === showId);
+      if (!show) return res.status(404).json({ success: false, message: 'Show not found' });
+      showName = `${show.date || ''} — ${show.artist || show.eventName || ''}`.trim();
+      updates.showId = showId;
+      updates.showName = showName;
+    }
+
+    let artist = null;
+    if (bodyArtistId) artist = artists.find(a => a.id === bodyArtistId) || null;
+    if (!artist && show) artist = findArtistForShow(show, artists);
+    if (artist) {
+      updates.artistId = artist.id;
+      updates.artistName = artist.name || '';
+    } else if (bodyArtistId && !showId) {
+      return res.status(404).json({ success: false, message: 'Artist not found' });
+    }
 
     const all = await getStoredEmails();
     const present = new Set(all.map(e => e.id));
@@ -1634,10 +1961,18 @@ app.post('/api/emails/assign-bulk', requireAuth, requireRole('admin', 'productio
 
     // Sheets API has no bulk update; run sequentially to stay under quota.
     for (const id of valid) {
-      await sheets.updateRowById(config.googleSheets.sheets.emails, id, { showId, showName });
+      await sheets.updateRowById(config.googleSheets.sheets.emails, id, updates);
     }
 
-    res.json({ success: true, showId, showName, linked: valid.length, missing });
+    res.json({
+      success: true,
+      showId: updates.showId || '',
+      showName,
+      artistId: updates.artistId || '',
+      artistName: updates.artistName || '',
+      linked: valid.length,
+      missing,
+    });
   } catch (err) {
     console.error('Bulk assign email error:', err.message);
     res.status(500).json({ success: false, message: err.message });
@@ -1673,20 +2008,27 @@ app.post('/api/emails/relink-all', requireAuth, requireRole('admin', 'production
         date:    row.date    || '',
       };
       const match = classifyEmailToShow(parsed, shows, advances, artists);
-      const targetShowId   = match?.showId   || '';
-      const targetShowName = match?.showName || '';
+      const targetShowId     = match?.showId     || '';
+      const targetShowName   = match?.showName   || '';
+      const targetArtistId   = match?.artistId   || '';
+      const targetArtistName = match?.artistName || '';
 
       if (mode === 'fill' && had) { unchanged++; continue; }
 
-      const changed = (row.showId || '') !== targetShowId || (row.showName || '') !== targetShowName;
+      const changed = (row.showId     || '') !== targetShowId
+                    || (row.showName   || '') !== targetShowName
+                    || (row.artistId   || '') !== targetArtistId
+                    || (row.artistName || '') !== targetArtistName;
       if (!changed) { unchanged++; continue; }
 
       try {
         await sheets.updateRowById(config.googleSheets.sheets.emails, row.id, {
-          showId:   targetShowId,
-          showName: targetShowName,
+          showId:     targetShowId,
+          showName:   targetShowName,
+          artistId:   targetArtistId,
+          artistName: targetArtistName,
         });
-        if (targetShowId) linked++;
+        if (targetShowId || targetArtistId) linked++;
         else if (had) cleared++;
       } catch (e) {
         console.error('relink-all row update failed', row.id, e.message);
@@ -1696,6 +2038,96 @@ app.post('/api/emails/relink-all', requireAuth, requireRole('admin', 'production
     res.json({ success: true, processed, linked, cleared, unchanged, mode });
   } catch (err) {
     console.error('relink-all error:', err.message);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// GET /api/emails/suggest-links  — let the bot suggest a show for every
+// currently-unlinked stored email. Read-only: returns suggestions for the
+// UI to display so the user can accept/reject in bulk.
+// Query: ?minConfidence=high|medium|low (default 'medium')
+//        ?fetchBody=1                  (fetch full Gmail body for the top 50
+//                                       suggestions so context drives matches
+//                                       — slower; default off)
+// Returns: { suggestions: [{ emailId, subject, from, date, snippet,
+//             suggestion: { showId, showName, confidence, reason, score } }] }
+app.get('/api/emails/suggest-links', requireAuth, async (req, res) => {
+  try {
+    const minConf = String(req.query.minConfidence || 'medium').toLowerCase();
+    const fetchBody = req.query.fetchBody === '1' || req.query.fetchBody === 'true';
+    const order = { low: 1, medium: 2, high: 3 };
+    const threshold = order[minConf] || 2;
+
+    const [allEmails, shows, advances, artists] = await Promise.all([
+      getStoredEmails(),
+      sheets.getRows(config.googleSheets.sheets.shows),
+      sheets.getRows(config.googleSheets.sheets.advancing),
+      sheets.getRows(config.googleSheets.sheets.artists).catch(() => []),
+    ]);
+    const visible  = await filterEmailsByVisibility(allEmails, req.user);
+    const unlinked = visible.filter(e => !e.showId);
+
+    // Optional: pull full body for the most recent unlinked messages to give
+    // the bot real "context" beyond the 300-char snippet.
+    const enriched = new Map(); // emailId -> { textBody, htmlBody }
+    if (fetchBody) {
+      const picked = await pickGmailClient(req);
+      if (picked) {
+        const top = [...unlinked]
+          .sort((a, b) => new Date(b.date) - new Date(a.date))
+          .slice(0, 50);
+        for (const e of top) {
+          try {
+            const msg = await gmail.getMessage(e.gmailMessageId, picked.client);
+            const parsed = gmail.parseMessage(msg);
+            enriched.set(e.id, { textBody: parsed.textBody, htmlBody: parsed.htmlBody });
+          } catch { /* skip on per-message failure */ }
+        }
+      }
+    }
+
+    const suggestions = [];
+    for (const e of unlinked) {
+      const extra = enriched.get(e.id) || {};
+      const parsed = {
+        subject: e.subject || '',
+        snippet: e.snippet || '',
+        from:    e.from    || '',
+        to:      e.to      || '',
+        cc:      e.cc      || '',
+        date:    e.date    || '',
+        textBody: extra.textBody || '',
+        htmlBody: extra.htmlBody || '',
+      };
+      const match = bot.classifyEmailToShow(parsed, shows, advances, artists);
+      if (!match) continue;
+      const conf = order[match.confidence] || 1;
+      if (conf < threshold) continue;
+      suggestions.push({
+        emailId: e.id,
+        subject: e.subject,
+        from:    e.from,
+        date:    e.date,
+        snippet: e.snippet,
+        showName: e.showName || '',
+        suggestion: match,
+      });
+    }
+    // Sort: highest confidence first, then most recent
+    suggestions.sort((a, b) => {
+      const cd = (order[b.suggestion.confidence] || 0) - (order[a.suggestion.confidence] || 0);
+      if (cd !== 0) return cd;
+      return new Date(b.date) - new Date(a.date);
+    });
+    res.json({
+      success: true,
+      total: unlinked.length,
+      suggestionCount: suggestions.length,
+      bodyEnriched: fetchBody,
+      suggestions,
+    });
+  } catch (err) {
+    console.error('suggest-links error:', err.message);
     res.status(500).json({ success: false, message: err.message });
   }
 });
@@ -1835,6 +2267,7 @@ async function runAutoSync() {
     const relevance  = await buildInboxRelevanceFilter();
 
     let grandTotal = 0, grandLinked = 0;
+    const affectedShowIds = new Set();
     for (const user of connected) {
       const tag = user.isHouseMailbox === 'true' ? '🏠 ' : '';
       console.log(`[auto-sync] ${tag}Scanning ${user.gmailEmail || user.username}…`);
@@ -1873,10 +2306,13 @@ async function runAutoSync() {
             if (mapped) match = { showId: mapped.showId, showName: mapped.showName };
           }
           if (match) linked++;
+          if (match?.showId) affectedShowIds.add(match.showId);
           toAppend.push({
             id:             `${Date.now()}${Math.random().toString(36).slice(2, 6)}`,
-            showId:         match?.showId   || '',
-            showName:       match?.showName || '',
+            showId:         match?.showId     || '',
+            showName:       match?.showName   || '',
+            artistId:       match?.artistId   || '',
+            artistName:     match?.artistName || '',
             gmailThreadId:  parsed.gmailThreadId,
             gmailMessageId: parsed.gmailMessageId,
             from:           parsed.from,
@@ -1910,6 +2346,14 @@ async function runAutoSync() {
     }
     if (grandTotal > 0)
       console.log(`[auto-sync] Done — ${grandTotal} new email(s), ${grandLinked} auto-linked across ${connected.length} mailbox(es).`);
+
+    // Run the bot extractors against any advance whose show received new mail.
+    if (affectedShowIds.size > 0) {
+      try {
+        const botRes = await runBotPassForShows([...affectedShowIds]);
+        if (botRes.length) console.log(`[auto-sync] Bot pass: processed ${botRes.length} advance(s).`);
+      } catch (e) { console.error('[auto-sync] bot pass error:', e.message); }
+    }
   } catch (err) {
     console.error('[auto-sync] Error:', err.message);
   }
@@ -1928,10 +2372,15 @@ app.post('/api/emails/sync-inbox', requireAuth, async (req, res) => {
     const labelClause = await buildUserLabelClause(picked.user?.id || '', picked.client);
     const relevance = await buildInboxRelevanceFilter();
     const messageRefs = await gmail.searchEmails(`(in:inbox OR in:sent${labelClause}) ${relevance}`, 150, picked.client);
-    const existing = await getStoredEmails();
+    const [existing, shows, advances, artists] = await Promise.all([
+      getStoredEmails(),
+      sheets.getRows(config.googleSheets.sheets.shows),
+      sheets.getRows(config.googleSheets.sheets.advancing),
+      sheets.getRows(config.googleSheets.sheets.artists).catch(() => []),
+    ]);
     const storedIds = new Set(existing.map(e => e.gmailMessageId));
 
-    let newCount = 0;
+    let newCount = 0, linked = 0;
     for (const ref of messageRefs) {
       if (storedIds.has(ref.id)) continue;
       try {
@@ -1940,11 +2389,19 @@ app.post('/api/emails/sync-inbox', requireAuth, async (req, res) => {
         const sourceEmail = picked.user?.gmailEmail || process.env.GMAIL_USER || '';
         const direction = parsed.from.toLowerCase().includes(sourceEmail.toLowerCase())
           ? 'outbound' : 'inbound';
+        // Prefer an explicit label mapping, otherwise let the bot classify
+        // using subject + body + artist/date context.
+        let match = null;
         const mapped = matchLabelMapping(parsed.labelIds, userMappings);
+        if (mapped) match = { showId: mapped.showId, showName: mapped.showName };
+        else        match = bot.classifyEmailToShow(parsed, shows, advances, artists);
+        if (match) linked++;
         const emailRecord = {
           id:             `${Date.now()}${Math.random().toString(36).slice(2, 6)}`,
-          showId:         mapped?.showId   || '',
-          showName:       mapped?.showName || '',
+          showId:         match?.showId     || '',
+          showName:       match?.showName   || '',
+          artistId:       match?.artistId   || '',
+          artistName:     match?.artistName || '',
           gmailThreadId:  parsed.gmailThreadId,
           gmailMessageId: parsed.gmailMessageId,
           from:           parsed.from,
@@ -1966,7 +2423,7 @@ app.post('/api/emails/sync-inbox', requireAuth, async (req, res) => {
         console.error('Error syncing inbox message', ref.id, e.message);
       }
     }
-    res.json({ success: true, newEmails: newCount, mailbox: picked.source });
+    res.json({ success: true, newEmails: newCount, autoLinked: linked, mailbox: picked.source });
   } catch (err) {
     if (String(err.message || '').includes('invalid_grant'))
       return res.status(401).json({ success: false, message: 'Your Gmail connection has expired. Reconnect in Settings.' });
@@ -2250,74 +2707,224 @@ app.delete('/api/gmail/synced-labels/:id', requireAuth, async (req, res) => {
   } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 });
 
+// Shared helper: sync one user's connected Gmail mailbox into our emails sheet.
+// Returns { ok, reason?, newEmails, autoLinked, affectedShowIds, affectedAdvanceIds }.
+async function syncUserMailbox(userId) {
+  const u = await getUserById(userId);
+  if (!u || !u.gmailRefreshToken)
+    return { ok: false, reason: 'not_connected', newEmails: 0, autoLinked: 0, affectedShowIds: [], affectedAdvanceIds: [] };
+
+  let client;
+  try { client = gmail.getGmailClientForToken(u.gmailRefreshToken); }
+  catch (e) { return { ok: false, reason: 'bad_token', newEmails: 0, autoLinked: 0, affectedShowIds: [], affectedAdvanceIds: [] }; }
+
+  const userMappings = await getLabelMappings(userId);
+  const labelClause  = await buildUserLabelClause(userId, client);
+  const relevance    = await buildInboxRelevanceFilter();
+  let messageRefs = [];
+  try {
+    messageRefs = await gmail.searchEmails(`(in:inbox OR in:sent${labelClause}) ${relevance}`, 150, client);
+  } catch (e) {
+    if (String(e.message || '').includes('invalid_grant'))
+      return { ok: false, reason: 'token_expired', newEmails: 0, autoLinked: 0, affectedShowIds: [], affectedAdvanceIds: [] };
+    throw e;
+  }
+
+  const [existing, shows, advances, artists] = await Promise.all([
+    getStoredEmails(),
+    sheets.getRows(config.googleSheets.sheets.shows),
+    sheets.getRows(config.googleSheets.sheets.advancing),
+    sheets.getRows(config.googleSheets.sheets.artists).catch(() => []),
+  ]);
+  const storedKeys = new Set(existing.map(e => `${e.sourceUserId || ''}|${e.gmailMessageId}`));
+
+  const toAppend = [];
+  const affectedShowIds = new Set();
+  let classified = 0;
+  for (const ref of messageRefs) {
+    if (storedKeys.has(`${userId}|${ref.id}`)) continue;
+    try {
+      const msg = await gmail.getMessage(ref.id, client);
+      const parsed = gmail.parseMessage(msg);
+      const meEmail = (u.gmailEmail || '').toLowerCase();
+      const direction = meEmail && parsed.from.toLowerCase().includes(meEmail) ? 'outbound' : 'inbound';
+      let match = classifyEmailToShow(parsed, shows, advances, artists);
+      if (!match) {
+        const mapped = matchLabelMapping(parsed.labelIds, userMappings);
+        if (mapped) match = { showId: mapped.showId, showName: mapped.showName };
+      }
+      if (match) classified++;
+      if (match?.showId) affectedShowIds.add(match.showId);
+      toAppend.push({
+        id:             `${Date.now()}${Math.random().toString(36).slice(2, 6)}`,
+        showId:         match?.showId     || '',
+        showName:       match?.showName   || '',
+        artistId:       match?.artistId   || '',
+        artistName:     match?.artistName || '',
+        gmailThreadId:  parsed.gmailThreadId,
+        gmailMessageId: parsed.gmailMessageId,
+        from:           parsed.from,
+        to:             parsed.to,
+        cc:             parsed.cc,
+        subject:        parsed.subject,
+        snippet:        (parsed.snippet || '').slice(0, 300),
+        date:           parsed.date,
+        direction,
+        attachmentMeta: JSON.stringify(parsed.attachments),
+        syncedAt:       new Date().toISOString(),
+        sourceUserId:   userId,
+        sourceEmail:    u.gmailEmail || '',
+      });
+      storedKeys.add(`${userId}|${ref.id}`);
+    } catch (e) {
+      console.error('[syncUserMailbox] message error', ref.id, e.message);
+    }
+  }
+  if (toAppend.length) {
+    await sheets.appendRows(config.googleSheets.sheets.emails, toAppend);
+  }
+  const affectedAdvanceIds = advances
+    .filter(a => affectedShowIds.has(a.showId))
+    .map(a => a.id);
+  return {
+    ok: true,
+    newEmails: toAppend.length,
+    autoLinked: classified,
+    affectedShowIds: [...affectedShowIds],
+    affectedAdvanceIds,
+  };
+}
+
+// Shared helper: run the bot (field extractor + schedule extractor) against
+// one advance. Persists results back to the advance row's botExtracted /
+// botSchedule / botLastRun columns.
+async function runBotForAdvance(advance, ctx = {}) {
+  if (!advance) return null;
+  const shows    = ctx.shows    || await sheets.getRows(config.googleSheets.sheets.shows);
+  const artists  = ctx.artists  || await sheets.getRows(config.googleSheets.sheets.artists).catch(() => []);
+  const allEmails = ctx.allEmails || await getStoredEmails();
+  const show     = shows.find(s => s.id === advance.showId);
+  const artist   = show ? findArtistForShow(show, artists) : null;
+
+  // Find emails linked to this show OR its artist.
+  const linked = allEmails.filter(e =>
+    (advance.showId && e.showId === advance.showId) ||
+    (artist?.id && e.artistId === artist.id)
+  );
+  const inbound = linked
+    .filter(e => (e.direction || '').toLowerCase() !== 'outbound')
+    .sort((a, b) => (Date.parse(b.date) || 0) - (Date.parse(a.date) || 0))
+    .slice(0, 30);
+  if (inbound.length === 0) return null;
+
+  // Fetch full bodies via Gmail when possible.
+  const fullEmails = [];
+  if (gmail.isConfigured()) {
+    for (const e of inbound) {
+      try {
+        const msg = await gmail.getMessage(e.gmailMessageId);
+        const parsed = gmail.parseMessage(msg);
+        fullEmails.push({
+          gmailMessageId: e.gmailMessageId,
+          subject:  parsed.subject || e.subject,
+          from:     parsed.from    || e.from,
+          date:     parsed.date    || e.date,
+          snippet:  e.snippet,
+          textBody: parsed.textBody,
+          htmlBody: parsed.htmlBody,
+          direction: e.direction,
+        });
+      } catch { fullEmails.push({ ...e }); }
+    }
+  } else {
+    fullEmails.push(...inbound);
+  }
+
+  const extracted = bot.extractFromEmails(fullEmails);
+  const schedule  = bot.extractSchedule(fullEmails);
+
+  const patch = {
+    botExtracted: JSON.stringify(extracted),
+    botSchedule:  JSON.stringify(schedule),
+    botLastRun:   new Date().toISOString(),
+  };
+  try {
+    await sheets.updateRowById(config.googleSheets.sheets.advancing, advance.id, patch);
+  } catch (e) {
+    console.error(`[runBotForAdvance] persist failed for advance ${advance.id}: ${e.message}`);
+  }
+  return {
+    advanceId: advance.id,
+    showId:    advance.showId,
+    fieldCount: Object.keys(extracted.fields || {}).length,
+    scheduleItemCount: (schedule.items || []).length,
+  };
+}
+
+// Run the bot for every advance attached to a given list of showIds (no-ops
+// when the list is empty). Caps concurrency by running sequentially to stay
+// within Gmail/Sheets rate limits.
+async function runBotPassForShows(showIds = []) {
+  if (!showIds.length) return [];
+  const [shows, artists, advances, allEmails] = await Promise.all([
+    sheets.getRows(config.googleSheets.sheets.shows),
+    sheets.getRows(config.googleSheets.sheets.artists).catch(() => []),
+    sheets.getRows(config.googleSheets.sheets.advancing),
+    getStoredEmails(),
+  ]);
+  const wanted = new Set(showIds);
+  const targets = advances.filter(a => wanted.has(a.showId));
+  const results = [];
+  for (const adv of targets) {
+    try {
+      const r = await runBotForAdvance(adv, { shows, artists, allEmails });
+      if (r) results.push(r);
+    } catch (e) {
+      console.error(`[runBotPassForShows] advance ${adv.id}: ${e.message}`);
+    }
+  }
+  return results;
+}
+
 // POST /api/emails/sync-mine — sync current user's connected mailbox
 app.post('/api/emails/sync-mine', requireAuth, async (req, res) => {
   try {
-    const u = await getUserById(req.user.id);
-    if (!u || !u.gmailRefreshToken)
-      return res.status(400).json({ success: false, message: 'Connect your Gmail first.' });
-    const client = gmail.getGmailClientForToken(u.gmailRefreshToken);
-    const userMappings = await getLabelMappings(req.user.id);
-    const labelClause = await buildUserLabelClause(req.user.id, client);
-    const relevance = await buildInboxRelevanceFilter();
-    const messageRefs = await gmail.searchEmails(`(in:inbox OR in:sent${labelClause}) ${relevance}`, 150, client);
-    const [existing, shows, advances, artists] = await Promise.all([
-      getStoredEmails(),
-      sheets.getRows(config.googleSheets.sheets.shows),
-      sheets.getRows(config.googleSheets.sheets.advancing),
-      sheets.getRows(config.googleSheets.sheets.artists).catch(() => []),
-    ]);
-    // Dedup is per (sourceUserId, gmailMessageId) — the same message in two users' mailboxes
-    // is stored once per user so visibility/threading stays correct.
-    const storedKeys = new Set(existing.map(e => `${e.sourceUserId || ''}|${e.gmailMessageId}`));
-
-    let newCount = 0;
-    let classified = 0;
-    const toAppend = [];
-    for (const ref of messageRefs) {
-      if (storedKeys.has(`${req.user.id}|${ref.id}`)) continue;
-      try {
-        const msg = await gmail.getMessage(ref.id, client);
-        const parsed = gmail.parseMessage(msg);
-        const meEmail = (u.gmailEmail || '').toLowerCase();
-        const direction = parsed.from.toLowerCase().includes(meEmail) ? 'outbound' : 'inbound';
-        let match = classifyEmailToShow(parsed, shows, advances, artists);
-        if (!match) {
-          const mapped = matchLabelMapping(parsed.labelIds, userMappings);
-          if (mapped) match = { showId: mapped.showId, showName: mapped.showName };
-        }
-        if (match) classified++;
-        const emailRecord = {
-          id:             `${Date.now()}${Math.random().toString(36).slice(2, 6)}`,
-          showId:         match?.showId || '',
-          showName:       match?.showName || '',
-          gmailThreadId:  parsed.gmailThreadId,
-          gmailMessageId: parsed.gmailMessageId,
-          from:           parsed.from,
-          to:             parsed.to,
-          cc:             parsed.cc,
-          subject:        parsed.subject,
-          snippet:        (parsed.snippet || '').slice(0, 300),
-          date:           parsed.date,
-          direction,
-          attachmentMeta: JSON.stringify(parsed.attachments),
-          syncedAt:       new Date().toISOString(),
-          sourceUserId:   req.user.id,
-          sourceEmail:    u.gmailEmail || '',
-        };
-        toAppend.push(emailRecord);
-        storedKeys.add(`${req.user.id}|${ref.id}`);
-        newCount++;
-      } catch (e) {
-        console.error('sync-mine message error', ref.id, e.message);
-      }
+    const result = await syncUserMailbox(req.user.id);
+    if (!result.ok) {
+      const code = result.reason === 'not_connected' ? 400 : 401;
+      return res.status(code).json({ success: false, message: result.reason });
     }
-    if (toAppend.length) {
-      await sheets.appendRows(config.googleSheets.sheets.emails, toAppend);
-    }
-    res.json({ success: true, newEmails: newCount, autoLinked: classified });
+    res.json({ success: true, newEmails: result.newEmails, autoLinked: result.autoLinked });
   } catch (err) {
     console.error('sync-mine error:', err.message);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// POST /api/sync/login-kickoff — fired by the client right after login (and
+// on app mount, gated client-side). Syncs the current user's Gmail and runs
+// the bot extractors against any advance whose show received new mail.
+// Designed to be called fire-and-forget; still returns a small summary.
+app.post('/api/sync/login-kickoff', requireAuth, async (req, res) => {
+  const started = Date.now();
+  try {
+    const sync = await syncUserMailbox(req.user.id);
+    let botResults = [];
+    if (sync.ok && sync.affectedShowIds.length) {
+      botResults = await runBotPassForShows(sync.affectedShowIds);
+    }
+    res.json({
+      success: true,
+      gmail:   sync.ok ? 'synced' : sync.reason,
+      newEmails:  sync.newEmails  || 0,
+      autoLinked: sync.autoLinked || 0,
+      botAdvancesProcessed: botResults.length,
+      botFieldsFound:    botResults.reduce((n, r) => n + (r.fieldCount || 0), 0),
+      botScheduleItems:  botResults.reduce((n, r) => n + (r.scheduleItemCount || 0), 0),
+      elapsedMs: Date.now() - started,
+    });
+  } catch (err) {
+    console.error('login-kickoff error:', err.message);
     res.status(500).json({ success: false, message: err.message });
   }
 });

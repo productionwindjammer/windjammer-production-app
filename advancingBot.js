@@ -499,4 +499,441 @@ function extractFromEmails(emails = []) {
   return { fields: out, extractedAt: new Date().toISOString(), emailCount: sorted.length };
 }
 
-module.exports = { analyzeAdvance, stripHtml, htmlToText, extractFromEmails, FIELD_LABELS };
+// ──────────────────────────────────────────────────────────────────────────────
+// EMAIL → SHOW CLASSIFIER
+// Picks the most likely show for a Gmail message using: known advance-contact
+// email, artist name (+ registry aliases), event name, show date appearing in
+// the message, and temporal proximity (email sent close to the show date).
+// When the email's full body is available it's added to the haystack so the
+// classifier can pick up references like "see you in Cleveland on 8/12" that
+// don't make it into the snippet.
+// ──────────────────────────────────────────────────────────────────────────────
+
+function _dateVariants(dateStr) {
+  if (!dateStr) return [];
+  const d = new Date(dateStr);
+  if (isNaN(d)) return [];
+  const months    = ['january','february','march','april','may','june','july','august','september','october','november','december'];
+  const monthsAbb = ['jan','feb','mar','apr','may','jun','jul','aug','sep','sept','oct','nov','dec'];
+  const m  = d.getUTCMonth(), day = d.getUTCDate(), y = d.getUTCFullYear();
+  const pad = n => String(n).padStart(2, '0');
+  return [
+    dateStr.toLowerCase(),
+    `${pad(m+1)}/${pad(day)}/${y}`,
+    `${m+1}/${day}/${y}`,
+    `${m+1}/${day}`,
+    `${months[m]} ${day}`,
+    `${months[m]} ${day}, ${y}`,
+    `${monthsAbb[m]} ${day}`,
+    `${monthsAbb[m]} ${day}, ${y}`,
+    `${day} ${months[m]}`,
+    `${day} ${monthsAbb[m]}`,
+  ].map(s => s.toLowerCase());
+}
+
+/**
+ * @param {Object} parsed   - { subject, snippet, from, to, cc, date, textBody?, htmlBody? }
+ * @param {Array}  shows    - rows from the Shows sheet
+ * @param {Array}  advances - rows from the Advancing sheet
+ * @param {Array}  artists  - rows from the Artists sheet (for aliases)
+ * @returns {{showId, showName, reason, confidence: 'high'|'medium'|'low', score: number}|null}
+ */
+function classifyEmailToShow(parsed, shows, advances = [], artists = []) {
+  // Build the full haystack: headers + snippet + body (if present).
+  // Body is the richest source of "context" — strip HTML so keywords match.
+  let bodyText = '';
+  if (parsed.textBody && parsed.textBody.trim()) {
+    bodyText = parsed.textBody;
+  } else if (parsed.htmlBody && parsed.htmlBody.trim()) {
+    bodyText = htmlToText(parsed.htmlBody);
+  }
+  // Keep haystack bounded — first ~8k chars covers nearly all advance emails
+  // without blowing memory when scanning hundreds of messages.
+  if (bodyText.length > 8000) bodyText = bodyText.slice(0, 8000);
+
+  const haystackParts = [
+    parsed.subject || '',
+    parsed.snippet || '',
+    parsed.from    || '',
+    parsed.to      || '',
+    parsed.cc      || '',
+    bodyText,
+  ].map(s => String(s).toLowerCase());
+  const hay    = haystackParts.join(' \n ');
+  const fromTo = `${parsed.from || ''} ${parsed.to || ''} ${parsed.cc || ''}`.toLowerCase();
+
+  // Parse the email's send date for temporal proximity scoring
+  let emailDate = null;
+  if (parsed.date) {
+    const d = new Date(parsed.date);
+    if (!isNaN(d)) emailDate = d;
+  }
+
+  // Map of show.artist (lowercased) -> alias list (lowercased)
+  const aliasMap = new Map();
+  for (const a of artists) {
+    const name = (a.name || '').toLowerCase().trim();
+    if (!name) continue;
+    const aliases = String(a.aliases || '')
+      .split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+    aliasMap.set(name, aliases);
+  }
+
+  // Helper: resolve a show's artist string to a row in the artist registry.
+  function resolveArtist(artistStr) {
+    if (!artistStr) return null;
+    const key = String(artistStr).trim().toLowerCase();
+    if (!key) return null;
+    for (const a of artists) {
+      const name = String(a.name || '').trim().toLowerCase();
+      if (!name) continue;
+      if (name === key) return a;
+      const aliases = String(a.aliases || '').split(',').map(s => s.trim().toLowerCase());
+      if (aliases.includes(key)) return a;
+      if (key.includes(name) || name.includes(key)) return a;
+    }
+    return null;
+  }
+
+  function withArtist(result, artistStr) {
+    const a = resolveArtist(artistStr);
+    if (a) { result.artistId = a.id; result.artistName = a.name || ''; }
+    return result;
+  }
+
+  // 1) Advance-contact email match (always highest confidence)
+  for (const adv of advances) {
+    const ae = (adv.advanceEmail || '').toLowerCase().trim();
+    if (ae && fromTo.includes(ae)) {
+      const show = shows.find(s => s.id === adv.showId);
+      const showName = show
+        ? `${show.date || ''} — ${show.artist || show.eventName || ''}`.trim().replace(/^—\s*/, '')
+        : (adv.showName || '');
+      return withArtist(
+        { showId: adv.showId, showName, reason: `contact:${ae}`, confidence: 'high', score: 100 },
+        show?.artist || ''
+      );
+    }
+  }
+
+  // 2) Score every show by artist/event/date hits — longer tokens win.
+  let best = null;
+  for (const s of shows) {
+    let score = 0;
+    const hits = [];
+    const artist = (s.artist || '').toLowerCase().trim();
+    const event  = (s.eventName || '').toLowerCase().trim();
+
+    let artistHit = false;
+    if (artist && artist.length >= 3 && hay.includes(artist)) {
+      score += 10 + artist.length; hits.push(`artist:${artist}`); artistHit = true;
+    } else if (artist) {
+      const aliases = aliasMap.get(artist) || [];
+      for (const al of aliases) {
+        if (al.length >= 3 && hay.includes(al)) {
+          score += 10 + al.length; hits.push(`alias:${al}`); artistHit = true; break;
+        }
+      }
+    }
+
+    if (event && event.length >= 4 && hay.includes(event)) {
+      score += 8 + event.length; hits.push(`event:${event}`);
+    }
+
+    let dateInBody = false;
+    if (s.date) {
+      for (const v of _dateVariants(s.date)) {
+        if (v.length >= 4 && hay.includes(v)) {
+          score += 5; hits.push(`date:${v}`); dateInBody = true; break;
+        }
+      }
+    }
+
+    if (emailDate && s.date) {
+      const sd = new Date(s.date);
+      if (!isNaN(sd)) {
+        const diffDays = (sd - emailDate) / 86400000;
+        if (diffDays >= -14 && diffDays <= 60) {
+          score += 3; hits.push('proximity');
+          if (artistHit) score += 5;
+        }
+      }
+    }
+
+    if (score > 0 && (!best || score > best.score)) {
+      best = { score, show: s, reason: hits.join('+'), artistHit, dateInBody };
+    }
+  }
+
+  // 3) Fallback: look for ANY artist in the registry mentioned in the email,
+  //    even if no specific dated show qualifies. Emails about a band that
+  //    isn't on the calendar yet (or that spans multiple shows) still get
+  //    linked to the artist record so the conversation is preserved.
+  function findArtistOnly() {
+    let bestA = null;
+    for (const a of artists) {
+      const name = String(a.name || '').trim().toLowerCase();
+      if (!name || name.length < 3) continue;
+      let hit = null;
+      if (hay.includes(name)) hit = { artist: a, via: name, len: name.length };
+      else {
+        const aliases = String(a.aliases || '').split(',').map(s => s.trim().toLowerCase()).filter(s => s.length >= 3);
+        for (const al of aliases) {
+          if (hay.includes(al)) { hit = { artist: a, via: al, len: al.length }; break; }
+        }
+      }
+      if (hit && (!bestA || hit.len > bestA.len)) bestA = hit;
+    }
+    return bestA;
+  }
+
+  if (!best || (!best.artistHit && !best.dateInBody) || best.score < 10) {
+    const artistOnly = findArtistOnly();
+    if (artistOnly) {
+      // Direct name match is medium confidence; alias-only is low.
+      const aliases = String(artistOnly.artist.aliases || '').toLowerCase();
+      const isPrimary = artistOnly.via === String(artistOnly.artist.name || '').trim().toLowerCase();
+      return {
+        artistId:   artistOnly.artist.id,
+        artistName: artistOnly.artist.name || '',
+        showId:     '',
+        showName:   '',
+        reason:     `artist-only:${artistOnly.via}`,
+        confidence: isPrimary ? 'medium' : 'low',
+        score:      10 + artistOnly.len,
+      };
+    }
+    if (!best) return null;
+    if (best.score < 10) return null;
+  }
+
+  // Confidence: artist + date (or proximity) is high; artist alone is medium;
+  // date or weak signal alone is low (caller can decide to treat as suggestion).
+  let confidence = 'low';
+  if (best.artistHit && (best.dateInBody || best.reason.includes('proximity'))) {
+    confidence = 'high';
+  } else if (best.artistHit) {
+    confidence = 'medium';
+  } else if (best.dateInBody && best.score >= 13) {
+    confidence = 'medium';
+  }
+
+  const s = best.show;
+  const showName = `${s.date || ''} — ${s.artist || s.eventName || ''}`.trim().replace(/^—\s*/, '');
+  return withArtist(
+    { showId: s.id, showName, reason: best.reason, confidence, score: best.score },
+    s.artist || ''
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// SCHEDULE / RUN-OF-SHOW EXTRACTOR
+// Pulls a day-of-show timeline out of emails that look like a ROS / day sheet /
+// schedule / itinerary. Returns an ordered list of { time, label, responsible?,
+// notes?, confidence, source } items the UI can review and apply to /schedule.
+// ──────────────────────────────────────────────────────────────────────────────
+
+// Subject/body keywords that flag an email as schedule-bearing.
+const SCHEDULE_KEYWORDS = [
+  'run of show', 'run-of-show', 'ros',
+  'day sheet', 'daysheet', 'day-sheet',
+  'day of show', 'day-of-show',
+  'schedule', 'itinerary', 'timeline',
+  'show day', 'advance schedule',
+];
+
+// Common responsible-party hints — when one shows up near a line we tag it.
+const RESPONSIBLE_HINTS = [
+  { rx: /\b(stagehand|local crew|loaders?)\b/i,        who: 'Stagehands' },
+  { rx: /\b(audio|sound|foh|monitors?|a1|a2)\b/i,      who: 'Audio' },
+  { rx: /\b(lighting|lx|ld|l1)\b/i,                    who: 'Lighting' },
+  { rx: /\b(video|v1|cam(era)?|projection)\b/i,        who: 'Video' },
+  { rx: /\b(backline|bl|stage tech)\b/i,               who: 'Stage' },
+  { rx: /\b(catering|caterer|meal)\b/i,                who: 'Hospitality' },
+  { rx: /\b(hospitality|green room|dressing room)\b/i, who: 'Hospitality' },
+  { rx: /\b(security|t-shirt|merch)\b/i,               who: 'House' },
+  { rx: /\b(box office|will call|doors?)\b/i,          who: 'FOH' },
+  { rx: /\b(production|prod\b)\b/i,                    who: 'Production' },
+  { rx: /\b(tour|tm|tour manager|artist|band|talent)\b/i, who: 'Tour' },
+];
+
+// Pull a clock time off the front of a line. Returns null when nothing parses.
+// Handles:
+//   "9:00 AM", "9:00am", "09:00", "9 AM", "9pm",
+//   "9:00 - 10:00 AM"  (start is taken),
+//   "12:00 NOON" / "12:00 MIDNIGHT"
+function _parseClockTime(raw) {
+  if (!raw) return null;
+  const s = String(raw).trim();
+  // Try "HH:MM[am|pm]" or "HH[am|pm]" or "HH:MM" (24h)
+  const m = s.match(/^([0-2]?\d)(?::([0-5]\d))?\s*(am|pm|noon|midnight)?\b/i);
+  if (!m) return null;
+  let h  = parseInt(m[1], 10);
+  let mm = m[2] ? parseInt(m[2], 10) : 0;
+  const ap = (m[3] || '').toLowerCase();
+  if (ap === 'noon')     { h = 12; mm = 0; }
+  else if (ap === 'midnight') { h = 0; mm = 0; }
+  else if (ap === 'pm' && h < 12) h += 12;
+  else if (ap === 'am' && h === 12) h = 0;
+  if (h < 0 || h > 23 || mm < 0 || mm > 59) return null;
+  return `${String(h).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+}
+
+// Regex matching a line that begins with a time, separated from the label by
+// space, dash, en/em dash, colon, tab, or pipe. The capture groups give us the
+// raw time string and the rest of the line.
+const LINE_RX = /^[\s>*-]*([0-2]?\d(?::[0-5]\d)?\s*(?:am|pm|noon|midnight)?)\s*[-\u2013\u2014:|\t\s]\s*(.+?)\s*$/i;
+
+function _scoreScheduleEmail(emailLike) {
+  const hay = `${emailLike.subject || ''} ${emailLike.snippet || ''} ${emailLike.textBody || ''}`.toLowerCase();
+  let score = 0;
+  for (const kw of SCHEDULE_KEYWORDS) {
+    if (hay.includes(kw)) score += kw.length >= 8 ? 3 : 2;
+  }
+  // Bonus when the subject itself is labeled as a schedule
+  const subj = String(emailLike.subject || '').toLowerCase();
+  if (/\b(ros|run of show|day sheet|schedule|itinerary)\b/.test(subj)) score += 5;
+  return score;
+}
+
+function _guessResponsible(text) {
+  for (const { rx, who } of RESPONSIBLE_HINTS) {
+    if (rx.test(text)) return who;
+  }
+  return '';
+}
+
+// Pull schedule rows out of one block of text. Returns [{ time, label, responsible, raw }]
+function _parseScheduleBlock(text) {
+  if (!text) return [];
+  const lines = String(text).split(/\r?\n/);
+  const out = [];
+  let lastHHMM = null;
+  for (const rawLine of lines) {
+    const line = rawLine.replace(/\s+/g, ' ').trim();
+    if (!line || line.length > 200) continue;
+    const m = line.match(LINE_RX);
+    if (!m) continue;
+    const time = _parseClockTime(m[1]);
+    if (!time) continue;
+    let label = m[2].trim();
+    // Trim trailing parenthetical-only or trailing dashes
+    label = label.replace(/^[-\u2013\u2014:\s]+/, '').replace(/\s+/g, ' ');
+    if (!label || label.length < 2 || label.length > 120) continue;
+    // Skip if the "label" is actually just another time range
+    if (/^\d{1,2}(:\d{2})?\s*(am|pm)?$/i.test(label)) continue;
+
+    // Crude monotonicity check — schedules generally go forward in time.
+    // If the new time is earlier than the previous one by >12h we probably
+    // crossed into "the next day"; we still accept it but stop boosting score.
+    lastHHMM = time;
+
+    out.push({
+      time,
+      label,
+      responsible: _guessResponsible(label),
+      raw: line,
+    });
+  }
+  return out;
+}
+
+/**
+ * @param {Array}  emails  - [{subject, from, date, snippet, textBody?, htmlBody?, gmailMessageId, direction?}]
+ * @param {Object} [opts]
+ * @param {number} [opts.minScore=2] - minimum schedule-keyword score to consider an email
+ * @returns {{items: Array, sources: Array, scannedCount: number, extractedAt: string}}
+ *   items[i] = { time, label, responsible, notes, confidence, source: {emailId, subject, from, date, quote} }
+ */
+function extractSchedule(emails = [], opts = {}) {
+  const minScore = opts.minScore ?? 2;
+  // Sort newest-first so the freshest schedule wins on time collisions.
+  const sorted = [...emails].sort((a, b) =>
+    (Date.parse(b.date) || 0) - (Date.parse(a.date) || 0)
+  );
+
+  // Per-time-slot bag of candidates: "HH:MM|label-lower" -> candidate
+  const bag = new Map();
+  const sources = [];
+  let scanned = 0;
+
+  for (const e of sorted) {
+    // Skip outbound messages — we want what the tour/promoter sent us.
+    if ((e.direction || '').toLowerCase() === 'outbound') continue;
+
+    const score = _scoreScheduleEmail(e);
+    if (score < minScore) continue;
+    scanned++;
+
+    // Prefer plain text body; otherwise convert HTML.
+    let body = e.textBody && e.textBody.trim()
+      ? e.textBody
+      : (e.htmlBody ? htmlToText(e.htmlBody) : '');
+    if (!body) body = `${e.subject || ''}\n${e.snippet || ''}`;
+    if (body.length > 16000) body = body.slice(0, 16000);
+
+    const rows = _parseScheduleBlock(body);
+    if (rows.length === 0) continue;
+
+    // Email-level confidence: lots of items + strong keywords = high.
+    let conf = 'low';
+    if (rows.length >= 6 && score >= 6) conf = 'high';
+    else if (rows.length >= 3 && score >= 4) conf = 'medium';
+
+    const sourceMeta = {
+      emailId: e.gmailMessageId || e.id || '',
+      subject: e.subject || '',
+      from:    e.from    || '',
+      date:    e.date    || '',
+      itemCount: rows.length,
+      score,
+      confidence: conf,
+    };
+    sources.push(sourceMeta);
+
+    for (const r of rows) {
+      const key = `${r.time}|${r.label.toLowerCase()}`;
+      const candidate = {
+        time:        r.time,
+        label:       r.label,
+        responsible: r.responsible || '',
+        notes:       '',
+        confidence:  conf,
+        source: {
+          emailId: sourceMeta.emailId,
+          subject: sourceMeta.subject,
+          from:    sourceMeta.from,
+          date:    sourceMeta.date,
+          quote:   r.raw.slice(0, 200),
+        },
+      };
+      const prev = bag.get(key);
+      if (!prev || CONF[candidate.confidence] > CONF[prev.confidence]) {
+        bag.set(key, candidate);
+      }
+    }
+  }
+
+  // Final ordering: by clock time, then label
+  const items = [...bag.values()].sort((a, b) => {
+    if (a.time !== b.time) return a.time.localeCompare(b.time);
+    return a.label.localeCompare(b.label);
+  });
+
+  return {
+    items,
+    sources,
+    scannedCount: scanned,
+    extractedAt: new Date().toISOString(),
+  };
+}
+
+module.exports = {
+  analyzeAdvance,
+  stripHtml,
+  htmlToText,
+  extractFromEmails,
+  classifyEmailToShow,
+  extractSchedule,
+  FIELD_LABELS,
+};

@@ -640,6 +640,12 @@ export default function Advancing() {
           }
         >
           <div className="form-grid">
+            {/* Show artist defaults hint at the top of the form */}
+            {editing?.artistDefaults && Object.keys(editing.artistDefaults).length > 0 && (
+              <div style={{gridColumn:'1 / -1',background:'#f0fdf4',border:'1px solid #bbf7d0',borderRadius:6,padding:'0.5rem 0.7rem',fontSize:'0.78rem',color:'#065f46'}}>
+                🎛️ <strong>{editing.artistName}</strong> has artist defaults set for: <em>{Object.keys(editing.artistDefaults).join(', ')}</em>. Leave a field blank to inherit; fill it in to override for this show only.
+              </div>
+            )}
             <div className="form-row">
               <div className="form-group">
                 <label>
@@ -777,6 +783,12 @@ export default function Advancing() {
                 {viewRecord.advanceEmail && <span className="text-muted"> · {viewRecord.advanceEmail}</span>}
               </div>
             )}
+
+            <ArtistDefaultsPanel
+              record={viewRecord}
+              canEdit={['admin','production_manager'].includes(user?.role)}
+              onPromoted={async () => { await load() }}
+            />
 
             {/* ── Bot-extracted from emails (review & accept) ────────────────── */}
             {extractedData?.fields && Object.keys(extractedData.fields).length > 0 && (
@@ -1085,6 +1097,120 @@ export default function Advancing() {
             </div>
           )}
         </Modal>
+      )}
+    </div>
+  )
+}
+
+// ── Artist defaults panel (shown inside the Advance view modal) ───────────
+// Reads `artistDefaults` already attached to the advance record by the server
+// and lets a PM "promote" the current advance's values up to the artist.
+const PROMOTABLE_FIELDS = [
+  { key: 'advanceContact',   label: 'Advance Contact' },
+  { key: 'advanceEmail',     label: 'Advance Email' },
+  { key: 'advancePhone',     label: 'Advance Phone' },
+  { key: 'riderNotes',       label: 'Rider Notes' },
+  { key: 'productionNeeds',  label: 'Production Needs' },
+  { key: 'backlineNotes',    label: 'Backline' },
+  { key: 'hospitalityNotes', label: 'Hospitality' },
+  { key: 'cateringNotes',    label: 'Catering' },
+]
+
+function ArtistDefaultsPanel({ record, canEdit, onPromoted }) {
+  const [promoting, setPromoting] = useState(false)
+  const [picked, setPicked]       = useState({})
+  const [open, setOpen]           = useState(false)
+
+  const artistId   = record?.artistId
+  const artistName = record?.artistName
+  const defaults   = record?.artistDefaults || {}
+
+  // Fields where this advance differs from the artist default (or fills a gap).
+  const diffs = PROMOTABLE_FIELDS
+    .map(f => {
+      const cur = (record?.[f.key] || '').trim()
+      const def = (defaults[f.key]    || '').trim()
+      if (!cur || cur === def) return null
+      return { ...f, cur, def }
+    })
+    .filter(Boolean)
+
+  if (!artistId) {
+    return (
+      <div style={{fontSize:'0.8rem',color:'#92400e',background:'#fffbeb',border:'1px solid #fde68a',padding:'0.5rem 0.75rem',borderRadius:6}}>
+        ⚠ No matching artist in the registry — production defaults can't be inherited. Add this artist on the Artists page to enable defaults.
+      </div>
+    )
+  }
+
+  async function promote() {
+    const fields = Object.keys(picked).filter(k => picked[k])
+    if (!fields.length) return
+    setPromoting(true)
+    try {
+      const r = await api.post(`/artists/${artistId}/promote-from-advance`, { advanceId: record.id, fields })
+      if (r.data?.success) {
+        setPicked({})
+        setOpen(false)
+        await onPromoted?.()
+      } else {
+        alert('Promote failed: ' + (r.data?.message || 'unknown'))
+      }
+    } catch (err) {
+      alert('Promote failed: ' + (err.response?.data?.message || err.message))
+    } finally { setPromoting(false) }
+  }
+
+  const filledDefaults = PROMOTABLE_FIELDS.filter(f => (defaults[f.key] || '').trim())
+
+  return (
+    <div style={{background:'#f0fdf4',border:'1px solid #bbf7d0',borderRadius:8,padding:'0.65rem 0.85rem'}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,flexWrap:'wrap'}}>
+        <div>
+          <strong>🎛️ Artist Defaults</strong>
+          <span className="text-muted" style={{marginLeft:8,fontSize:'0.78rem'}}>
+            inherited from <em>{artistName}</em>
+            {filledDefaults.length > 0
+              ? ` · ${filledDefaults.length} field${filledDefaults.length !== 1 ? 's' : ''} set`
+              : ' · none set yet'}
+          </span>
+        </div>
+        {canEdit && diffs.length > 0 && (
+          <button className="btn btn-ghost btn-sm" onClick={() => setOpen(o => !o)}>
+            ↑ Promote to artist defaults ({diffs.length})
+          </button>
+        )}
+      </div>
+
+      {open && canEdit && (
+        <div style={{marginTop:'0.6rem',background:'#fff',border:'1px solid #d1fae5',borderRadius:6,padding:'0.5rem 0.65rem'}}>
+          <div style={{fontSize:'0.78rem',color:'#374151',marginBottom:6}}>
+            Pick which fields from this advance should become the new default for <strong>{artistName}</strong> on future shows.
+          </div>
+          <div style={{display:'grid',gap:4,marginBottom:8}}>
+            {diffs.map(d => (
+              <label key={d.key} style={{display:'flex',gap:6,alignItems:'flex-start',fontSize:'0.82rem'}}>
+                <input
+                  type="checkbox"
+                  checked={!!picked[d.key]}
+                  onChange={e => setPicked(p => ({ ...p, [d.key]: e.target.checked }))}
+                  style={{marginTop:3}}
+                />
+                <span style={{flex:1}}>
+                  <strong>{d.label}</strong>
+                  <div style={{color:'#065f46'}}>→ <span style={{whiteSpace:'pre-wrap'}}>{d.cur}</span></div>
+                  {d.def && <div style={{color:'#6b7280',fontSize:'0.75rem'}}>was: {d.def}</div>}
+                </span>
+              </label>
+            ))}
+          </div>
+          <div style={{display:'flex',gap:6,justifyContent:'flex-end'}}>
+            <button className="btn btn-ghost btn-sm" onClick={() => { setOpen(false); setPicked({}) }} disabled={promoting}>Cancel</button>
+            <button className="btn btn-primary btn-sm" disabled={promoting || Object.values(picked).every(v => !v)} onClick={promote}>
+              {promoting ? 'Saving…' : 'Promote selected'}
+            </button>
+          </div>
+        </div>
       )}
     </div>
   )

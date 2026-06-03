@@ -45,6 +45,16 @@ export default function Email() {
   const [bulkSubmitting, setBulkSubmitting] = useState(false)
   const [allShowsPickerOpen, setAllShowsPickerOpen] = useState(false)
 
+  // 🤖 Bot suggest-links modal state
+  const [suggestOpen, setSuggestOpen]         = useState(false)
+  const [suggestLoading, setSuggestLoading]   = useState(false)
+  const [suggestRows, setSuggestRows]         = useState([])    // [{emailId, subject, from, date, snippet, suggestion}]
+  const [suggestPicked, setSuggestPicked]     = useState(() => new Set()) // emailIds accepted
+  const [suggestApplying, setSuggestApplying] = useState(false)
+  const [suggestMinConf, setSuggestMinConf]   = useState('medium')
+  const [suggestFetchBody, setSuggestFetchBody] = useState(false)
+  const [suggestMeta, setSuggestMeta]         = useState(null)  // { total, suggestionCount, bodyEnriched }
+
   function toggleSelected(id) {
     setSelectedIds(prev => {
       const next = new Set(prev)
@@ -281,6 +291,89 @@ export default function Email() {
     } catch (err) {
       alert('Re-link failed: ' + (err.response?.data?.message || err.message))
     } finally { setRelinking(false) }
+  }
+
+  // ── Bot: suggest links for currently-unlinked emails ──────────────────────
+  async function openSuggestModal() {
+    setSuggestOpen(true)
+    setSuggestPicked(new Set())
+    setSuggestRows([])
+    setSuggestMeta(null)
+    await loadSuggestions(suggestMinConf, suggestFetchBody)
+  }
+  async function loadSuggestions(minConf, fetchBody) {
+    setSuggestLoading(true)
+    try {
+      const params = new URLSearchParams({ minConfidence: minConf })
+      if (fetchBody) params.set('fetchBody', '1')
+      const res = await api.get(`/emails/suggest-links?${params}`)
+      const rows = res.data.suggestions || []
+      setSuggestRows(rows)
+      setSuggestMeta({
+        total: res.data.total,
+        suggestionCount: res.data.suggestionCount,
+        bodyEnriched: res.data.bodyEnriched,
+      })
+      // Pre-pick all "high" confidence matches
+      setSuggestPicked(new Set(rows.filter(r => r.suggestion.confidence === 'high').map(r => r.emailId)))
+    } catch (err) {
+      alert('Bot suggest failed: ' + (err.response?.data?.message || err.message))
+    } finally { setSuggestLoading(false) }
+  }
+  function toggleSuggestPicked(id) {
+    setSuggestPicked(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
+  }
+  function pickAllSuggested(filter) {
+    setSuggestPicked(new Set(
+      suggestRows.filter(r => !filter || filter(r)).map(r => r.emailId)
+    ))
+  }
+  async function applySuggestions() {
+    if (suggestPicked.size === 0) return
+    setSuggestApplying(true)
+    try {
+      // Group accepted rows by (showId, artistId) so we can use the bulk endpoint.
+      // Artist-only suggestions (no showId) get linked to the artist record only.
+      const groups = new Map() // key -> { showId, artistId, ids }
+      for (const r of suggestRows) {
+        if (!suggestPicked.has(r.emailId)) continue
+        const sid = r.suggestion.showId   || ''
+        const aid = r.suggestion.artistId || ''
+        if (!sid && !aid) continue
+        const key = `${sid}|${aid}`
+        if (!groups.has(key)) groups.set(key, { showId: sid, artistId: aid, ids: [] })
+        groups.get(key).ids.push(r.emailId)
+      }
+      let linkedTotal = 0
+      const linkedNames = []
+      for (const { showId, artistId, ids } of groups.values()) {
+        const body = { ids }
+        if (showId)   body.showId   = showId
+        if (artistId) body.artistId = artistId
+        const res = await api.post('/emails/assign-bulk', body)
+        linkedTotal += res.data.linked || 0
+        const label = res.data.showName || (res.data.artistName ? `${res.data.artistName} (artist)` : '')
+        if (label) linkedNames.push(`${res.data.linked}× ${label}`)
+        // Patch in-memory lists
+        const idSet = new Set(ids)
+        const patch = {
+          showId:     res.data.showId     || '',
+          showName:   res.data.showName   || '',
+          artistId:   res.data.artistId   || '',
+          artistName: res.data.artistName || '',
+        }
+        setInboxEmails(list => list.map(e => idSet.has(e.id) ? { ...e, ...patch } : e))
+        setEmails(list => list.map(e => idSet.has(e.id) ? { ...e, ...patch } : e))
+      }
+      setSuggestOpen(false)
+      alert(`Linked ${linkedTotal} email${linkedTotal !== 1 ? 's' : ''}.\n\n` + linkedNames.join('\n'))
+    } catch (err) {
+      alert('Apply failed: ' + (err.response?.data?.message || err.message))
+    } finally { setSuggestApplying(false) }
   }
 
   function switchToInbox() {
@@ -543,6 +636,12 @@ export default function Email() {
                 </button>
               )}
               {canRelink && (
+                <button className="btn btn-ghost btn-sm" onClick={openSuggestModal}
+                  title="Have the bot look at every unlinked email and suggest a show based on subject, sender, date and body context">
+                  🤖 Suggest links
+                </button>
+              )}
+              {canRelink && (
                 <button className="btn btn-ghost btn-sm" onClick={handleRelinkAll} disabled={relinking}
                   title="Unlink every email and re-match against current shows by date + artist name">
                   {relinking ? '🔗 Re-linking…' : '🔗 Re-link all'}
@@ -609,6 +708,11 @@ export default function Email() {
                         {email.showName}
                       </span>
                     )}
+                    {email.artistName && (
+                      <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 10, background: 'rgba(16,185,129,0.2)', color: '#6ee7b7', marginTop: 4, marginLeft: 4, display: 'inline-block' }} title="Linked to artist record">
+                        🎤 {email.artistName}
+                      </span>
+                    )}
                     <div style={{ marginTop: 6 }}>
                       <EmailAssignControl
                         email={email}
@@ -647,6 +751,15 @@ export default function Email() {
               >
                 {syncingInbox ? '⟳ Syncing…' : '⟳ Sync Gmail'}
               </button>
+              {canRelink && (
+                <button
+                  className="btn btn-ghost btn-sm"
+                  onClick={openSuggestModal}
+                  title="Have the bot look at every unlinked email and suggest a show based on subject, sender, date and body context"
+                >
+                  🤖 Suggest links
+                </button>
+              )}
               {canRelink && (
                 <button
                   className="btn btn-ghost btn-sm"
@@ -720,6 +833,11 @@ export default function Email() {
                               {email.showName && (
                                 <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 10, background: 'rgba(59,130,246,0.2)', color: '#93c5fd' }}>
                                   {email.showName}
+                                </span>
+                              )}
+                              {email.artistName && !email.showName && (
+                                <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 10, background: 'rgba(16,185,129,0.2)', color: '#6ee7b7' }} title="Linked to artist record">
+                                  🎤 {email.artistName}
                                 </span>
                               )}
                               <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.4)', whiteSpace: 'nowrap' }}>
@@ -1019,6 +1137,25 @@ export default function Email() {
       </div>
 
       {/* ── Compose / Reply modal ────────────────────────────────────────────── */}
+      {suggestOpen && (
+        <SuggestLinksModal
+          loading={suggestLoading}
+          applying={suggestApplying}
+          rows={suggestRows}
+          picked={suggestPicked}
+          meta={suggestMeta}
+          minConf={suggestMinConf}
+          fetchBody={suggestFetchBody}
+          onChangeMinConf={(v) => { setSuggestMinConf(v); loadSuggestions(v, suggestFetchBody) }}
+          onChangeFetchBody={(v) => { setSuggestFetchBody(v); loadSuggestions(suggestMinConf, v) }}
+          onToggle={toggleSuggestPicked}
+          onPickAll={() => pickAllSuggested()}
+          onPickHigh={() => pickAllSuggested(r => r.suggestion.confidence === 'high')}
+          onPickNone={() => setSuggestPicked(new Set())}
+          onApply={applySuggestions}
+          onClose={() => setSuggestOpen(false)}
+        />
+      )}
       {allShowsPickerOpen && (
         <AllShowsPicker
           shows={shows}
@@ -1169,6 +1306,122 @@ export default function Email() {
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+// ── Inline component: pick a show to link an inbox email to ────────────────
+function SuggestLinksModal({ loading, applying, rows, picked, meta, minConf, fetchBody,
+  onChangeMinConf, onChangeFetchBody, onToggle, onPickAll, onPickHigh, onPickNone, onApply, onClose }) {
+  const confColor = (c) => c === 'high' ? '#10b981' : c === 'medium' ? '#f59e0b' : '#ef4444'
+  return (
+    <div className="modal-backdrop">
+      <div className="modal modal-lg" style={{ display: 'flex', flexDirection: 'column', maxHeight: '85vh', width: 'min(900px, 95vw)' }}>
+        <div className="modal-header">
+          <h3>🤖 Bot — Suggested email links</h3>
+          <button className="modal-close" onClick={onClose}>×</button>
+        </div>
+        <div className="modal-body" style={{ padding: '10px 16px', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
+          <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.55)', marginBottom: 10 }}>
+            The bot reviewed every unlinked email and matched it to a show using artist name, event name,
+            show date, contact email and (optionally) the email body. Confirm the ones you want to link.
+          </div>
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center', fontSize: 12 }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              Min confidence:
+              <select value={minConf} onChange={(e) => onChangeMinConf(e.target.value)} disabled={loading}>
+                <option value="high">High only</option>
+                <option value="medium">Medium &amp; up</option>
+                <option value="low">All matches</option>
+              </select>
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6 }} title="Slower — fetches the full Gmail body for up to 50 recent unlinked emails so the bot can use richer context">
+              <input type="checkbox" checked={fetchBody} onChange={(e) => onChangeFetchBody(e.target.checked)} disabled={loading} />
+              Use full email body
+            </label>
+            {meta && !loading && (
+              <span style={{ marginLeft: 'auto', color: 'rgba(255,255,255,0.5)' }}>
+                {meta.suggestionCount} match{meta.suggestionCount !== 1 ? 'es' : ''} from {meta.total} unlinked
+              </span>
+            )}
+          </div>
+          <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
+            <button className="btn btn-ghost btn-sm" onClick={onPickHigh} disabled={loading || rows.length === 0}>Select high-confidence</button>
+            <button className="btn btn-ghost btn-sm" onClick={onPickAll}  disabled={loading || rows.length === 0}>Select all</button>
+            <button className="btn btn-ghost btn-sm" onClick={onPickNone} disabled={loading || picked.size === 0}>Clear</button>
+            <span style={{ marginLeft: 'auto', fontSize: 12, color: 'rgba(255,255,255,0.55)' }}>{picked.size} selected</span>
+          </div>
+        </div>
+        <div className="modal-body" style={{ flex: 1, overflowY: 'auto', padding: 8 }}>
+          {loading ? (
+            <div className="loading">Running bot…</div>
+          ) : rows.length === 0 ? (
+            <div className="empty-state" style={{ marginTop: 32 }}>
+              No suggestions at this confidence level. Try lowering the threshold or enable "Use full email body".
+            </div>
+          ) : rows.map(r => {
+            const sel = picked.has(r.emailId)
+            return (
+              <label key={r.emailId} style={{
+                display: 'flex', gap: 10, padding: '10px 12px', cursor: 'pointer',
+                borderRadius: 6, margin: '4px 0',
+                background: sel ? 'rgba(59,130,246,0.10)' : 'transparent',
+                border: '1px solid rgba(255,255,255,0.06)',
+              }}>
+                <input type="checkbox" checked={sel} onChange={() => onToggle(r.emailId)} style={{ marginTop: 4 }} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <span style={{
+                      fontSize: 10, padding: '2px 8px', borderRadius: 10, fontWeight: 700,
+                      background: confColor(r.suggestion.confidence) + '22',
+                      color: confColor(r.suggestion.confidence),
+                      textTransform: 'uppercase', letterSpacing: '0.04em',
+                    }}>
+                      {r.suggestion.confidence}
+                    </span>
+                    {r.suggestion.showName ? (
+                      <span style={{ fontSize: 13, fontWeight: 700 }}>
+                        → {r.suggestion.showName}
+                        {r.suggestion.artistName && <span style={{ fontWeight: 400, color: 'rgba(255,255,255,0.55)', marginLeft: 6 }}>· 🎤 {r.suggestion.artistName}</span>}
+                      </span>
+                    ) : r.suggestion.artistName ? (
+                      <span style={{ fontSize: 13, fontWeight: 700 }}>
+                        → 🎤 {r.suggestion.artistName}
+                        <span style={{ fontWeight: 400, color: 'rgba(255,255,255,0.55)', marginLeft: 6 }}>(artist only — no dated show matched)</span>
+                      </span>
+                    ) : (
+                      <span style={{ fontSize: 13, fontWeight: 700, color: 'rgba(255,255,255,0.5)' }}>→ (no target)</span>
+                    )}
+                    <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.4)', marginLeft: 'auto' }}>
+                      {r.date ? new Date(r.date).toLocaleDateString() : ''}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: 12, marginTop: 4, color: 'rgba(255,255,255,0.85)' }}>
+                    <strong>{r.subject || '(no subject)'}</strong>
+                  </div>
+                  <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.45)', marginTop: 2 }}>
+                    {r.from}
+                  </div>
+                  {r.snippet && (
+                    <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.4)', marginTop: 3, overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>
+                      {r.snippet}
+                    </div>
+                  )}
+                  <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.35)', marginTop: 4, fontFamily: 'monospace' }}>
+                    matched: {r.suggestion.reason}
+                  </div>
+                </div>
+              </label>
+            )
+          })}
+        </div>
+        <div className="modal-footer" style={{ display: 'flex', gap: 8, padding: 12, borderTop: '1px solid rgba(255,255,255,0.08)' }}>
+          <button className="btn btn-ghost" onClick={onClose} disabled={applying}>Cancel</button>
+          <button className="btn btn-primary" onClick={onApply} disabled={applying || picked.size === 0} style={{ marginLeft: 'auto' }}>
+            {applying ? 'Linking…' : `🔗 Link ${picked.size} email${picked.size !== 1 ? 's' : ''}`}
+          </button>
+        </div>
+      </div>
     </div>
   )
 }

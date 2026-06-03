@@ -144,6 +144,9 @@ export default function Settings() {
       {/* ── Notifications ────────────────────────────────────────────── */}
       <NotificationsCard />
 
+      {/* ── Admin tools ─────────────────────────────────────────────── */}
+      {user?.role === 'admin' && <AdminToolsCard />}
+
       {/* ── Change password ────────────────────────────────────────────── */}
       <div className="card">
         <div className="card-header"><div className="card-title">Change password</div></div>
@@ -359,6 +362,64 @@ function NotificationsCard() {
           {msg && <InlineMsg msg={msg} />}
         </>
       )}
+    </div>
+  )
+}
+
+// -- Admin Tools (admin only) ------------------------------------------------
+function AdminToolsCard() {
+  const [migrating, setMigrating] = useState(false)
+  const [result, setResult]       = useState(null)
+  const [error, setError]         = useState(null)
+
+  async function migrate() {
+    if (!confirm("Move every show folder's attachments into the matched artist folder? This relocates files in Google Drive and records each one in the artist library. Existing artist documents are not duplicated.")) return
+    setMigrating(true); setResult(null); setError(null)
+    try {
+      const r = await api.post('/admin/migrate-all-show-attachments')
+      setResult(r.data)
+    } catch (err) {
+      setError(err.response?.data?.message || err.message)
+    } finally { setMigrating(false) }
+  }
+
+  return (
+    <div className="card">
+      <div className="card-header"><div className="card-title">Admin tools</div></div>
+      <div style={{ display: 'grid', gap: 14 }}>
+        <div>
+          <div style={{ fontWeight: 600, marginBottom: 4 }}>Migrate show attachments to artist folders</div>
+          <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 8 }}>
+            One-time backfill: walks every show with a Drive folder, finds the matching artist, and moves files
+            (riders, plots, input lists, etc.) into that artist's permanent folder so future shows inherit them.
+          </div>
+          <button className="btn btn-primary btn-sm" onClick={migrate} disabled={migrating}>
+            {migrating ? 'Migrating...' : 'Run migration'}
+          </button>
+          {result && (
+            <div style={{ marginTop: 10, fontSize: 12 }}>
+              <div style={{ color: 'var(--success)' }}>
+                Migrated {result.files || 0} file(s) across {result.migrated || 0} show(s).
+              </div>
+              {result.skipped?.length > 0 && (
+                <details style={{ marginTop: 6 }}>
+                  <summary style={{ cursor: 'pointer', color: 'var(--text-muted)' }}>
+                    {result.skipped.length} show(s) skipped
+                  </summary>
+                  <ul style={{ margin: '6px 0 0 18px', color: 'var(--text-muted)' }}>
+                    {result.skipped.map((s, i) => (
+                      <li key={i}><code>{s.artist || s.showId}</code> - {s.reason}</li>
+                    ))}
+                  </ul>
+                </details>
+              )}
+            </div>
+          )}
+          {error && (
+            <div style={{ marginTop: 10, fontSize: 12, color: 'var(--danger)' }}>Error: {error}</div>
+          )}
+        </div>
+      </div>
     </div>
   )
 }

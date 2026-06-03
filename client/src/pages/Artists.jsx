@@ -352,6 +352,9 @@ function ArtistDetail({ id }) {
         <div className="card" style={{ padding: 16, marginBottom: 20, whiteSpace: 'pre-wrap' }}>{artist.notes}</div>
       )}
 
+      {/* Production defaults — single source of truth for rider/needs/contact */}
+      <ArtistDefaults artist={artist} canEdit={canEdit} onSaved={load} />
+
       {/* Upload (PM+) */}
       {canEdit && (
         <div className="card" style={{ padding: 16, marginBottom: 20 }}>
@@ -517,6 +520,92 @@ function DocTable({ title, docs, canEdit, onDelete }) {
           </tbody>
         </table>
       </div>
+    </div>
+  )
+}
+
+// ── Artist Production Defaults ────────────────────────────────────────────
+// Editable card on the artist detail page. These values become the fallback
+// for every show featuring this artist; per-show Advancing rows can override
+// any field for a one-off, but the artist row is the source of truth.
+const DEFAULT_FIELDS = [
+  { key: 'advanceContact',   label: 'Advance Contact',  type: 'text' },
+  { key: 'advanceEmail',     label: 'Advance Email',    type: 'email' },
+  { key: 'advancePhone',     label: 'Advance Phone',    type: 'text' },
+  { key: 'riderNotes',       label: 'Rider Notes',      type: 'textarea' },
+  { key: 'productionNeeds',  label: 'Production Needs', type: 'textarea' },
+  { key: 'backlineNotes',    label: 'Backline',         type: 'textarea' },
+  { key: 'hospitalityNotes', label: 'Hospitality',      type: 'textarea' },
+  { key: 'cateringNotes',    label: 'Catering',         type: 'textarea' },
+]
+
+function ArtistDefaults({ artist, canEdit, onSaved }) {
+  const [editing, setEditing] = useState(false)
+  const [form, setForm]       = useState(() => Object.fromEntries(DEFAULT_FIELDS.map(f => [f.key, artist[f.key] || ''])))
+  const [saving, setSaving]   = useState(false)
+
+  useEffect(() => {
+    setForm(Object.fromEntries(DEFAULT_FIELDS.map(f => [f.key, artist[f.key] || ''])))
+  }, [artist.id]) // eslint-disable-line
+
+  const filled = DEFAULT_FIELDS.filter(f => (artist[f.key] || '').trim())
+
+  async function save() {
+    setSaving(true)
+    try {
+      await api.put(`/artists/${artist.id}`, form)
+      setEditing(false)
+      await onSaved?.()
+    } catch (err) {
+      alert('Save failed: ' + (err.response?.data?.message || err.message))
+    } finally { setSaving(false) }
+  }
+
+  return (
+    <div className="card" style={{ padding: 16, marginBottom: 20 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, flexWrap: 'wrap', gap: 8 }}>
+        <h3 style={{ margin: 0 }}>
+          🎛️ Production Defaults
+          <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 400, color: 'rgba(255,255,255,0.5)' }}>
+            Fallback for every show — per-show Advancing rows can override.
+          </span>
+        </h3>
+        {canEdit && !editing && (
+          <button className="btn btn-ghost btn-sm" onClick={() => setEditing(true)}>✎ Edit defaults</button>
+        )}
+      </div>
+
+      {!editing ? (
+        filled.length === 0 ? (
+          <div style={{ fontSize: 13, color: 'rgba(255,255,255,0.5)', fontStyle: 'italic' }}>
+            No defaults set. {canEdit && 'Click "Edit defaults" to add rider, production needs, and contact info that every show will inherit.'}
+          </div>
+        ) : (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 12 }}>
+            {filled.map(f => (
+              <div key={f.key}>
+                <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'rgba(255,255,255,0.5)', marginBottom: 3 }}>{f.label}</div>
+                <div style={{ fontSize: 13, whiteSpace: 'pre-wrap' }}>{artist[f.key]}</div>
+              </div>
+            ))}
+          </div>
+        )
+      ) : (
+        <div className="form-grid">
+          {DEFAULT_FIELDS.map(f => (
+            <label key={f.key}>{f.label}
+              {f.type === 'textarea'
+                ? <textarea rows={2} value={form[f.key]} onChange={e => setForm(s => ({ ...s, [f.key]: e.target.value }))} />
+                : <input type={f.type} value={form[f.key]} onChange={e => setForm(s => ({ ...s, [f.key]: e.target.value }))} />
+              }
+            </label>
+          ))}
+          <div style={{ gridColumn: '1 / -1', display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+            <button className="btn btn-ghost" onClick={() => { setEditing(false); setForm(Object.fromEntries(DEFAULT_FIELDS.map(f => [f.key, artist[f.key] || '']))) }} disabled={saving}>Cancel</button>
+            <button className="btn btn-primary" onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save defaults'}</button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
