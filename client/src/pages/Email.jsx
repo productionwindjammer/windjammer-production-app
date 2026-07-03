@@ -44,6 +44,7 @@ export default function Email() {
   const [bulkShowPast, setBulkShowPast] = useState(false)
   const [bulkSubmitting, setBulkSubmitting] = useState(false)
   const [allShowsPickerOpen, setAllShowsPickerOpen] = useState(false)
+  const [sidebarShowPast, setSidebarShowPast] = useState(false)
 
   // 🤖 Bot suggest-links modal state
   const [suggestOpen, setSuggestOpen]         = useState(false)
@@ -512,6 +513,14 @@ export default function Email() {
   // ── Render ──────────────────────────────────────────────────────────────────
   if (loading) return <div className="loading">Loading…</div>
 
+  const todayMs = (() => { const d = new Date(); d.setHours(0,0,0,0); return d.getTime() })()
+  const visibleAdvances = sidebarShowPast ? advances : advances.filter(adv => {
+    const s = shows.find(x => x.id === adv.showId)
+    if (!s?.date) return true
+    const d = new Date(s.date + 'T12:00:00').getTime()
+    return d >= todayMs
+  })
+
   return (
     <div style={{ display: 'flex', gap: 0, height: 'calc(100vh - 80px)', overflow: 'hidden' }}>
 
@@ -567,11 +576,19 @@ export default function Email() {
 
         <div style={{ borderBottom: '1px solid rgba(255,255,255,0.06)', margin: '4px 0' }} />
 
-        {advances.length === 0 && (
+        <label style={{
+          display:'flex', alignItems:'center', gap:6, padding:'6px 16px',
+          fontSize:11, color:'rgba(255,255,255,0.5)', cursor:'pointer',
+        }}>
+          <input type="checkbox" checked={sidebarShowPast} onChange={e => setSidebarShowPast(e.target.checked)} />
+          Show past shows
+        </label>
+
+        {visibleAdvances.length === 0 && (
           <div className="empty-state" style={{ margin: 16 }}>No advance records yet</div>
         )}
 
-        {advances.map(adv => {
+        {visibleAdvances.map(adv => {
           const isSelected = viewMode === 'show' && selected?.id === adv.id
           const emailCount = emails.length // only accurate when this show is selected
           return (
