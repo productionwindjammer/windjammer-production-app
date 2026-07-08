@@ -204,28 +204,49 @@ export default function ShowDetail() {
   }
 
   // ── Documents (riders / stage plots / input lists / etc.) ─────────────────
-  // Match the show's headliner against the Artist Registry.
-  const artistId = useMemo(() => {
-    if (!show || !artists?.length) return ''
-    const name = (show.artist || '').trim().toLowerCase()
-    if (!name) return ''
-    const hit = artists.find(a => {
-      if ((a.name || '').trim().toLowerCase() === name) return true
-      const aliases = String(a.aliases || '').split(',').map(s => s.trim().toLowerCase())
-      return aliases.includes(name)
-    })
-    return hit?.id || ''
+  // Match every artist on the bill (headliner + supports) against the Artist
+  // Registry so documents from support acts show up too.
+  const artistMatches = useMemo(() => {
+    if (!show || !artists?.length) return []
+    const findByName = (raw) => {
+      const name = (raw || '').trim().toLowerCase()
+      if (!name) return null
+      return artists.find(a => {
+        if ((a.name || '').trim().toLowerCase() === name) return true
+        const aliases = String(a.aliases || '').split(',').map(s => s.trim().toLowerCase())
+        return aliases.includes(name)
+      }) || null
+    }
+    const results = []
+    const seen = new Set()
+    const headliner = findByName(show.artist)
+    if (headliner) { results.push({ id: headliner.id, name: headliner.name, isHeadliner: true }); seen.add(headliner.id) }
+    const supportNames = String(show.support || '').split(',').map(s => s.trim()).filter(Boolean)
+    for (const raw of supportNames) {
+      const hit = findByName(raw)
+      if (hit && !seen.has(hit.id)) { results.push({ id: hit.id, name: hit.name, isHeadliner: false }); seen.add(hit.id) }
+    }
+    return results
   }, [show, artists])
 
-  async function reloadDocs(aid = artistId) {
-    if (!aid) { setDocs([]); return }
+  // Headliner artistId (kept for legacy call sites: upload default, create-registry, etc.)
+  const artistId = artistMatches.find(a => a.isHeadliner)?.id || artistMatches[0]?.id || ''
+
+  async function reloadDocs() {
+    if (artistMatches.length === 0) { setDocs([]); return }
     try {
-      const r = await api.get(`/artists/${aid}/documents`)
-      setDocs(r.data.data || [])
+      const results = await Promise.all(
+        artistMatches.map(a =>
+          api.get(`/artists/${a.id}/documents`)
+            .then(r => (r.data.data || []).map(d => ({ ...d, artistId: a.id, artistName: a.name, isHeadlinerDoc: a.isHeadliner })))
+            .catch(() => [])
+        )
+      )
+      setDocs(results.flat())
     } catch { setDocs([]) }
   }
 
-  useEffect(() => { reloadDocs(artistId) }, [artistId]) // eslint-disable-line
+  useEffect(() => { reloadDocs() }, [artistMatches.map(a => a.id).join('|')]) // eslint-disable-line
 
   async function ensureArtistRegistry() {
     if (!show?.artist) { alert('This show has no headliner name set. Edit the show and add one first.'); return }
@@ -240,7 +261,7 @@ export default function ShowDetail() {
       const created = res.data?.data
       const list = (await api.get('/artists')).data.data || []
       setArtists(list)
-      if (created?.id) await reloadDocs(created.id)
+      if (created?.id) await reloadDocs()
     } catch (err) {
       alert('Could not create artist registry entry: ' + (err?.response?.data?.message || err.message))
     } finally { setEnsuringArtist(false) }
@@ -250,12 +271,13 @@ export default function ShowDetail() {
     const file = e.target.files?.[0]
     e.target.value = ''
     if (!file) return
-    if (!artistId) { alert('No artist registry entry for this headliner yet.'); return }
+    const targetArtistId = uploadMeta.artistId || artistId
+    if (!targetArtistId) { alert('No artist registry entry available to upload to.'); return }
     if (file.size > 25 * 1024 * 1024) { alert('Max file size is 25MB.'); return }
     setUploading(true)
     try {
       const data = await fileToBase64(file)
-      await api.post(`/artists/${artistId}/documents`, {
+      await api.post(`/artists/${targetArtistId}/documents`, {
         filename: file.name,
         mimeType: file.type || 'application/octet-stream',
         data,
@@ -265,8 +287,8 @@ export default function ShowDetail() {
         showId:   id,
         showDate: show.date || '',
       })
-      setUploadMeta({ type: 'rider', notes: '' })
-      await reloadDocs(artistId)
+      setUploadMeta(m => ({ ...m, type: 'rider', notes: '' }))
+      await reloadDocs()
     } catch (err) {
       alert('Upload failed: ' + (err?.response?.data?.message || err.message))
     } finally { setUploading(false) }
@@ -274,13 +296,15 @@ export default function ShowDetail() {
 
   async function removeDoc(d) {
     if (!confirm(`Delete "${d.name}"?\n\nThis also removes the file from Drive.`)) return
-    try { await api.delete(`/artist-documents/${d.id}`); await reloadDocs(artistId) }
+    try { await api.delete(`/artist-documents/${d.id}`); await reloadDocs() }
     catch (err) { alert('Delete failed: ' + (err?.response?.data?.message || err.message)) }
   }
 
-  // Docs filed against this specific show (newest first)
+  // All docs from every artist on the bill, newest first.
+  // No longer filtered to `d.showId === id` — users want to see rider/stage-plot
+  // files even when they weren't uploaded through this show's page.
   const showDocs = (docs || [])
-    .filter(d => d.showId === id)
+    .slice()
     .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''))
 
   async function reloadSchedule() {
@@ -1041,6 +1065,20 @@ export default function ShowDetail() {
               {canEditDocs && (
                 <div style={{ padding: 14, background: 'rgba(255,255,255,0.04)', borderRadius: 8, marginBottom: 16 }}>
                   <div className="form-row" style={{ alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                    {artistMatches.length > 1 && (
+                      <label>Artist
+                        <select
+                          value={uploadMeta.artistId || artistId}
+                          onChange={e => setUploadMeta(m => ({ ...m, artistId: e.target.value }))}
+                        >
+                          {artistMatches.map(a => (
+                            <option key={a.id} value={a.id}>
+                              {a.name}{a.isHeadliner ? ' (headliner)' : ''}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    )}
                     <label>Type
                       <select value={uploadMeta.type} onChange={e => setUploadMeta(m => ({ ...m, type: e.target.value }))}>
                         {DOC_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
@@ -1059,23 +1097,21 @@ export default function ShowDetail() {
                     </label>
                   </div>
                   <div style={{ marginTop: 8, fontSize: 12, color: 'rgba(255,255,255,0.5)' }}>
-                    Max 25MB. File is filed under {show.artist}'s registry and tagged to this show ({show.date}).
+                    Max 25MB. File is filed under the selected artist's registry and tagged to this show ({show.date}).
                   </div>
                 </div>
               )}
 
               {showDocs.length === 0 ? (
                 <div className="empty-state" style={{ padding: 24, textAlign: 'center', color: 'rgba(255,255,255,0.55)' }}>
-                  No documents uploaded for this show yet.
-                  <div style={{ fontSize: 12, marginTop: 4 }}>
-                    Older riders &amp; stage plots from previous shows live on the <Link to={`/artists/${artistId}`}>artist page</Link>.
-                  </div>
+                  No documents on file for {artistMatches.map(a => a.name).join(', ') || 'this show'} yet.
                 </div>
               ) : (
                 <div className="table-wrap">
                   <table>
                     <thead>
                       <tr>
+                        <th>Artist</th>
                         <th>Type</th>
                         <th>File</th>
                         <th>Notes</th>
@@ -1086,6 +1122,12 @@ export default function ShowDetail() {
                     <tbody>
                       {showDocs.map(d => (
                         <tr key={d.id}>
+                          <td>
+                            <Link to={`/artists/${d.artistId}`} style={{ fontWeight: 600 }}>
+                              {d.artistName}
+                            </Link>
+                            {d.isHeadlinerDoc && <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.45)' }}>headliner</div>}
+                          </td>
                           <td>{DOC_TYPE_LABEL[d.type] || d.type || 'Other'}</td>
                           <td>
                             <a href={d.webViewLink} target="_blank" rel="noreferrer">{d.name}</a>
@@ -1108,7 +1150,17 @@ export default function ShowDetail() {
               )}
 
               <div style={{ marginTop: 14, fontSize: 12, color: 'rgba(255,255,255,0.45)' }}>
-                See all files for {show.artist} on the <Link to={`/artists/${artistId}`}>artist page →</Link>
+                {artistMatches.length > 0 && (
+                  <>
+                    See all files on:{' '}
+                    {artistMatches.map((a, i) => (
+                      <span key={a.id}>
+                        {i > 0 && ' · '}
+                        <Link to={`/artists/${a.id}`}>{a.name}</Link>
+                      </span>
+                    ))}
+                  </>
+                )}
               </div>
             </>
           )}
