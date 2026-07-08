@@ -54,6 +54,8 @@ export default function Advancing() {
   const [filter, setFilter]       = useState('')
   const [showCompletedPast, setShowCompletedPast] = useState(false)
   const [showPastShows, setShowPastShows] = useState(false)
+  const [selectedIds, setSelectedIds] = useState(new Set())
+  const [bulkDeleting, setBulkDeleting] = useState(false)
 
   // Bot
   const [analyzing, setAnalyzing] = useState(new Set())
@@ -113,7 +115,41 @@ export default function Advancing() {
   async function handleDelete(id) {
     if (!confirm('Delete this advance record?')) return
     await api.delete(`/advancing/${id}`)
+    setSelectedIds(prev => { const n = new Set(prev); n.delete(id); return n })
     await load()
+  }
+
+  function toggleRow(id) {
+    setSelectedIds(prev => {
+      const n = new Set(prev)
+      if (n.has(id)) n.delete(id); else n.add(id)
+      return n
+    })
+  }
+
+  function toggleAllVisible(ids, allChecked) {
+    setSelectedIds(prev => {
+      const n = new Set(prev)
+      if (allChecked) ids.forEach(id => n.delete(id))
+      else ids.forEach(id => n.add(id))
+      return n
+    })
+  }
+
+  async function handleBulkDelete() {
+    const ids = [...selectedIds]
+    if (ids.length === 0) return
+    if (!confirm(`Delete ${ids.length} advance record${ids.length !== 1 ? 's' : ''}? This cannot be undone.`)) return
+    setBulkDeleting(true)
+    try {
+      const results = await Promise.allSettled(ids.map(id => api.delete(`/advancing/${id}`)))
+      const failed = results.filter(r => r.status === 'rejected').length
+      if (failed > 0) alert(`${failed} of ${ids.length} deletions failed.`)
+      setSelectedIds(new Set())
+      await load()
+    } finally {
+      setBulkDeleting(false)
+    }
   }
 
   // ── Bot analysis ────────────────────────────────────────────────────────────
@@ -547,7 +583,18 @@ export default function Advancing() {
           <div className="page-title">Advancing</div>
           <div className="page-subtitle">Pre-show rider requirements, staging and technical needs</div>
         </div>
-        <button className="btn btn-primary" onClick={openAdd}>+ Add Advance</button>
+        <div style={{display:'flex',gap:8}}>
+          {selectedIds.size > 0 && (
+            <button
+              className="btn btn-danger"
+              onClick={handleBulkDelete}
+              disabled={bulkDeleting}
+            >
+              {bulkDeleting ? 'Deleting…' : `Delete ${selectedIds.size} Selected`}
+            </button>
+          )}
+          <button className="btn btn-primary" onClick={openAdd}>+ Add Advance</button>
+        </div>
       </div>
 
       <div className="filter-bar">
@@ -563,11 +610,25 @@ export default function Advancing() {
       </div>
 
       <div className="card">
-        {loading ? <div className="loading">Loading…</div> : (
+        {loading ? <div className="loading">Loading…</div> : (() => {
+          const visibleIds = filtered.map(r => r.id)
+          const allChecked = visibleIds.length > 0 && visibleIds.every(id => selectedIds.has(id))
+          const someChecked = !allChecked && visibleIds.some(id => selectedIds.has(id))
+          return (
           <div className="table-wrap">
             <table>
               <thead>
                 <tr>
+                  <th style={{width:32}}>
+                    <input
+                      type="checkbox"
+                      checked={allChecked}
+                      ref={el => { if (el) el.indeterminate = someChecked }}
+                      onChange={() => toggleAllVisible(visibleIds, allChecked)}
+                      title={allChecked ? 'Deselect all' : 'Select all'}
+                      style={{cursor:'pointer'}}
+                    />
+                  </th>
                   <th>Show</th>
                   <th>Stage</th>
                   <th>Rider</th>
@@ -580,12 +641,21 @@ export default function Advancing() {
               </thead>
               <tbody>
                 {filtered.length === 0 && (
-                  <tr><td colSpan={8}><div className="empty-state">No advance records found</div></td></tr>
+                  <tr><td colSpan={9}><div className="empty-state">No advance records found</div></td></tr>
                 )}
                 {filtered.map(r => {
                   const bot = getBotStatus(r);
+                  const isSelected = selectedIds.has(r.id);
                   return (
-                    <tr key={r.id}>
+                    <tr key={r.id} style={{ background: isSelected ? 'rgba(59,130,246,0.08)' : undefined }}>
+                      <td style={{width:32}} onClick={e => e.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={() => toggleRow(r.id)}
+                          style={{cursor:'pointer'}}
+                        />
+                      </td>
                       <td>
                         <button className="btn btn-link" style={{padding:0,fontWeight:600}} onClick={() => openView(r)}>
                           {r.showName || getShowName(r.showId)}
@@ -637,7 +707,8 @@ export default function Advancing() {
               </tbody>
             </table>
           </div>
-        )}
+          )
+        })()}
       </div>
 
       {modal && (

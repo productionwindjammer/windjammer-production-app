@@ -55,6 +55,8 @@ function ArtistsList() {
   const [editing, setEditing] = useState(null)
   const [form, setForm]       = useState(BLANK_ARTIST)
   const [saving, setSaving]   = useState(false)
+  const [selectedIds, setSelectedIds] = useState(new Set())
+  const [bulkDeleting, setBulkDeleting] = useState(false)
 
   useEffect(() => { load() }, [])
   async function load() {
@@ -95,8 +97,42 @@ function ArtistsList() {
 
   async function remove(a) {
     if (!confirm(`Delete artist "${a.name}"?\n\nThis does NOT delete attached documents — they remain in Drive but lose their registry entry.`)) return
-    try { await api.delete(`/artists/${a.id}`); await load() }
-    catch (err) { alert('Delete failed: ' + (err?.response?.data?.message || err.message)) }
+    try {
+      await api.delete(`/artists/${a.id}`)
+      setSelectedIds(prev => { const n = new Set(prev); n.delete(a.id); return n })
+      await load()
+    } catch (err) { alert('Delete failed: ' + (err?.response?.data?.message || err.message)) }
+  }
+
+  function toggleRow(id) {
+    setSelectedIds(prev => {
+      const n = new Set(prev)
+      if (n.has(id)) n.delete(id); else n.add(id)
+      return n
+    })
+  }
+
+  function toggleAllVisible(ids, allChecked) {
+    setSelectedIds(prev => {
+      const n = new Set(prev)
+      if (allChecked) ids.forEach(id => n.delete(id))
+      else ids.forEach(id => n.add(id))
+      return n
+    })
+  }
+
+  async function handleBulkDelete() {
+    const ids = [...selectedIds]
+    if (ids.length === 0) return
+    if (!confirm(`Delete ${ids.length} artist${ids.length !== 1 ? 's' : ''}?\n\nAttached documents remain in Drive but lose their registry entry. This cannot be undone.`)) return
+    setBulkDeleting(true)
+    try {
+      const results = await Promise.allSettled(ids.map(id => api.delete(`/artists/${id}`)))
+      const failed = results.filter(r => r.status === 'rejected').length
+      if (failed > 0) alert(`${failed} of ${ids.length} deletions failed.`)
+      setSelectedIds(new Set())
+      await load()
+    } finally { setBulkDeleting(false) }
   }
 
   return (
@@ -109,6 +145,15 @@ function ArtistsList() {
             value={search} onChange={e => setSearch(e.target.value)}
             style={{ minWidth: 260 }}
           />
+          {canEdit && selectedIds.size > 0 && (
+            <button
+              className="btn btn-danger"
+              onClick={handleBulkDelete}
+              disabled={bulkDeleting}
+            >
+              {bulkDeleting ? 'Deleting…' : `Delete ${selectedIds.size} Selected`}
+            </button>
+          )}
           {canEdit && <button className="btn btn-primary" onClick={openAdd}>+ Add Artist</button>}
         </div>
       </div>
@@ -117,11 +162,27 @@ function ArtistsList() {
         <div className="card" style={{ padding: 24, textAlign: 'center', color: 'rgba(255,255,255,0.6)' }}>
           No artists yet.{canEdit && ' Click "+ Add Artist" to start the registry.'}
         </div>
-      ) : (
+      ) : (() => {
+        const visibleIds = filtered.map(a => a.id)
+        const allChecked = visibleIds.length > 0 && visibleIds.every(id => selectedIds.has(id))
+        const someChecked = !allChecked && visibleIds.some(id => selectedIds.has(id))
+        return (
         <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
           <table className="data-table" style={{ width: '100%' }}>
             <thead>
               <tr>
+                {canEdit && (
+                  <th style={{ width: 32 }}>
+                    <input
+                      type="checkbox"
+                      checked={allChecked}
+                      ref={el => { if (el) el.indeterminate = someChecked }}
+                      onChange={() => toggleAllVisible(visibleIds, allChecked)}
+                      title={allChecked ? 'Deselect all' : 'Select all'}
+                      style={{cursor:'pointer'}}
+                    />
+                  </th>
+                )}
                 <th>Name</th>
                 <th>Aliases</th>
                 <th>Agency</th>
@@ -130,8 +191,24 @@ function ArtistsList() {
               </tr>
             </thead>
             <tbody>
-              {filtered.map(a => (
-                <tr key={a.id} style={{ cursor: 'pointer' }} onClick={() => navigate(`/artists/${a.id}`)}>
+              {filtered.map(a => {
+                const isSelected = selectedIds.has(a.id)
+                return (
+                <tr
+                  key={a.id}
+                  style={{ cursor: 'pointer', background: isSelected ? 'rgba(59,130,246,0.08)' : undefined }}
+                  onClick={() => navigate(`/artists/${a.id}`)}
+                >
+                  {canEdit && (
+                    <td style={{ width: 32 }} onClick={e => { e.stopPropagation(); toggleRow(a.id) }}>
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={() => {}}
+                        style={{cursor:'pointer'}}
+                      />
+                    </td>
+                  )}
                   <td><strong>{a.name}</strong></td>
                   <td style={{ color: 'rgba(255,255,255,0.6)' }}>{a.aliases}</td>
                   <td>{a.agency}</td>
@@ -146,11 +223,13 @@ function ArtistsList() {
                     </td>
                   )}
                 </tr>
-              ))}
+                )
+              })}
             </tbody>
           </table>
         </div>
-      )}
+        )
+      })()}
 
       {modal && (
         <Modal title={editing ? `Edit ${editing.name}` : 'Add Artist'} onClose={() => setModal(false)}>
