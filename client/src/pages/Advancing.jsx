@@ -627,7 +627,6 @@ export default function Advancing() {
                       <td>
                         <div className="actions-cell">
                           <button className="btn btn-ghost btn-sm" onClick={() => openView(r)}>View</button>
-                          <button className="btn btn-ghost btn-sm" onClick={() => navigate(`/email?showId=${r.showId}`)}>✉️</button>
                           <button className="btn btn-ghost btn-sm" onClick={() => openEdit(r)}>Edit</button>
                           <button className="btn btn-danger btn-sm" onClick={() => handleDelete(r.id)}>Del</button>
                         </div>
@@ -778,7 +777,6 @@ export default function Advancing() {
             <>
               <button className="btn btn-ghost" onClick={() => { setViewRecord(null); setBotResult(null); setExtractedData(null); setExtEdits({}); setAnalyzingView(false); }}>Close</button>
               <button className="btn btn-ghost" onClick={() => { const r = viewRecord; setViewRecord(null); setBotResult(null); setExtractedData(null); setExtEdits({}); setAnalyzingView(false); openEdit(r); }}>Edit</button>
-              <button className="btn btn-ghost" onClick={() => { setViewRecord(null); setBotResult(null); setExtractedData(null); setExtEdits({}); setAnalyzingView(false); navigate(`/email?showId=${viewRecord.showId}`); }}>✉️ Email Thread</button>
               <button className="btn btn-primary" onClick={() => { const r = viewRecord; setViewRecord(null); setBotResult(null); setExtractedData(null); setExtEdits({}); setAnalyzingView(false); openNotes(r); }}>📋 Production Brief</button>
             </>
           }

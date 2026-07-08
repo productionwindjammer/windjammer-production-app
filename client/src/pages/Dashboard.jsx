@@ -69,7 +69,6 @@ export default function Dashboard() {
   const [labor, setLabor] = useState([])
   const [advancing, setAdvancing] = useState([])
   const [artists, setArtists]     = useState([])
-  const [emails, setEmails]       = useState([])
   const [loading, setLoading] = useState(true)
   // Bumped whenever a promoter action saves new data, so the dashboard
   // refresh is independent from the initial fetch.
@@ -83,9 +82,8 @@ export default function Dashboard() {
     else requests.push(null)
     if (isPromoter || isManager) {
       requests.push(api.get('/artists').catch(() => ({ data: { data: [] } })))
-      requests.push(api.get('/emails?limit=40').catch(() => ({ data: { data: [] } })))
     } else {
-      requests.push(null); requests.push(null)
+      requests.push(null)
     }
     Promise.all(requests.map(r => r || Promise.resolve(null)))
       .then(results => {
@@ -93,7 +91,6 @@ export default function Dashboard() {
         if (results[1]) setLabor(results[1].data.data || [])
         if (results[2]) setAdvancing(results[2].data.data || [])
         if (results[3]) setArtists(results[3].data.data || [])
-        if (results[4]) setEmails(results[4].data.data || [])
       })
       .finally(() => setLoading(false))
   }, [isCrew, isManager, isVenue, isPromoter, reloadKey])
@@ -106,7 +103,6 @@ export default function Dashboard() {
       shows={shows}
       advancing={advancing}
       artists={artists}
-      emails={emails}
       navigate={navigate}
       tf={tf}
       onReload={() => setReloadKey(k => k + 1)}
@@ -413,7 +409,7 @@ function CrewDashboard({ user, shows, labor, navigate }) {
 const QUICK_BLANK = { date: '', artist: '', stage: 'inside', showTime: '', notes: '' }
 const CONTACT_BLANK = { contactName: '', contactEmail: '', contactPhone: '' }
 
-function PromoterDashboard({ user, shows, advancing, artists, emails, navigate, tf, onReload }) {
+function PromoterDashboard({ user, shows, advancing, artists, navigate, tf, onReload }) {
   const today = startOfToday()
   const upcomingRaw = shows.filter(s => {
     const d = parseDate(s.date); return d && d >= today && s.status !== 'cancelled'
@@ -518,13 +514,6 @@ function PromoterDashboard({ user, shows, advancing, artists, emails, navigate, 
       }
     return { tag: 'advancing', tone: 'inside', detail: adv.botLastRun ? 'Waiting on more info from artist team.' : 'Production has opened the advance.' }
   }
-
-  // ─── Recent emails roll-up (promoter is cc'd anyway) ─────────────
-  const recentEmails = useMemo(() =>
-    [...emails]
-      .sort((a, b) => (Date.parse(b.date) || 0) - (Date.parse(a.date) || 0))
-      .slice(0, 8)
-  , [emails])
 
   return (
     <div>
@@ -650,39 +639,6 @@ function PromoterDashboard({ user, shows, advancing, artists, emails, navigate, 
                       </div>
                     </div>
                     <span className="todo-date">{dateLabel}</span>
-                  </li>
-                )
-              })}
-            </ul>
-          )}
-        </div>
-
-        {/* ── Recent emails (visibility) ───────────────────────────── */}
-        <div className="card">
-          <div className="card-header">
-            <span className="card-title">Recent Emails</span>
-            <button className="btn btn-ghost btn-sm" onClick={() => navigate('/email')}>Inbox</button>
-          </div>
-          {recentEmails.length === 0 ? (
-            <div className="empty-state">No emails synced yet.</div>
-          ) : (
-            <ul className="todo-list">
-              {recentEmails.map(e => {
-                const d = e.date ? new Date(e.date) : null
-                const when = d ? d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : ''
-                return (
-                  <li key={e.id} className="todo-item" onClick={() => navigate('/email')}>
-                    <span className="todo-badge todo-low">✉️</span>
-                    <div className="todo-body">
-                      <div className="todo-title" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {e.subject || '(no subject)'}
-                      </div>
-                      <div className="todo-meta" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {(e.from || '').replace(/<.+>/, '').trim() || e.from || '—'}
-                        {e.showName ? ` · ${e.showName}` : ''}
-                      </div>
-                    </div>
-                    <span className="todo-date">{when}</span>
                   </li>
                 )
               })}

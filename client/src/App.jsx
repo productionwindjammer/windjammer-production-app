@@ -13,7 +13,6 @@ import DayOfShow from './pages/DayOfShow'
 import Vendors from './pages/Vendors'
 import Staff from './pages/Staff'
 import TechPack from './pages/TechPack'
-import Email from './pages/Email'
 import Users from './pages/Users'
 import Settings from './pages/Settings'
 import Calendar from './pages/Calendar'
@@ -45,7 +44,6 @@ export default function App() {
             <Route path="/staff"       element={<Staff />} />
             <Route path="/users"       element={<Users />} />
             <Route path="/tech-pack"   element={<TechPack />} />
-            <Route path="/email"        element={<Email />} />
             <Route path="/settings"    element={<Settings />} />
           </Route>
           <Route path="*" element={<Navigate to="/dashboard" replace />} />

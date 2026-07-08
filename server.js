@@ -2401,8 +2401,9 @@ async function runAutoSync() {
 }
 
 // Kick off the first run shortly after startup, then every 15 minutes.
-setTimeout(runAutoSync, 30 * 1000);
-setInterval(runAutoSync, 15 * 60 * 1000);
+// Email integration temporarily disabled — re-enable these two lines to restore auto-sync.
+// setTimeout(runAutoSync, 30 * 1000);
+// setInterval(runAutoSync, 15 * 60 * 1000);
 
 // ── Inbox sync — pull entire Gmail inbox regardless of advance contact ────────
 app.post('/api/emails/sync-inbox', requireAuth, async (req, res) => {
