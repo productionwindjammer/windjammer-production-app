@@ -255,6 +255,44 @@ async function ensureArtistsFromShow(show) {
   return created;
 }
 
+// Standard Day-of-Show timeline seeded on every show creation.
+// Idempotent: does nothing if the show already has any schedule rows.
+// Returns the number of rows inserted.
+const DAY_SHEET_TEMPLATE = [
+  { label: 'Load In',           time: '15:00' },
+  { label: 'Sound Check',       time: '17:00' },
+  { label: 'Doors',             time: '19:00' },
+  { label: 'Set 1',             time: '20:00' },
+  { label: 'Changeover',        time: '21:00' },
+  { label: 'Set 2',             time: '21:30' },
+  { label: 'Curfew / Load Out', time: '23:00' },
+];
+
+async function seedDaySheetForShow(show) {
+  if (!show || !show.id) return 0;
+  const showLabel = show.artist || show.eventName || `Show ${show.id}`;
+  const existing = await sheets.getRows(config.googleSheets.sheets.schedule);
+  const mine = existing.filter(r => String(r.showId) === String(show.id));
+  if (mine.length > 0) return 0;
+  const stamp = Date.now();
+  const rows = DAY_SHEET_TEMPLATE.map((it, i) => ({
+    id:          `${stamp}${i}${Math.random().toString(36).slice(2, 5)}`,
+    showId:      show.id,
+    showName:    showLabel,
+    stage:       show.stage || 'inside',
+    date:        show.date || '',
+    eventType:   'time',
+    label:       it.label,
+    time:        it.time,
+    duration:    '',
+    responsible: '',
+    notes:       '',
+    createdAt:   new Date().toISOString(),
+  }));
+  await sheets.appendRows(config.googleSheets.sheets.schedule, rows);
+  return rows.length;
+}
+
 async function kickoffAdvanceForShow(show) {
   if (!show || !show.id) return;
   const showLabel = show.artist || show.eventName || `Show ${show.id}`;
@@ -340,42 +378,9 @@ async function kickoffAdvanceForShow(show) {
   }
 
   // 2b. Seed the Day-of-Show schedule with the standard day sheet items.
-  // These act as placeholders that the production team edits with real times
-  // and responsible parties. Idempotent — skips if any schedule rows already
-  // exist for this show.
   try {
-    const existingSchedule = await sheets.getRows(config.googleSheets.sheets.schedule);
-    const mine = existingSchedule.filter(r => r.showId === show.id);
-    if (mine.length === 0) {
-      const template = [
-        { label: 'Load In',           time: '15:00' },
-        { label: 'Sound Check',       time: '17:00' },
-        { label: 'Doors',             time: '19:00' },
-        { label: 'Set 1',             time: '20:00' },
-        { label: 'Changeover',        time: '21:00' },
-        { label: 'Set 2',             time: '21:30' },
-        { label: 'Curfew / Load Out', time: '23:00' },
-      ];
-      const stamp = Date.now();
-      const rows = template.map((it, i) => ({
-        id:          `${stamp}${i}${Math.random().toString(36).slice(2, 5)}`,
-        showId:      show.id,
-        showName:    showLabel,
-        stage:       show.stage || 'inside',
-        date:        show.date || '',
-        eventType:   'time',
-        label:       it.label,
-        time:        it.time,
-        duration:    '',
-        responsible: '',
-        notes:       '',
-        createdAt:   new Date().toISOString(),
-      }));
-      await sheets.appendRows(config.googleSheets.sheets.schedule, rows);
-      console.log(`[kickoff] Seeded ${rows.length} day-sheet items.`);
-    } else {
-      console.log(`[kickoff] Day-sheet already has ${mine.length} item(s); skipping seed.`);
-    }
+    const seeded = await seedDaySheetForShow(show);
+    if (seeded > 0) console.log(`[kickoff] Seeded ${seeded} day-sheet items.`);
   } catch (err) {
     console.error('[kickoff] Day-sheet seed failed:', err.message);
   }
@@ -523,6 +528,25 @@ app.get('/api/advancing', requireAuth, async (req, res) => {
 });
 
 crudRoutes(app, '/api/advancing',       'advancing', ['admin','production_manager','promoter','venue_management']);
+
+// Ensure a show's day-sheet has the standard timeline seeded.
+// Idempotent — safe to call on every visit. Backfills shows created before
+// the auto-seed hook was added.
+app.post('/api/schedule/ensure-defaults', requireAuth, async (req, res) => {
+  try {
+    const { showId } = req.body || {};
+    if (!showId) return res.status(400).json({ success: false, message: 'showId is required' });
+    const shows = await sheets.getRows(config.googleSheets.sheets.shows);
+    const show = shows.find(s => String(s.id) === String(showId));
+    if (!show) return res.status(404).json({ success: false, message: 'Show not found' });
+    const seeded = await seedDaySheetForShow(show);
+    res.json({ success: true, seeded });
+  } catch (err) {
+    console.error('[schedule/ensure-defaults]', err.message);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 crudRoutes(app, '/api/schedule',        'schedule');
 crudRoutes(app, '/api/labor',           'labor',     ['admin','production_manager'], { afterCreate: notifyShiftAssigned });
 crudRoutes(app, '/api/vendors',         'vendors');
