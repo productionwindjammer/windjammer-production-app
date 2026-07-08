@@ -89,18 +89,19 @@ export default function DayOfShow() {
     setAdvances(a.data.data || [])
   }
 
-  // Backfill: when the user picks a show that has no schedule items yet,
-  // seed the standard day-sheet on the server and refresh. This covers
-  // shows created before the auto-seed hook existed.
+  // Backfill: when the user picks a show, ensure the standard day-sheet is
+  // seeded on the server and any generic "Set 1"/"Set 2" placeholders get
+  // renamed with the headliner/support names. Idempotent server-side.
   useEffect(() => {
     if (!selectedShow || loading) return
-    const hasItems = items.some(i => i.showId === selectedShow)
-    if (hasItems) return
+    const mine = items.filter(i => i.showId === selectedShow)
+    const hasGenericSet = mine.some(i => i.label === 'Set 1' || i.label === 'Set 2')
+    if (mine.length > 0 && !hasGenericSet) return
     let cancelled = false
     ;(async () => {
       try {
         const { data } = await api.post('/schedule/ensure-defaults', { showId: selectedShow })
-        if (!cancelled && data?.seeded > 0) await load()
+        if (!cancelled && ((data?.seeded || 0) > 0 || (data?.renamed || 0) > 0)) await load()
       } catch { /* silent */ }
     })()
     return () => { cancelled = true }

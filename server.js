@@ -259,14 +259,37 @@ async function ensureArtistsFromShow(show) {
 // Idempotent: does nothing if the show already has any schedule rows.
 // Returns the number of rows inserted.
 const DAY_SHEET_TEMPLATE = [
-  { label: 'Load In',           time: '15:00' },
-  { label: 'Sound Check',       time: '17:00' },
-  { label: 'Doors',             time: '19:00' },
-  { label: 'Set 1',             time: '20:00' },
-  { label: 'Changeover',        time: '21:00' },
-  { label: 'Set 2',             time: '21:30' },
-  { label: 'Curfew / Load Out', time: '23:00' },
+  { key: 'loadIn',     label: 'Load In',           time: '15:00' },
+  { key: 'soundCheck', label: 'Sound Check',       time: '17:00' },
+  { key: 'doors',      label: 'Doors',             time: '19:00' },
+  { key: 'set1',       label: 'Set 1',             time: '20:00' },
+  { key: 'changeover', label: 'Changeover',        time: '21:00' },
+  { key: 'set2',       label: 'Set 2',             time: '21:30' },
+  { key: 'curfew',     label: 'Curfew / Load Out', time: '23:00' },
 ];
+
+// Build day-sheet labels using the show's headliner / support names when
+// available. Support acts play Set 1; the headliner plays Set 2.
+function buildDaySheetLabels(show) {
+  const headliner = (show.artist || '').trim();
+  const supportRaw = (show.support || '').trim();
+  const supports = supportRaw
+    ? supportRaw.split(/\s*,\s*/).filter(Boolean)
+    : [];
+  const firstSupport = supports[0] || '';
+
+  return DAY_SHEET_TEMPLATE.map(it => {
+    let label = it.label;
+    if (it.key === 'set1') {
+      if (firstSupport) label = `${firstSupport} Set`;
+      else if (headliner) label = `${headliner} Set 1`;
+    } else if (it.key === 'set2') {
+      if (headliner && firstSupport) label = `${headliner} Set`;
+      else if (headliner) label = `${headliner} Set 2`;
+    }
+    return { ...it, label };
+  });
+}
 
 async function seedDaySheetForShow(show) {
   if (!show || !show.id) return 0;
@@ -274,8 +297,9 @@ async function seedDaySheetForShow(show) {
   const existing = await sheets.getRows(config.googleSheets.sheets.schedule);
   const mine = existing.filter(r => String(r.showId) === String(show.id));
   if (mine.length > 0) return 0;
+  const template = buildDaySheetLabels(show);
   const stamp = Date.now();
-  const rows = DAY_SHEET_TEMPLATE.map((it, i) => ({
+  const rows = template.map((it, i) => ({
     id:          `${stamp}${i}${Math.random().toString(36).slice(2, 5)}`,
     showId:      show.id,
     showName:    showLabel,
@@ -291,6 +315,35 @@ async function seedDaySheetForShow(show) {
   }));
   await sheets.appendRows(config.googleSheets.sheets.schedule, rows);
   return rows.length;
+}
+
+// Rename generic "Set 1" / "Set 2" placeholders to include the headliner /
+// support names for shows that were seeded before this feature existed.
+// Only touches rows whose label is still the untouched generic string, so
+// user-customized labels are preserved.
+async function backfillDaySheetLabels(show) {
+  if (!show || !show.id || !show.artist) return 0;
+  const rows = await sheets.getRows(config.googleSheets.sheets.schedule);
+  const mine = rows.filter(r => String(r.showId) === String(show.id));
+  if (mine.length === 0) return 0;
+  const template = buildDaySheetLabels(show);
+  const wanted = {
+    'Set 1': template.find(t => t.key === 'set1')?.label,
+    'Set 2': template.find(t => t.key === 'set2')?.label,
+  };
+  let updated = 0;
+  for (const row of mine) {
+    const next = wanted[row.label];
+    if (next && next !== row.label) {
+      try {
+        await sheets.updateRowById(config.googleSheets.sheets.schedule, row.id, { label: next });
+        updated++;
+      } catch (err) {
+        console.warn('[day-sheet backfill] update failed:', err.message);
+      }
+    }
+  }
+  return updated;
 }
 
 async function kickoffAdvanceForShow(show) {
@@ -540,7 +593,8 @@ app.post('/api/schedule/ensure-defaults', requireAuth, async (req, res) => {
     const show = shows.find(s => String(s.id) === String(showId));
     if (!show) return res.status(404).json({ success: false, message: 'Show not found' });
     const seeded = await seedDaySheetForShow(show);
-    res.json({ success: true, seeded });
+    const renamed = seeded === 0 ? await backfillDaySheetLabels(show) : 0;
+    res.json({ success: true, seeded, renamed });
   } catch (err) {
     console.error('[schedule/ensure-defaults]', err.message);
     res.status(500).json({ success: false, message: err.message });
