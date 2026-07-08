@@ -438,49 +438,14 @@ async function kickoffAdvanceForShow(show) {
     console.error('[kickoff] Day-sheet seed failed:', err.message);
   }
 
-  // 3. If we already have an advance email, do an initial Gmail sync + extract
+  // 3. If we already have an advance email, do an initial Gmail sync
   const advanceEmail = show.advanceEmail || '';
   if (advanceEmail && gmail.isConfigured() && advanceId) {
     try {
       const newCount = await syncEmailsForShow(show.id, advanceEmail, showLabel);
       console.log(`[kickoff] Pulled ${newCount} initial email(s) for ${advanceEmail}.`);
-
-      // Run the extractor against whatever's in the Emails sheet for this show
-      const allEmails  = await getStoredEmails();
-      const inbound    = allEmails
-        .filter(e => e.showId === show.id && (e.direction || '').toLowerCase() !== 'outbound')
-        .sort((a, b) => (Date.parse(b.date) || 0) - (Date.parse(a.date) || 0))
-        .slice(0, 30);
-
-      const full = [];
-      for (const e of inbound) {
-        try {
-          const msg    = await gmail.getMessage(e.gmailMessageId);
-          const parsed = gmail.parseMessage(msg);
-          full.push({
-            gmailMessageId: e.gmailMessageId,
-            subject:        parsed.subject || e.subject,
-            from:           parsed.from || e.from,
-            date:           parsed.date || e.date,
-            snippet:        e.snippet,
-            textBody:       parsed.textBody,
-            htmlBody:       parsed.htmlBody,
-            attachmentMeta: JSON.stringify(parsed.attachments || []),
-            direction:      e.direction,
-          });
-        } catch { full.push({ ...e }); }
-      }
-
-      if (full.length) {
-        const extracted = bot.extractFromEmails(full);
-        await sheets.updateRowById(config.googleSheets.sheets.advancing, advanceId, {
-          botExtracted: JSON.stringify(extracted),
-          botLastRun:   extracted.extractedAt,
-        });
-        console.log(`[kickoff] Bot extracted ${Object.keys(extracted.fields || {}).length} field(s).`);
-      }
     } catch (err) {
-      console.error('[kickoff] Initial Gmail sync/extract failed:', err.message);
+      console.error('[kickoff] Initial Gmail sync failed:', err.message);
     }
   }
 }
@@ -1037,255 +1002,6 @@ app.post('/api/upload', requireAuth, async (req, res) => {
         : 'Google rejected the Drive credentials (invalid_grant). The service-account private key is stale — an admin needs to rotate the key in GCP and update GOOGLE_SERVICE_ACCOUNT in Railway.';
     }
     res.status(500).json({ success: false, message });
-  }
-});
-
-// ── Advancing Bot Analysis ────────────────────────────────────────────────────
-// Fetches full Gmail bodies for inbound emails on this show, runs the rule-based
-// extractor to pull structured advance info, plus runs the legacy flag analyzer.
-app.post('/api/advancing/:id/analyze', requireAuth, async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    // Load advancing record
-    const advances = await sheets.getRows(config.googleSheets.sheets.advancing);
-    const adv = advances.find(a => a.id === id);
-    if (!adv) return res.status(404).json({ success: false, message: 'Advance not found' });
-
-    // Load & concat all tech pack docs for this stage (for flag analyzer)
-    const techpackDocs = await sheets.getRows(config.googleSheets.sheets.techpack);
-    const techpackText = techpackDocs
-      .filter(d => d.stage === adv.stage)
-      .map(d => bot.stripHtml(d.content || ''))
-      .join(' ');
-
-    // Load email metadata for this show
-    let storedEmails = [];
-    try {
-      const rows = await sheets.getRows(config.googleSheets.sheets.emails);
-      storedEmails = rows.filter(e => e.showId === adv.showId);
-    } catch { /* emails sheet may not exist yet */ }
-
-    // Fetch full bodies for inbound emails (capped to most recent 30 to bound cost)
-    const inbound = storedEmails
-      .filter(e => (e.direction || '').toLowerCase() !== 'outbound')
-      .sort((a, b) => (Date.parse(b.date) || 0) - (Date.parse(a.date) || 0))
-      .slice(0, 30);
-
-    const fullEmails = [];
-    if (gmail.isConfigured()) {
-      for (const e of inbound) {
-        try {
-          const msg = await gmail.getMessage(e.gmailMessageId);
-          const parsed = gmail.parseMessage(msg);
-          fullEmails.push({
-            gmailMessageId: e.gmailMessageId,
-            subject:        parsed.subject || e.subject,
-            from:           parsed.from || e.from,
-            date:           parsed.date || e.date,
-            snippet:        e.snippet,
-            textBody:       parsed.textBody,
-            htmlBody:       parsed.htmlBody,
-            attachmentMeta: JSON.stringify(parsed.attachments || []),
-            direction:      e.direction,
-          });
-        } catch (fetchErr) {
-          // Fall back to snippet-only if Gmail fetch fails
-          fullEmails.push({ ...e });
-        }
-      }
-    } else {
-      // No Gmail — extractor will run against snippets only
-      fullEmails.push(...inbound);
-    }
-
-    // Run extractor (structured info → fields)
-    const extracted = bot.extractFromEmails(fullEmails);
-
-    // Run legacy flag analyzer (categories vs tech pack)
-    const snippets = fullEmails.map(e => e.snippet || '');
-    const flagResult = bot.analyzeAdvance(adv, techpackText, snippets);
-
-    // Persist both back to the advancing record
-    await sheets.updateRowById(config.googleSheets.sheets.advancing, id, {
-      botNotes:        JSON.stringify(flagResult),
-      botExtracted:    JSON.stringify(extracted),
-      botLastRun:      flagResult.analyzedAt,
-    });
-
-    res.json({ success: true, data: { flags: flagResult, extracted } });
-  } catch (err) {
-    console.error('Bot analysis error:', err.message);
-    res.status(500).json({ success: false, message: err.message });
-  }
-});
-
-// Accept (or dismiss) bot-extracted fields and write them onto the advance record.
-// Body: { updates: { fieldKey: value, ... }, dismissKeys: ['fieldKey', ...] }
-// All accepted keys (and dismissKeys) are removed from the staged `botExtracted` blob.
-app.post('/api/advancing/:id/accept-extraction',
-  requireAuth, requireRole('admin', 'production_manager'),
-  async (req, res) => {
-    try {
-      const { id } = req.params;
-      const { updates = {}, dismissKeys = [] } = req.body || {};
-
-      const advances = await sheets.getRows(config.googleSheets.sheets.advancing);
-      const adv = advances.find(a => a.id === id);
-      if (!adv) return res.status(404).json({ success: false, message: 'Advance not found' });
-
-      let extracted = {};
-      try { extracted = adv.botExtracted ? JSON.parse(adv.botExtracted) : {}; } catch { extracted = {}; }
-      const fields = extracted.fields || {};
-
-      const sheetUpdates = {};
-      for (const [key, value] of Object.entries(updates)) {
-        if (value == null || String(value).trim() === '') continue;
-        sheetUpdates[key] = String(value);
-        delete fields[key];
-      }
-      for (const key of dismissKeys) {
-        delete fields[key];
-      }
-
-      sheetUpdates.botExtracted = JSON.stringify({ ...extracted, fields });
-      await sheets.updateRowById(config.googleSheets.sheets.advancing, id, sheetUpdates);
-
-      res.json({ success: true, applied: Object.keys(updates), dismissed: dismissKeys });
-    } catch (err) {
-      console.error('Accept-extraction error:', err.message);
-      res.status(500).json({ success: false, message: err.message });
-    }
-  }
-);
-
-// ── Run-of-Show / Day Sheet extractor ───────────────────────────────────────
-// POST /api/schedule/extract  body: { showId }
-// Scans emails linked to the show (and artist) that look like a ROS or day
-// sheet, parses the timed lines, and returns proposed schedule items. Does NOT
-// write to the schedule sheet — the UI reviews + accepts.
-app.post('/api/schedule/extract', requireAuth, requireRole('admin','production_manager','promoter'), async (req, res) => {
-  try {
-    const { showId } = req.body || {};
-    if (!showId) return res.status(400).json({ success: false, message: 'showId required' });
-
-    const [shows, artists] = await Promise.all([
-      sheets.getRows(config.googleSheets.sheets.shows),
-      sheets.getRows(config.googleSheets.sheets.artists).catch(() => []),
-    ]);
-    const show = shows.find(s => s.id === showId);
-    if (!show) return res.status(404).json({ success: false, message: 'Show not found' });
-    const artist = findArtistForShow(show, artists);
-
-    // Gather every email linked to the show OR to the artist
-    const storedEmails = await getStoredEmails();
-    const linked = storedEmails.filter(e =>
-      (e.showId   && e.showId   === showId) ||
-      (artist && e.artistId && e.artistId === artist.id)
-    );
-    // Score-filter to schedule-looking emails first, then take the most recent ~20
-    // so we don't burn Gmail quota on the entire mailbox.
-    const candidates = linked
-      .map(e => ({ e, score: ((e.subject || '') + ' ' + (e.snippet || '')).toLowerCase() }))
-      .filter(({ score }) => /\b(ros|run of show|day sheet|daysheet|schedule|itinerary|timeline)\b/.test(score))
-      .map(({ e }) => e)
-      .sort((a, b) => (Date.parse(b.date) || 0) - (Date.parse(a.date) || 0))
-      .slice(0, 20);
-
-    // Pull full bodies (best-effort) so the parser has real lines to work with.
-    const fullEmails = [];
-    if (gmail.isConfigured() && candidates.length) {
-      const picked = await pickGmailClient(req).catch(() => null);
-      const client = picked?.client;
-      for (const e of candidates) {
-        try {
-          const msg = await gmail.getMessage(e.gmailMessageId, client);
-          const parsed = gmail.parseMessage(msg);
-          fullEmails.push({
-            gmailMessageId: e.gmailMessageId,
-            subject:        parsed.subject || e.subject,
-            from:           parsed.from    || e.from,
-            date:           parsed.date    || e.date,
-            snippet:        e.snippet,
-            textBody:       parsed.textBody,
-            htmlBody:       parsed.htmlBody,
-            direction:      e.direction,
-          });
-        } catch {
-          fullEmails.push({ ...e }); // fall back to snippet-only
-        }
-      }
-    } else {
-      fullEmails.push(...candidates);
-    }
-
-    const result = bot.extractSchedule(fullEmails);
-    res.json({
-      success: true,
-      showId,
-      artistId:   artist?.id   || '',
-      artistName: artist?.name || '',
-      linkedEmailCount: linked.length,
-      candidateCount:   candidates.length,
-      ...result,
-    });
-  } catch (err) {
-    console.error('Schedule extract error:', err.message);
-    res.status(500).json({ success: false, message: err.message });
-  }
-});
-
-// POST /api/schedule/apply  body: { showId, items: [{time,label,responsible,notes,stage?}], replaceExisting?: bool }
-// Writes accepted schedule items to the schedule sheet. When replaceExisting
-// is true, every existing schedule row for the show is deleted first so the
-// imported day sheet becomes the canonical timeline.
-app.post('/api/schedule/apply', requireAuth, requireRole('admin','production_manager','promoter'), async (req, res) => {
-  try {
-    const { showId, items, replaceExisting } = req.body || {};
-    if (!showId) return res.status(400).json({ success: false, message: 'showId required' });
-    if (!Array.isArray(items) || items.length === 0)
-      return res.status(400).json({ success: false, message: 'items[] required' });
-
-    const shows = await sheets.getRows(config.googleSheets.sheets.shows);
-    const show = shows.find(s => s.id === showId);
-    if (!show) return res.status(404).json({ success: false, message: 'Show not found' });
-    const showName = `${show.date || ''} \u2014 ${show.artist || show.eventName || ''}`.trim();
-    const stage = show.stage || 'inside';
-
-    let deleted = 0;
-    if (replaceExisting) {
-      const existing = await sheets.getRows(config.googleSheets.sheets.schedule);
-      const mine = existing.filter(r => r.showId === showId);
-      for (const r of mine) {
-        try {
-          await sheets.deleteRowById(config.googleSheets.sheets.schedule, r.id);
-          deleted++;
-        } catch (e) { console.warn('schedule delete failed', r.id, e.message); }
-      }
-    }
-
-    const rows = items.map((it, i) => ({
-      id:          `${Date.now()}${i}${Math.random().toString(36).slice(2, 5)}`,
-      showId,
-      showName,
-      stage:       it.stage || stage,
-      date:        show.date || '',
-      eventType:   'time',
-      label:       String(it.label || '').slice(0, 200),
-      time:        String(it.time  || '').slice(0, 8),
-      duration:    '',
-      responsible: String(it.responsible || '').slice(0, 80),
-      notes:       String(it.notes       || '').slice(0, 400),
-      createdAt:   new Date().toISOString(),
-    })).filter(r => r.label && r.time);
-
-    if (rows.length === 0) return res.status(400).json({ success: false, message: 'No valid items to apply' });
-
-    await sheets.appendRows(config.googleSheets.sheets.schedule, rows);
-    res.json({ success: true, applied: rows.length, deleted });
-  } catch (err) {
-    console.error('Schedule apply error:', err.message);
-    res.status(500).json({ success: false, message: err.message });
   }
 });
 
@@ -2477,14 +2193,6 @@ async function runAutoSync() {
     }
     if (grandTotal > 0)
       console.log(`[auto-sync] Done — ${grandTotal} new email(s), ${grandLinked} auto-linked across ${connected.length} mailbox(es).`);
-
-    // Run the bot extractors against any advance whose show received new mail.
-    if (affectedShowIds.size > 0) {
-      try {
-        const botRes = await runBotPassForShows([...affectedShowIds]);
-        if (botRes.length) console.log(`[auto-sync] Bot pass: processed ${botRes.length} advance(s).`);
-      } catch (e) { console.error('[auto-sync] bot pass error:', e.message); }
-    }
   } catch (err) {
     console.error('[auto-sync] Error:', err.message);
   }
@@ -2927,150 +2635,6 @@ async function syncUserMailbox(userId) {
   };
 }
 
-// Shared helper: run the bot (field extractor + schedule extractor) against
-// one advance. Persists results back to the advance row's botExtracted /
-// botSchedule / botLastRun columns.
-async function runBotForAdvance(advance, ctx = {}) {
-  if (!advance) return null;
-  const shows    = ctx.shows    || await sheets.getRows(config.googleSheets.sheets.shows);
-  const artists  = ctx.artists  || await sheets.getRows(config.googleSheets.sheets.artists).catch(() => []);
-  const allEmails = ctx.allEmails || await getStoredEmails();
-  const scheduleRows = ctx.scheduleRows || await sheets.getRows(config.googleSheets.sheets.schedule).catch(() => []);
-  const show     = shows.find(s => s.id === advance.showId);
-  const artist   = show ? findArtistForShow(show, artists) : null;
-
-  // Find emails linked to this show OR its artist.
-  const linked = allEmails.filter(e =>
-    (advance.showId && e.showId === advance.showId) ||
-    (artist?.id && e.artistId === artist.id)
-  );
-  const inbound = linked
-    .filter(e => (e.direction || '').toLowerCase() !== 'outbound')
-    .sort((a, b) => (Date.parse(b.date) || 0) - (Date.parse(a.date) || 0))
-    .slice(0, 30);
-  if (inbound.length === 0) return null;
-
-  // Fetch full bodies via Gmail when possible.
-  const fullEmails = [];
-  if (gmail.isConfigured()) {
-    for (const e of inbound) {
-      try {
-        const msg = await gmail.getMessage(e.gmailMessageId);
-        const parsed = gmail.parseMessage(msg);
-        fullEmails.push({
-          gmailMessageId: e.gmailMessageId,
-          subject:  parsed.subject || e.subject,
-          from:     parsed.from    || e.from,
-          date:     parsed.date    || e.date,
-          snippet:  e.snippet,
-          textBody: parsed.textBody,
-          htmlBody: parsed.htmlBody,
-          direction: e.direction,
-        });
-      } catch { fullEmails.push({ ...e }); }
-    }
-  } else {
-    fullEmails.push(...inbound);
-  }
-
-  const extracted = bot.extractFromEmails(fullEmails);
-  const schedule  = bot.extractSchedule(fullEmails);
-
-  // Auto-apply schedule when confidence is high enough and the show has no
-  // existing schedule rows yet — saves the PM a manual review step. Items
-  // with at least medium confidence are applied; we require at least one high
-  // confidence item and 3 total items as a quality gate.
-  let autoApplied = 0;
-  let autoAppliedAt = null;
-  const alreadyAutoApplied = !!advance.botAutoApplied;
-  const existingForShow = scheduleRows.filter(r => r.showId === advance.showId);
-  const items = Array.isArray(schedule.items) ? schedule.items : [];
-  const highCount = items.filter(i => i.confidence === 'high').length;
-  const usableItems = items
-    .filter(i => i.confidence === 'high' || i.confidence === 'medium')
-    .filter(i => i.label && i.time);
-  const canAutoApply =
-    show && !alreadyAutoApplied && existingForShow.length === 0 &&
-    usableItems.length >= 3 && highCount >= 1;
-
-  if (canAutoApply) {
-    const showName = `${show.date || ''} \u2014 ${show.artist || show.eventName || ''}`.trim();
-    const stage = show.stage || 'inside';
-    const rows = usableItems.map((it, i) => ({
-      id:          `${Date.now()}${i}${Math.random().toString(36).slice(2, 5)}`,
-      showId:      advance.showId,
-      showName,
-      stage,
-      date:        show.date || '',
-      eventType:   'time',
-      label:       String(it.label || '').slice(0, 200),
-      time:        String(it.time  || '').slice(0, 8),
-      duration:    '',
-      responsible: String(it.responsible || '').slice(0, 80),
-      notes:       String(it.notes       || '').slice(0, 400),
-      createdAt:   new Date().toISOString(),
-    }));
-    try {
-      await sheets.appendRows(config.googleSheets.sheets.schedule, rows);
-      autoApplied = rows.length;
-      autoAppliedAt = new Date().toISOString();
-      // Keep in-memory list current so subsequent advances in the same pass
-      // don't double-apply against this show.
-      scheduleRows.push(...rows);
-    } catch (e) {
-      console.error(`[runBotForAdvance] auto-apply failed for advance ${advance.id}: ${e.message}`);
-    }
-  }
-
-  const patch = {
-    botExtracted: JSON.stringify(extracted),
-    botSchedule:  JSON.stringify(schedule),
-    botLastRun:   new Date().toISOString(),
-  };
-  if (autoApplied) {
-    patch.botAutoApplied      = autoAppliedAt;
-    patch.botAutoAppliedCount = String(autoApplied);
-  }
-  try {
-    await sheets.updateRowById(config.googleSheets.sheets.advancing, advance.id, patch);
-  } catch (e) {
-    console.error(`[runBotForAdvance] persist failed for advance ${advance.id}: ${e.message}`);
-  }
-  return {
-    advanceId: advance.id,
-    showId:    advance.showId,
-    fieldCount: Object.keys(extracted.fields || {}).length,
-    scheduleItemCount: items.length,
-    autoApplied,
-  };
-}
-
-// Run the bot for every advance attached to a given list of showIds (no-ops
-// when the list is empty). Caps concurrency by running sequentially to stay
-// within Gmail/Sheets rate limits.
-async function runBotPassForShows(showIds = []) {
-  if (!showIds.length) return [];
-  const [shows, artists, advances, allEmails, scheduleRows] = await Promise.all([
-    sheets.getRows(config.googleSheets.sheets.shows),
-    sheets.getRows(config.googleSheets.sheets.artists).catch(() => []),
-    sheets.getRows(config.googleSheets.sheets.advancing),
-    getStoredEmails(),
-    sheets.getRows(config.googleSheets.sheets.schedule).catch(() => []),
-  ]);
-  const wanted = new Set(showIds);
-  const targets = advances.filter(a => wanted.has(a.showId));
-  const results = [];
-  for (const adv of targets) {
-    try {
-      const r = await runBotForAdvance(adv, { shows, artists, allEmails, scheduleRows });
-      if (r) results.push(r);
-    } catch (e) {
-      console.error(`[runBotPassForShows] advance ${adv.id}: ${e.message}`);
-    }
-  }
-  return results;
-}
-
 // POST /api/emails/sync-mine — sync current user's connected mailbox
 app.post('/api/emails/sync-mine', requireAuth, async (req, res) => {
   try {
@@ -3087,26 +2651,17 @@ app.post('/api/emails/sync-mine', requireAuth, async (req, res) => {
 });
 
 // POST /api/sync/login-kickoff — fired by the client right after login (and
-// on app mount, gated client-side). Syncs the current user's Gmail and runs
-// the bot extractors against any advance whose show received new mail.
-// Designed to be called fire-and-forget; still returns a small summary.
+// on app mount, gated client-side). Syncs the current user's Gmail so new
+// mail is available to browse. Designed to be called fire-and-forget.
 app.post('/api/sync/login-kickoff', requireAuth, async (req, res) => {
   const started = Date.now();
   try {
     const sync = await syncUserMailbox(req.user.id);
-    let botResults = [];
-    if (sync.ok && sync.affectedShowIds.length) {
-      botResults = await runBotPassForShows(sync.affectedShowIds);
-    }
     res.json({
       success: true,
       gmail:   sync.ok ? 'synced' : sync.reason,
       newEmails:  sync.newEmails  || 0,
       autoLinked: sync.autoLinked || 0,
-      botAdvancesProcessed: botResults.length,
-      botFieldsFound:    botResults.reduce((n, r) => n + (r.fieldCount || 0), 0),
-      botScheduleItems:  botResults.reduce((n, r) => n + (r.scheduleItemCount || 0), 0),
-      botAutoApplied:    botResults.reduce((n, r) => n + (r.autoApplied || 0), 0),
       elapsedMs: Date.now() - started,
     });
   } catch (err) {
