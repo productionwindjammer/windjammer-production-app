@@ -783,6 +783,56 @@ export default function ShowDetail() {
         </div>
       )}
 
+      {/* ── Per-night support editor (multi-night runs only) ─────────────────── */}
+      {siblings.length > 1 && (
+        <div style={{
+          padding: '10px 14px', marginBottom: 16, borderRadius: 8,
+          background: 'rgba(255,255,255,0.03)',
+          border: '1px solid rgba(255,255,255,0.08)',
+        }}>
+          <div style={{
+            fontSize: 12, color: 'rgba(255,255,255,0.5)',
+            textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8,
+          }}>
+            Support acts per night
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {siblings.map((s, idx) => {
+              const d = s.date ? new Date(s.date + 'T12:00:00') : null
+              const label = d ? d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : ''
+              return (
+                <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{
+                    minWidth: 110, fontSize: 12, color: 'rgba(255,255,255,0.65)',
+                    fontWeight: s.id === id ? 600 : 400,
+                  }}>
+                    Night {idx + 1}{label ? ` · ${label}` : ''}
+                  </span>
+                  <input
+                    defaultValue={s.support || ''}
+                    placeholder="Comma-separated support acts (blank = none)"
+                    disabled={!canEditDocs}
+                    onBlur={async e => {
+                      const next = e.target.value.trim()
+                      if ((s.support || '') === next) return
+                      try {
+                        await api.put(`/shows/${s.id}`, { support: next })
+                        setSiblings(prev => prev.map(x => x.id === s.id ? { ...x, support: next } : x))
+                        if (s.id === id) setShow(prev => prev ? { ...prev, support: next } : prev)
+                      } catch (err) {
+                        alert('Failed to save support for that night: ' + (err?.response?.data?.error || err.message))
+                        e.target.value = s.support || ''
+                      }
+                    }}
+                    style={{ flex: 1, fontSize: 13 }}
+                  />
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
       {/* ── Tabs ─────────────────────────────────────────────────────────────── */}
       <div style={{ display: 'flex', gap: 0, marginBottom: 20, borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
         {[

@@ -73,19 +73,25 @@ export default function Shows() {
   async function handleSave() {
     setSaving(true)
     try {
-      const payload = {
-        ...form,
-        support: supportActs.map(s => s.trim()).filter(Boolean).join(', '),
-      }
+      const primarySupport = supportActs.map(s => s.trim()).filter(Boolean).join(', ')
+      const payload = { ...form, support: primarySupport }
       if (editing) {
         await api.put(`/shows/${editing.id}`, payload)
       } else {
-        // Primary night first, then any additional nights sharing all fields
-        const extras = additionalDates.map(d => d.trim()).filter(Boolean)
-        const uniqueExtras = [...new Set(extras)].filter(d => d !== payload.date)
+        // Primary night first, then any additional nights sharing artist/stage/etc.
+        // Each extra night can override the support list (empty = inherit primary).
         await api.post('/shows', payload)
-        for (const d of uniqueExtras) {
-          await api.post('/shows', { ...payload, date: d })
+        const seen = new Set([payload.date])
+        for (const extra of additionalDates) {
+          const d = String(extra.date || '').trim()
+          if (!d || seen.has(d)) continue
+          seen.add(d)
+          const nightSupport = String(extra.support || '').trim()
+          await api.post('/shows', {
+            ...payload,
+            date: d,
+            support: nightSupport || primarySupport,
+          })
         }
       }
       await load()
@@ -332,23 +338,34 @@ export default function Shows() {
               <div className="form-group">
                 <label>Date *</label>
                 <input type="date" value={f.date} onChange={set('date')} required />
-                {!editing && additionalDates.map((d, i) => (
-                  <div key={i} style={{ display:'flex', gap:6, marginTop:6 }}>
+                {!editing && additionalDates.map((extra, i) => (
+                  <div key={i} style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <input
+                        type="date"
+                        value={extra.date}
+                        onChange={e => {
+                          const v = e.target.value
+                          setAdditionalDates(arr => arr.map((x, j) => (j === i ? { ...x, date: v } : x)))
+                        }}
+                        style={{ flex: 1 }}
+                      />
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm"
+                        onClick={() => setAdditionalDates(arr => arr.filter((_, j) => j !== i))}
+                        title="Remove this night"
+                      >×</button>
+                    </div>
                     <input
-                      type="date"
-                      value={d}
+                      value={extra.support}
                       onChange={e => {
                         const v = e.target.value
-                        setAdditionalDates(arr => arr.map((x, j) => (j === i ? v : x)))
+                        setAdditionalDates(arr => arr.map((x, j) => (j === i ? { ...x, support: v } : x)))
                       }}
-                      style={{ flex: 1 }}
+                      placeholder="Support acts (comma-separated) — leave blank to match Night 1"
+                      style={{ fontSize: 12 }}
                     />
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-sm"
-                      onClick={() => setAdditionalDates(arr => arr.filter((_, j) => j !== i))}
-                      title="Remove this night"
-                    >×</button>
                   </div>
                 ))}
                 {!editing && (
@@ -359,7 +376,7 @@ export default function Shows() {
                     onClick={() => {
                       setAdditionalDates(arr => {
                         // Default new date to day after latest known date
-                        const all = [f.date, ...arr].filter(Boolean).sort()
+                        const all = [f.date, ...arr.map(x => x.date)].filter(Boolean).sort()
                         const last = all[all.length - 1]
                         let next = ''
                         if (last) {
@@ -367,14 +384,14 @@ export default function Shows() {
                           dt.setDate(dt.getDate() + 1)
                           next = dt.toISOString().slice(0, 10)
                         }
-                        return [...arr, next]
+                        return [...arr, { date: next, support: '' }]
                       })
                     }}
                   >+ Add another night</button>
                 )}
                 {!editing && additionalDates.length > 0 && (
                   <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.5)', marginTop: 6 }}>
-                    Creates {additionalDates.filter(Boolean).length + 1} separate shows sharing artist, stage, and defaults. Each night can be edited independently afterward.
+                    Creates {additionalDates.filter(x => x.date).length + 1} separate shows sharing artist, stage, and defaults. Each night can be edited independently afterward.
                   </div>
                 )}
               </div>
