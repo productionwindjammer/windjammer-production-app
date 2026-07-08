@@ -57,16 +57,8 @@ export default function Advancing() {
   const [selectedIds, setSelectedIds] = useState(new Set())
   const [bulkDeleting, setBulkDeleting] = useState(false)
 
-  // Bot
-  const [analyzing, setAnalyzing] = useState(new Set())
-
-  // View / bot modal
+  // View modal
   const [viewRecord, setViewRecord]       = useState(null)
-  const [botResult, setBotResult]         = useState(null)
-  const [extractedData, setExtractedData] = useState(null)  // bot's email-extracted suggestions
-  const [extEdits, setExtEdits]           = useState({})    // per-field overrides while reviewing
-  const [acceptingExt, setAcceptingExt]   = useState(false)
-  const [analyzingView, setAnalyzingView] = useState(false)
 
   // Schedule (Day of Show) state — managed from Advancing view
   const [schedItems, setSchedItems]           = useState([])
@@ -152,72 +144,9 @@ export default function Advancing() {
     }
   }
 
-  // ── Bot analysis ────────────────────────────────────────────────────────────
-  async function handleAnalyze(record, { fromView = false } = {}) {
-    if (fromView) setAnalyzingView(true)
-    else setAnalyzing(prev => new Set([...prev, record.id]))
-    try {
-      const res = await api.post(`/advancing/${record.id}/analyze`)
-      const result = res.data.data
-      // New response shape: { flags, extracted }. Tolerate the old shape too.
-      const flags     = result?.flags ?? result
-      const extracted = result?.extracted ?? null
-      if (fromView) {
-        setBotResult(flags)
-        setExtractedData(extracted)
-        setExtEdits({})
-      }
-      await load()
-    } catch (err) {
-      alert('Analysis failed: ' + (err.response?.data?.message || err.message))
-    } finally {
-      if (fromView) setAnalyzingView(false)
-      else setAnalyzing(prev => { const n = new Set(prev); n.delete(record.id); return n })
-    }
-  }
-
-  // ── Accept / dismiss extracted fields ──────────────────────────────────────
-  async function applyExtraction({ acceptKeys = [], dismissKeys = [] }) {
-    if (!viewRecord) return
-    if (acceptKeys.length === 0 && dismissKeys.length === 0) return
-    setAcceptingExt(true)
-    try {
-      const fields = extractedData?.fields || {}
-      const updates = {}
-      for (const k of acceptKeys) {
-        const fallback = fields[k]?.value || ''
-        const v = extEdits[k] !== undefined ? extEdits[k] : fallback
-        if (v && String(v).trim()) updates[k] = v
-      }
-      const res = await api.post(`/advancing/${viewRecord.id}/accept-extraction`, { updates, dismissKeys })
-      if (!res.data.success) throw new Error(res.data.message || 'Failed')
-      // Refresh extracted blob locally
-      const nextFields = { ...fields }
-      for (const k of [...acceptKeys, ...dismissKeys]) delete nextFields[k]
-      setExtractedData(prev => prev ? { ...prev, fields: nextFields } : prev)
-      setExtEdits(prev => {
-        const n = { ...prev }
-        for (const k of [...acceptKeys, ...dismissKeys]) delete n[k]
-        return n
-      })
-      // Reflect new values on the visible record + table data
-      setViewRecord(prev => prev ? { ...prev, ...updates, botExtracted: JSON.stringify({ ...(extractedData||{}), fields: nextFields }) } : prev)
-      await load()
-    } catch (err) {
-      alert('Failed to apply: ' + (err.response?.data?.message || err.message))
-    } finally {
-      setAcceptingExt(false)
-    }
-  }
-
   // ── View modal ──────────────────────────────────────────────────────────────
   function openView(r) {
     setViewRecord(r)
-    try { setBotResult(r.botNotes ? JSON.parse(r.botNotes) : null) }
-    catch { setBotResult(null) }
-    try { setExtractedData(r.botExtracted ? JSON.parse(r.botExtracted) : null) }
-    catch { setExtractedData(null) }
-    setExtEdits({})
     // Load schedule items for this show; seed defaults if none exist yet.
     setLoadingSchedule(true)
     api.get('/schedule').then(async res => {
@@ -540,42 +469,6 @@ export default function Advancing() {
     return s ? `${s.date} — ${s.artist || s.eventName}` : id
   }
 
-  function getBotStatus(r) {
-    try {
-      const b = r.botNotes ? JSON.parse(r.botNotes) : null
-      if (!b) return null
-      const open    = (b.issues || []).filter(i => !i.resolution)
-      const flags   = open.filter(i => i.status === 'flag').length
-      const reviews = open.filter(i => i.status === 'review').length
-      return { flags, reviews, total: b.issues?.length || 0, summary: b.summary, analyzedAt: b.analyzedAt }
-    } catch { return null }
-  }
-
-  // Acknowledge or dismiss a bot-flagged issue on the currently viewed record.
-  async function resolveIssue(index, resolution) {
-    if (!viewRecord) return
-    let src = botResult
-    if (!src && viewRecord.botNotes) {
-      try { src = typeof viewRecord.botNotes === 'string' ? JSON.parse(viewRecord.botNotes) : viewRecord.botNotes } catch { src = null }
-    }
-    if (!src || !Array.isArray(src.issues)) return
-    const stamp = new Date().toISOString()
-    const who = user?.name || user?.email || ''
-    const issues = src.issues.map((it, i) => i === index
-      ? (resolution ? { ...it, resolution, resolvedBy: who, resolvedAt: stamp } : (() => {
-          const { resolution: _r, resolvedBy: _b, resolvedAt: _a, ...rest } = it
-          return rest
-        })())
-      : it)
-    const updated = { ...src, issues }
-    const botNotes = JSON.stringify(updated)
-    setBotResult(updated)
-    setViewRecord(v => v ? { ...v, botNotes } : v)
-    setRecords(rs => rs.map(r => r.id === viewRecord.id ? { ...r, botNotes } : r))
-    try { await api.put(`/advancing/${viewRecord.id}`, { botNotes }) }
-    catch (err) { console.warn('resolveIssue failed:', err?.message || err) }
-  }
-
   return (
     <div>
       <div className="page-header">
@@ -634,17 +527,15 @@ export default function Advancing() {
                   <th>Rider</th>
                   <th>Curfew</th>
                   <th>Contact</th>
-                  <th>Bot Analysis</th>
                   <th>Complete</th>
                   <th></th>
                 </tr>
               </thead>
               <tbody>
                 {filtered.length === 0 && (
-                  <tr><td colSpan={9}><div className="empty-state">No advance records found</div></td></tr>
+                  <tr><td colSpan={8}><div className="empty-state">No advance records found</div></td></tr>
                 )}
                 {filtered.map(r => {
-                  const bot = getBotStatus(r);
                   const isSelected = selectedIds.has(r.id);
                   return (
                     <tr key={r.id} style={{ background: isSelected ? 'rgba(59,130,246,0.08)' : undefined }}>
@@ -665,30 +556,6 @@ export default function Advancing() {
                       <td>{r.riderReceived === 'true' ? '✅ Received' : '⏳ Pending'}</td>
                       <td className="text-muted">{r.curfew || '—'}</td>
                       <td className="text-muted">{r.advanceContact || '—'}</td>
-                      <td>
-                        {!bot ? (
-                          <button
-                            className="btn btn-ghost btn-sm"
-                            onClick={() => handleAnalyze(r)}
-                            disabled={analyzing.has(r.id)}
-                          >
-                            {analyzing.has(r.id) ? '⏳ Analyzing…' : '⚡ Analyze'}
-                          </button>
-                        ) : (
-                          <div style={{display:'flex',gap:4,flexWrap:'wrap',alignItems:'center'}}>
-                            {bot.flags > 0 && <span className="badge" style={{background:'#fee2e2',color:'#991b1b'}}>🚩 {bot.flags} flag{bot.flags!==1?'s':''}</span>}
-                            {bot.reviews > 0 && <span className="badge" style={{background:'#fef3c7',color:'#92400e'}}>⚠️ {bot.reviews} to verify</span>}
-                            {bot.flags === 0 && bot.reviews === 0 && <span className="badge" style={{background:'#d1fae5',color:'#065f46'}}>✅ Clear</span>}
-                            <button
-                              className="btn btn-ghost btn-sm"
-                              style={{fontSize:'0.7rem',padding:'1px 4px'}}
-                              onClick={() => handleAnalyze(r)}
-                              disabled={analyzing.has(r.id)}
-                              title="Re-analyze"
-                            >↺</button>
-                          </div>
-                        )}
-                      </td>
                       <td>
                         <span className={`badge badge-${r.advancingComplete === 'true' ? 'confirmed' : 'pending'}`}>
                           {r.advancingComplete === 'true' ? 'Complete' : 'Open'}
@@ -842,13 +709,13 @@ export default function Advancing() {
       {viewRecord && (
         <Modal
           title={`Advance: ${viewRecord.showName || getShowName(viewRecord.showId)}`}
-          onClose={() => { setViewRecord(null); setBotResult(null); setExtractedData(null); setExtEdits({}); setAnalyzingView(false); }}
+          onClose={() => { setViewRecord(null); }}
           size="modal-lg"
           footer={
             <>
-              <button className="btn btn-ghost" onClick={() => { setViewRecord(null); setBotResult(null); setExtractedData(null); setExtEdits({}); setAnalyzingView(false); }}>Close</button>
-              <button className="btn btn-ghost" onClick={() => { const r = viewRecord; setViewRecord(null); setBotResult(null); setExtractedData(null); setExtEdits({}); setAnalyzingView(false); openEdit(r); }}>Edit</button>
-              <button className="btn btn-primary" onClick={() => { const r = viewRecord; setViewRecord(null); setBotResult(null); setExtractedData(null); setExtEdits({}); setAnalyzingView(false); openNotes(r); }}>📋 Production Brief</button>
+              <button className="btn btn-ghost" onClick={() => { setViewRecord(null); }}>Close</button>
+              <button className="btn btn-ghost" onClick={() => { const r = viewRecord; setViewRecord(null); openEdit(r); }}>Edit</button>
+              <button className="btn btn-primary" onClick={() => { const r = viewRecord; setViewRecord(null); openNotes(r); }}>📋 Production Brief</button>
             </>
           }
         >
@@ -874,171 +741,6 @@ export default function Advancing() {
               canEdit={['admin','production_manager'].includes(user?.role)}
               onPromoted={async () => { await load() }}
             />
-
-            {/* ── Bot-extracted from emails (review & accept) ────────────────── */}
-            {extractedData?.fields && Object.keys(extractedData.fields).length > 0 && (
-              <>
-                <hr style={{margin:'0.25rem 0'}} />
-                <div style={{background:'#eff6ff',border:'1px solid #bfdbfe',borderRadius:8,padding:'0.75rem'}}>
-                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'0.5rem'}}>
-                    <div>
-                      <strong>🤖 Extracted from emails</strong>
-                      <span className="text-muted" style={{marginLeft:8,fontSize:'0.8rem'}}>
-                        {Object.keys(extractedData.fields).length} suggestion{Object.keys(extractedData.fields).length !== 1 ? 's' : ''} · {extractedData.emailCount || 0} email{extractedData.emailCount !== 1 ? 's' : ''} scanned
-                      </span>
-                    </div>
-                    <div style={{display:'flex',gap:6}}>
-                      <button
-                        className="btn btn-ghost btn-sm"
-                        disabled={acceptingExt}
-                        onClick={() => applyExtraction({ dismissKeys: Object.keys(extractedData.fields) })}
-                      >Dismiss all</button>
-                      <button
-                        className="btn btn-primary btn-sm"
-                        disabled={acceptingExt}
-                        onClick={() => applyExtraction({ acceptKeys: Object.keys(extractedData.fields) })}
-                      >{acceptingExt ? 'Applying…' : '✅ Accept all'}</button>
-                    </div>
-                  </div>
-                  <div style={{display:'grid',gap:'0.5rem'}}>
-                    {Object.entries(extractedData.fields).map(([key, f]) => {
-                      const editValue = extEdits[key] !== undefined ? extEdits[key] : f.value
-                      const currentValue = viewRecord[key] || ''
-                      const conflict = currentValue && currentValue.trim() && currentValue.trim() !== f.value.trim()
-                      const confColor = f.confidence === 'high' ? '#065f46' : f.confidence === 'medium' ? '#92400e' : '#374151'
-                      const confBg    = f.confidence === 'high' ? '#d1fae5' : f.confidence === 'medium' ? '#fef3c7' : '#e5e7eb'
-                      return (
-                        <div key={key} style={{background:'#fff',borderRadius:6,padding:'0.6rem 0.75rem',border:'1px solid #e5e7eb'}}>
-                          <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline',gap:8,marginBottom:4}}>
-                            <div>
-                              <strong>{f.label || key}</strong>
-                              <span style={{marginLeft:8,fontSize:'0.7rem',padding:'1px 6px',borderRadius:10,background:confBg,color:confColor,fontWeight:600,textTransform:'uppercase'}}>{f.confidence}</span>
-                              {conflict && <span style={{marginLeft:8,fontSize:'0.7rem',padding:'1px 6px',borderRadius:10,background:'#fee2e2',color:'#991b1b',fontWeight:600}}>OVERWRITES</span>}
-                            </div>
-                            <div style={{display:'flex',gap:4}}>
-                              <button
-                                className="btn btn-ghost btn-sm"
-                                disabled={acceptingExt}
-                                onClick={() => applyExtraction({ dismissKeys: [key] })}
-                                title="Don't apply this suggestion"
-                              >✕</button>
-                              <button
-                                className="btn btn-primary btn-sm"
-                                disabled={acceptingExt}
-                                onClick={() => applyExtraction({ acceptKeys: [key] })}
-                                title="Apply this value to the advance record"
-                              >Accept</button>
-                            </div>
-                          </div>
-                          <textarea
-                            value={editValue}
-                            onChange={e => setExtEdits(prev => ({ ...prev, [key]: e.target.value }))}
-                            rows={Math.min(4, Math.max(1, Math.ceil(editValue.length / 80)))}
-                            style={{width:'100%',fontSize:'0.85rem',padding:'4px 6px',border:'1px solid #d1d5db',borderRadius:4,resize:'vertical',fontFamily:'inherit'}}
-                          />
-                          {conflict && (
-                            <div style={{fontSize:'0.75rem',color:'#991b1b',marginTop:4}}>
-                              <strong>Current value:</strong> <span style={{color:'#6b7280'}}>{currentValue}</span>
-                            </div>
-                          )}
-                          {f.source?.quote && (
-                            <div style={{fontSize:'0.72rem',color:'#6b7280',marginTop:6,paddingTop:6,borderTop:'1px dashed #e5e7eb',fontStyle:'italic'}}>
-                              “{f.source.quote}” — <span style={{color:'#374151'}}>{f.source.subject}</span>{f.source.from ? ` · ${f.source.from.replace(/<.*>/, '').trim()}` : ''}
-                            </div>
-                          )}
-                          {f.alternates?.length > 0 && (
-                            <div style={{fontSize:'0.72rem',color:'#6b7280',marginTop:4}}>
-                              {f.alternates.length} other candidate{f.alternates.length !== 1 ? 's' : ''} in earlier emails
-                            </div>
-                          )}
-                        </div>
-                      )
-                    })}
-                  </div>
-                </div>
-              </>
-            )}
-
-            <hr style={{margin:'0.25rem 0'}} />
-
-            <div>
-              <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:'0.5rem'}}>
-                <strong>Bot Analysis</strong>
-                <button
-                  className="btn btn-ghost btn-sm"
-                  onClick={() => handleAnalyze(viewRecord, { fromView: true })}
-                  disabled={analyzingView || analyzing.has(viewRecord.id)}
-                >
-                  {analyzingView || analyzing.has(viewRecord.id) ? '⏳ Analyzing…' : (botResult || viewRecord.botNotes) ? '↺ Re-analyze' : '⚡ Run Analysis'}
-                </button>
-              </div>
-
-              {(() => {
-                let issues = [];
-                try {
-                  let src = botResult;
-                  if (!src && viewRecord.botNotes) src = typeof viewRecord.botNotes === 'string' ? JSON.parse(viewRecord.botNotes) : viewRecord.botNotes;
-                  if (src) issues = (typeof src === 'string' ? JSON.parse(src) : src).issues || [];
-                } catch {}
-                if (analyzingView || analyzing.has(viewRecord.id)) {
-                  return <div className="text-muted">Analyzing email threads and rider notes…</div>;
-                }
-                if (!issues.length) {
-                  return <div className="text-muted" style={{fontSize:'0.9rem'}}>No analysis run yet. Click "Run Analysis" to check for conflicts.</div>;
-                }
-                if (issues.length === 0) {
-                  return <div style={{color:'#065f46',background:'#d1fae5',padding:'0.75rem',borderRadius:6}}>✅ No conflicts detected. All rider needs appear to be covered by venue capabilities.</div>;
-                }
-                return (
-                  <div style={{display:'grid',gap:'0.5rem'}}>
-                    {issues.map((issue, i) => {
-                      const resolved = issue.resolution === 'acknowledged' || issue.resolution === 'dismissed'
-                      const borderColor = resolved ? '#cbd5e1' : (issue.status === 'flag' ? '#ef4444' : '#f59e0b')
-                      const bg = resolved ? '#f8fafc' : (issue.status === 'flag' ? '#fef2f2' : '#fffbeb')
-                      return (
-                        <div key={i} style={{
-                          padding:'0.75rem',
-                          borderRadius:6,
-                          borderLeft:`4px solid ${borderColor}`,
-                          background: bg,
-                          opacity: resolved ? 0.75 : 1
-                        }}>
-                          <div style={{display:'flex',gap:'0.5rem',alignItems:'baseline',flexWrap:'wrap'}}>
-                            <span style={{fontWeight:600,textDecoration: resolved ? 'line-through' : 'none'}}>{issue.category}</span>
-                            <span style={{fontSize:'0.75rem',fontWeight:600,color:issue.status==='flag'?'#991b1b':'#92400e'}}>
-                              {issue.status === 'flag' ? '🚩 Follow-up Needed' : '⚠️ Verify Specs'}
-                            </span>
-                            {issue.resolution === 'acknowledged' && (
-                              <span className="badge" style={{background:'#d1fae5',color:'#065f46'}}>✅ Acknowledged</span>
-                            )}
-                            {issue.resolution === 'dismissed' && (
-                              <span className="badge" style={{background:'#e5e7eb',color:'#374151'}}>🚫 Dismissed</span>
-                            )}
-                          </div>
-                          <div style={{marginTop:'0.25rem',fontSize:'0.9rem'}}>{issue.note}</div>
-                          {resolved && (issue.resolvedBy || issue.resolvedAt) && (
-                            <div className="text-muted" style={{fontSize:'0.75rem',marginTop:4}}>
-                              by {issue.resolvedBy || 'unknown'}
-                              {issue.resolvedAt ? ` · ${new Date(issue.resolvedAt).toLocaleString()}` : ''}
-                            </div>
-                          )}
-                          <div style={{display:'flex',gap:6,marginTop:8}}>
-                            {!resolved ? (
-                              <>
-                                <button className="btn btn-ghost btn-sm" onClick={() => resolveIssue(i, 'acknowledged')}>✅ Acknowledge</button>
-                                <button className="btn btn-ghost btn-sm" onClick={() => resolveIssue(i, 'dismissed')}>🚫 Dismiss</button>
-                              </>
-                            ) : (
-                              <button className="btn btn-ghost btn-sm" onClick={() => resolveIssue(i, null)}>↺ Reopen</button>
-                            )}
-                          </div>
-                        </div>
-                      )
-                    })}
-                  </div>
-                );
-              })()}
-            </div>
 
             {(viewRecord.riderNotes || viewRecord.productionNeeds || viewRecord.backlineNotes || viewRecord.localCrewNeeds || viewRecord.cateringNotes || viewRecord.hospitalityNotes || viewRecord.stagingChanges || viewRecord.notes) && (
               <>

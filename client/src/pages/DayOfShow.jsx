@@ -24,47 +24,6 @@ export default function DayOfShow() {
   const [saving, setSaving]   = useState(false)
   const [selectedShow, setSelectedShow] = useState('')
   const [showPastShows, setShowPastShows] = useState(false)
-  // ─── Bot ROS / Day-Sheet extraction ───
-  const [botModal, setBotModal]   = useState(false)
-  const [botLoading, setBotLoading] = useState(false)
-  const [botError, setBotError]   = useState('')
-  const [botResult, setBotResult] = useState(null)   // { items, sources, ... }
-  const [botPicked, setBotPicked] = useState({})     // index -> bool
-  const [botReplace, setBotReplace] = useState(false)
-  const [botApplying, setBotApplying] = useState(false)
-
-  async function runBotExtract() {
-    if (!selectedShow) { alert('Pick a show first to scan its emails.'); return }
-    setBotModal(true); setBotLoading(true); setBotError(''); setBotResult(null); setBotPicked({})
-    try {
-      const { data } = await api.post('/schedule/extract', { showId: selectedShow })
-      if (!data.success) throw new Error(data.message || 'Extraction failed')
-      setBotResult(data)
-      const picks = {}; (data.items || []).forEach((_, i) => { picks[i] = true })
-      setBotPicked(picks)
-    } catch (err) {
-      setBotError(err?.response?.data?.message || err.message || 'Extraction failed')
-    } finally { setBotLoading(false) }
-  }
-
-  async function applyBotItems() {
-    if (!botResult) return
-    const items = (botResult.items || [])
-      .filter((_, i) => botPicked[i])
-      .map(it => ({ time: it.time, label: it.label, responsible: it.responsible, notes: it.notes }))
-    if (items.length === 0) { alert('Select at least one item.'); return }
-    setBotApplying(true)
-    try {
-      const { data } = await api.post('/schedule/apply', {
-        showId: selectedShow, items, replaceExisting: botReplace,
-      })
-      if (!data.success) throw new Error(data.message || 'Apply failed')
-      await load()
-      setBotModal(false)
-    } catch (err) {
-      setBotError(err?.response?.data?.message || err.message || 'Apply failed')
-    } finally { setBotApplying(false) }
-  }
 
   useEffect(() => {
     Promise.all([
@@ -135,13 +94,6 @@ export default function DayOfShow() {
     .sort((a, b) => (a.time || '').localeCompare(b.time || ''))
 
   const currentAdvance = selectedShow ? advances.find(a => a.showId === selectedShow) : null
-  const botBanner = (() => {
-    if (!currentAdvance?.botAutoApplied) return null
-    const count = currentAdvance.botAutoAppliedCount || ''
-    let when = currentAdvance.botAutoApplied
-    try { when = new Date(currentAdvance.botAutoApplied).toLocaleString() } catch {}
-    return { count, when }
-  })()
 
   function handlePrint() {
     // Group filtered items by show so "All Shows" prints one page per show.
@@ -218,7 +170,6 @@ export default function DayOfShow() {
           <div className="page-subtitle">Load-in to load-out schedule and timeline management</div>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
-          <button className="btn btn-ghost" onClick={runBotExtract} disabled={!selectedShow} title={selectedShow ? 'Scan linked emails for a Run-of-Show / day sheet' : 'Pick a show first'}>🤖 Auto-Fill From Emails</button>
           <button className="btn btn-ghost" onClick={handlePrint} disabled={filtered.length === 0}>🖨 Print Day Sheet</button>
           <button className="btn btn-primary" onClick={openAdd}>+ Add Item</button>
         </div>
@@ -236,12 +187,6 @@ export default function DayOfShow() {
           Show all (incl. past)
         </label>
       </div>
-
-      {botBanner && (
-        <div className="alert" style={{ background:'rgba(99,102,241,0.12)', border:'1px solid rgba(99,102,241,0.35)', color:'#c7d2fe', padding:'10px 14px', borderRadius:8, marginBottom:12, fontSize:13 }}>
-          🤖 Auto-filled by the bot{botBanner.count ? <> (<strong>{botBanner.count}</strong> item{botBanner.count === '1' ? '' : 's'})</> : null} on {botBanner.when}. Review and edit as needed.
-        </div>
-      )}
 
       <div className="card">
         {loading ? <div className="loading">Loading…</div> : (
@@ -336,85 +281,6 @@ export default function DayOfShow() {
               <textarea value={f.notes} onChange={set('notes')} />
             </div>
           </div>
-        </Modal>
-      )}
-
-      {botModal && (
-        <Modal
-          title="🤖 Auto-Fill Day of Show from Emails"
-          onClose={() => setBotModal(false)}
-          footer={
-            <>
-              <button className="btn btn-ghost" onClick={() => setBotModal(false)}>Close</button>
-              <button
-                className="btn btn-primary"
-                onClick={applyBotItems}
-                disabled={botApplying || botLoading || !botResult || (botResult.items || []).length === 0}
-              >
-                {botApplying ? 'Applying…' : `Apply ${Object.values(botPicked).filter(Boolean).length} Item(s)`}
-              </button>
-            </>
-          }
-        >
-          {botLoading && <div className="loading">Scanning emails…</div>}
-          {botError && <div className="alert alert-error">{botError}</div>}
-          {!botLoading && botResult && (
-            <>
-              <div style={{ fontSize: 13, color: 'rgba(255,255,255,0.7)', marginBottom: 12 }}>
-                Scanned <strong>{botResult.scannedCount}</strong> of {botResult.candidateCount} schedule-looking
-                email(s) ({botResult.linkedEmailCount} linked to show
-                {botResult.artistName ? <> / <em>{botResult.artistName}</em></> : null}). Found <strong>{(botResult.items || []).length}</strong> schedule item(s).
-              </div>
-              {(botResult.items || []).length === 0 ? (
-                <div className="empty-state">
-                  No timed schedule lines detected. Make sure a Run-of-Show / Day Sheet email is linked to this show.
-                </div>
-              ) : (
-                <>
-                  <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 13, marginBottom: 10, cursor: 'pointer' }}>
-                    <input type="checkbox" checked={botReplace} onChange={e => setBotReplace(e.target.checked)} />
-                    Replace existing schedule for this show (deletes current items first)
-                  </label>
-                  <div className="table-wrap" style={{ maxHeight: 380, overflowY: 'auto' }}>
-                    <table>
-                      <thead>
-                        <tr>
-                          <th style={{ width: 28 }}></th>
-                          <th>Time</th>
-                          <th>Label</th>
-                          <th>Responsible</th>
-                          <th>Source</th>
-                          <th>Conf</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {botResult.items.map((it, i) => (
-                          <tr key={i}>
-                            <td>
-                              <input
-                                type="checkbox"
-                                checked={!!botPicked[i]}
-                                onChange={e => setBotPicked(p => ({ ...p, [i]: e.target.checked }))}
-                              />
-                            </td>
-                            <td><strong>{formatTime(it.time, tf)}</strong></td>
-                            <td>{it.label}</td>
-                            <td className="text-muted">{it.responsible || '—'}</td>
-                            <td className="text-muted" style={{ fontSize: 11, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={`${it.source?.subject || ''}\n${it.source?.quote || ''}`}>
-                              {it.source?.subject || '—'}
-                            </td>
-                            <td>
-                              <span className={`badge badge-${it.confidence === 'high' ? 'success' : it.confidence === 'medium' ? 'warning' : 'inside'}`}>{it.confidence}</span>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </>
-              )}
-            </>
-          )}
         </Modal>
       )}
     </div>
