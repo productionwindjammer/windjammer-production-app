@@ -1024,7 +1024,19 @@ app.post('/api/upload', requireAuth, async (req, res) => {
     res.json({ success: true, url });
   } catch (err) {
     console.error('Upload error:', err.message);
-    res.status(500).json({ success: false, message: err.message });
+    const raw = String(err.message || '');
+    let message = raw;
+    if (raw.includes('invalid_grant')) {
+      const usingOAuth = !!(
+        process.env.GMAIL_CLIENT_ID &&
+        process.env.GMAIL_CLIENT_SECRET &&
+        process.env.GMAIL_REFRESH_TOKEN
+      );
+      message = usingOAuth
+        ? 'Google rejected the Drive credentials (invalid_grant). The OAuth refresh token has been revoked or expired — an admin needs to re-run scripts/setup-gmail-oauth.js and update GMAIL_REFRESH_TOKEN in Railway.'
+        : 'Google rejected the Drive credentials (invalid_grant). The service-account private key is stale — an admin needs to rotate the key in GCP and update GOOGLE_SERVICE_ACCOUNT in Railway.';
+    }
+    res.status(500).json({ success: false, message });
   }
 });
 
@@ -3272,4 +3284,14 @@ if (process.env.NODE_ENV === 'production') {
 }
 
 const PORT = config.port;
-app.listen(PORT, () => console.log(`Windjammer server running on port ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`Windjammer server running on port ${PORT}`);
+  // Fire-and-forget: log Google credential health so failures show up in
+  // Railway logs immediately at boot rather than at first user action.
+  try {
+    const { checkGoogleAuth } = require('./scripts/check-google-auth');
+    checkGoogleAuth().catch(err => console.error('[auth-check] unexpected:', err.message));
+  } catch (err) {
+    console.error('[auth-check] failed to load:', err.message);
+  }
+});
