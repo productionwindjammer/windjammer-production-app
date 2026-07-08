@@ -660,8 +660,8 @@ export default function ShowDetail() {
         </div>
       </div>
 
-      {/* ── Day selector (only shown for multi-night runs) ──────────────── */}
-      {siblings.length > 1 && (
+      {/* ── Day selector ────────────────────────────────────────────────── */}
+      {siblings.length >= 1 && (
         <div style={{
           display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
           padding: '10px 14px', marginBottom: 16, borderRadius: 8,
@@ -669,9 +669,9 @@ export default function ShowDetail() {
           border: '1px solid rgba(255,255,255,0.08)',
         }}>
           <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.5)', textTransform: 'uppercase', letterSpacing: '0.08em', marginRight: 4 }}>
-            {siblings.length}-Night Run · Day
+            {siblings.length > 1 ? `${siblings.length}-Night Run · Day` : 'Single Night'}
           </span>
-          {siblings.map((s, idx) => {
+          {siblings.length > 1 && siblings.map((s, idx) => {
             const isActive = s.id === id
             const d = s.date ? new Date(s.date + 'T12:00:00') : null
             const label = d ? d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : ''
