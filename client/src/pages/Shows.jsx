@@ -31,6 +31,7 @@ export default function Shows() {
   const [showPast, setShowPast] = useState(false)
   const [saving, setSaving]     = useState(false)
   const [supportActs, setSupportActs] = useState([])
+  const [additionalDates, setAdditionalDates] = useState([])
   const [selectedIds, setSelectedIds] = useState(new Set())
   const [bulkDeleting, setBulkDeleting] = useState(false)
 
@@ -58,12 +59,14 @@ export default function Shows() {
     setEditing(null)
     setForm(BLANK)
     setSupportActs([])
+    setAdditionalDates([])
     setModal(true)
   }
   function openEdit(s) {
     setEditing(s)
     setForm({ ...BLANK, ...s, promoter: s.promoter || DEFAULT_PROMOTER })
     setSupportActs(parseSupport(s.support))
+    setAdditionalDates([])
     setModal(true)
   }
 
@@ -77,7 +80,13 @@ export default function Shows() {
       if (editing) {
         await api.put(`/shows/${editing.id}`, payload)
       } else {
+        // Primary night first, then any additional nights sharing all fields
+        const extras = additionalDates.map(d => d.trim()).filter(Boolean)
+        const uniqueExtras = [...new Set(extras)].filter(d => d !== payload.date)
         await api.post('/shows', payload)
+        for (const d of uniqueExtras) {
+          await api.post('/shows', { ...payload, date: d })
+        }
       }
       await load()
       setModal(false)
@@ -323,6 +332,51 @@ export default function Shows() {
               <div className="form-group">
                 <label>Date *</label>
                 <input type="date" value={f.date} onChange={set('date')} required />
+                {!editing && additionalDates.map((d, i) => (
+                  <div key={i} style={{ display:'flex', gap:6, marginTop:6 }}>
+                    <input
+                      type="date"
+                      value={d}
+                      onChange={e => {
+                        const v = e.target.value
+                        setAdditionalDates(arr => arr.map((x, j) => (j === i ? v : x)))
+                      }}
+                      style={{ flex: 1 }}
+                    />
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      onClick={() => setAdditionalDates(arr => arr.filter((_, j) => j !== i))}
+                      title="Remove this night"
+                    >×</button>
+                  </div>
+                ))}
+                {!editing && (
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    style={{ marginTop: 6, alignSelf: 'flex-start' }}
+                    onClick={() => {
+                      setAdditionalDates(arr => {
+                        // Default new date to day after latest known date
+                        const all = [f.date, ...arr].filter(Boolean).sort()
+                        const last = all[all.length - 1]
+                        let next = ''
+                        if (last) {
+                          const dt = new Date(last + 'T12:00:00')
+                          dt.setDate(dt.getDate() + 1)
+                          next = dt.toISOString().slice(0, 10)
+                        }
+                        return [...arr, next]
+                      })
+                    }}
+                  >+ Add another night</button>
+                )}
+                {!editing && additionalDates.length > 0 && (
+                  <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.5)', marginTop: 6 }}>
+                    Creates {additionalDates.filter(Boolean).length + 1} separate shows sharing artist, stage, and defaults. Each night can be edited independently afterward.
+                  </div>
+                )}
               </div>
               <div className="form-group">
                 <label>Stage *</label>
