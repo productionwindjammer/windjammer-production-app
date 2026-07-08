@@ -31,7 +31,8 @@ export default function Shows() {
   const [showPast, setShowPast] = useState(false)
   const [saving, setSaving]     = useState(false)
   const [supportActs, setSupportActs] = useState([])
-
+  const [selectedIds, setSelectedIds] = useState(new Set())
+  const [bulkDeleting, setBulkDeleting] = useState(false)
 
   useEffect(() => { load() }, [])
 
@@ -86,7 +87,46 @@ export default function Shows() {
   async function handleDelete(id) {
     if (!confirm('Delete this show?')) return
     await api.delete(`/shows/${id}`)
+    setSelectedIds(prev => {
+      const next = new Set(prev)
+      next.delete(id)
+      return next
+    })
     await load()
+  }
+
+  function toggleRow(id) {
+    setSelectedIds(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  function toggleAllVisible(ids, allChecked) {
+    setSelectedIds(prev => {
+      const next = new Set(prev)
+      if (allChecked) ids.forEach(id => next.delete(id))
+      else ids.forEach(id => next.add(id))
+      return next
+    })
+  }
+
+  async function handleBulkDelete() {
+    const ids = [...selectedIds]
+    if (ids.length === 0) return
+    if (!confirm(`Delete ${ids.length} show${ids.length !== 1 ? 's' : ''}? This cannot be undone.`)) return
+    setBulkDeleting(true)
+    try {
+      const results = await Promise.allSettled(ids.map(id => api.delete(`/shows/${id}`)))
+      const failed = results.filter(r => r.status === 'rejected').length
+      if (failed > 0) alert(`${failed} of ${ids.length} deletions failed.`)
+      setSelectedIds(new Set())
+      await load()
+    } finally {
+      setBulkDeleting(false)
+    }
   }
 
   const f = form
@@ -144,6 +184,15 @@ export default function Shows() {
           <div className="page-subtitle">All concerts and private events</div>
         </div>
         <div style={{display:'flex',gap:8}}>
+          {selectedIds.size > 0 && (
+            <button
+              className="btn btn-danger"
+              onClick={handleBulkDelete}
+              disabled={bulkDeleting}
+            >
+              {bulkDeleting ? 'Deleting…' : `Delete ${selectedIds.size} Selected`}
+            </button>
+          )}
           <button className="btn btn-primary" onClick={openAdd}>+ Add Show</button>
         </div>
       </div>
@@ -174,11 +223,25 @@ export default function Shows() {
       </div>
 
       <div className="card">
-        {loading ? <div className="loading">Loading…</div> : (
+        {loading ? <div className="loading">Loading…</div> : (() => {
+          const visibleIds = filtered.map(s => s.id)
+          const allChecked = visibleIds.length > 0 && visibleIds.every(id => selectedIds.has(id))
+          const someChecked = !allChecked && visibleIds.some(id => selectedIds.has(id))
+          return (
           <div className="table-wrap responsive-cards">
             <table>
               <thead>
                 <tr>
+                  <th style={{width:32}}>
+                    <input
+                      type="checkbox"
+                      checked={allChecked}
+                      ref={el => { if (el) el.indeterminate = someChecked }}
+                      onChange={() => toggleAllVisible(visibleIds, allChecked)}
+                      title={allChecked ? 'Deselect all' : 'Select all'}
+                      style={{cursor:'pointer'}}
+                    />
+                  </th>
                   <th>Date</th>
                   <th>Artist / Event</th>
                   <th>Stage</th>
@@ -192,10 +255,24 @@ export default function Shows() {
               </thead>
               <tbody>
                 {filtered.length === 0 && (
-                  <tr><td colSpan={canSeeLaborCost ? 9 : 8}><div className="empty-state">No shows found</div></td></tr>
+                  <tr><td colSpan={canSeeLaborCost ? 10 : 9}><div className="empty-state">No shows found</div></td></tr>
                 )}
-                {filtered.map(show => (
-                  <tr key={show.id} style={{ cursor: 'pointer' }} onClick={() => navigate(`/shows/${show.id}`)}>
+                {filtered.map(show => {
+                  const isSelected = selectedIds.has(show.id)
+                  return (
+                  <tr
+                    key={show.id}
+                    style={{ cursor: 'pointer', background: isSelected ? 'rgba(59,130,246,0.08)' : undefined }}
+                    onClick={() => navigate(`/shows/${show.id}`)}
+                  >
+                    <td data-label="" onClick={e => { e.stopPropagation(); toggleRow(show.id) }} style={{width:32}}>
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={() => {}}
+                        style={{cursor:'pointer'}}
+                      />
+                    </td>
                     <td data-label="Date" className="text-muted">{show.date}</td>
                     <td data-label="Artist"><strong>{show.artist || show.eventName || '—'}</strong></td>
                     <td data-label="Stage"><span className={`badge badge-${show.stage}`}>{show.stage === 'inside' ? 'Inside' : 'Beach'}</span></td>
@@ -218,11 +295,13 @@ export default function Shows() {
                       </div>
                     </td>
                   </tr>
-                ))}
+                  )
+                })}
               </tbody>
             </table>
           </div>
-        )}
+          )
+        })()}
       </div>
 
       {modal && (
