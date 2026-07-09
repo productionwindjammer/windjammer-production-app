@@ -273,22 +273,33 @@ const DAY_SHEET_TEMPLATE = [
 ];
 const DAY_SHEET_KEYS = DAY_SHEET_TEMPLATE.map(it => it.key);
 
-// ── Venue defaults (stage capacities + day-sheet times) ────────────────────
+// ── Venue defaults (per-stage capacity + day-sheet times) ─────────────────
 // Stored as a single JSON row in the AppSettings sheet under key
 // `venueDefaults`. Cached in memory for a short window to avoid hitting
 // Sheets on every show creation.
-const HARD_VENUE_DEFAULTS = {
-  stages: Object.fromEntries(
-    Object.entries(config.stages).map(([k, s]) => [k, { capacity: s.capacity }])
-  ),
-  daySheet: {
-    // Global fallback times, by day-sheet item key.
-    default: Object.fromEntries(DAY_SHEET_TEMPLATE.map(it => [it.key, it.time])),
-    // Optional per-day-of-week overrides. Keys are '0'..'6' matching JS
-    // Date.getDay() (0 = Sunday). Values are partial { key: time } maps.
-    byDay: {},
-  },
-};
+//
+// Shape:
+//   {
+//     stages: {
+//       <stageKey>: {
+//         capacity: <number>,
+//         daySheet: {
+//           default: { [itemKey]: 'HH:MM' },
+//           byDay:   { '0'..'6': { [itemKey]: 'HH:MM' } }  // 0 = Sunday
+//         }
+//       }
+//     }
+//   }
+function buildStageDefaults() {
+  const flatTimes = Object.fromEntries(DAY_SHEET_TEMPLATE.map(it => [it.key, it.time]));
+  return Object.fromEntries(
+    Object.entries(config.stages).map(([k, s]) => [k, {
+      capacity: s.capacity,
+      daySheet: { default: { ...flatTimes }, byDay: {} },
+    }])
+  );
+}
+const HARD_VENUE_DEFAULTS = { stages: buildStageDefaults() };
 
 let _venueCache = null;
 let _venueCacheAt = 0;
@@ -301,22 +312,14 @@ function normalizeTime(t) {
   return /^\d{1,2}:\d{2}$/.test(s) ? s.padStart(5, '0') : '';
 }
 
-function normalizeVenueDefaults(raw) {
-  const src = raw && typeof raw === 'object' ? raw : {};
-  const stages = {};
-  for (const k of Object.keys(HARD_VENUE_DEFAULTS.stages)) {
-    const cap = Number(src.stages?.[k]?.capacity);
-    stages[k] = {
-      capacity: Number.isFinite(cap) && cap > 0 ? Math.round(cap) : HARD_VENUE_DEFAULTS.stages[k].capacity,
-    };
-  }
+function normalizeDaySheet(src, fallback) {
   const def = {};
   for (const k of DAY_SHEET_KEYS) {
-    def[k] = normalizeTime(src.daySheet?.default?.[k]) || HARD_VENUE_DEFAULTS.daySheet.default[k];
+    def[k] = normalizeTime(src?.default?.[k]) || fallback.default[k];
   }
   const byDay = {};
   for (const d of ['0','1','2','3','4','5','6']) {
-    const raw = src.daySheet?.byDay?.[d];
+    const raw = src?.byDay?.[d];
     if (!raw || typeof raw !== 'object') continue;
     const entry = {};
     for (const k of DAY_SHEET_KEYS) {
@@ -325,7 +328,24 @@ function normalizeVenueDefaults(raw) {
     }
     if (Object.keys(entry).length) byDay[d] = entry;
   }
-  return { stages, daySheet: { default: def, byDay } };
+  return { default: def, byDay };
+}
+
+function normalizeVenueDefaults(raw) {
+  const src = raw && typeof raw === 'object' ? raw : {};
+  // Legacy shape had a top-level `daySheet`. Fold it into every stage so old
+  // rows keep working after the per-stage refactor.
+  const legacy = src.daySheet && typeof src.daySheet === 'object' ? src.daySheet : null;
+  const stages = {};
+  for (const k of Object.keys(HARD_VENUE_DEFAULTS.stages)) {
+    const hard = HARD_VENUE_DEFAULTS.stages[k];
+    const stageSrc = src.stages?.[k] || {};
+    const cap = Number(stageSrc.capacity);
+    const capacity = Number.isFinite(cap) && cap > 0 ? Math.round(cap) : hard.capacity;
+    const daySheet = normalizeDaySheet(stageSrc.daySheet || legacy || {}, hard.daySheet);
+    stages[k] = { capacity, daySheet };
+  }
+  return { stages };
 }
 
 async function getVenueDefaults({ force = false } = {}) {
@@ -349,15 +369,25 @@ async function getVenueDefaults({ force = false } = {}) {
   return _venueCache;
 }
 
+// Deep-merge a patch onto the current per-stage venue defaults. Any stage,
+// capacity, default row, or byDay entry the caller omits is left untouched.
 async function setVenueDefaults(patch) {
   const current = await getVenueDefaults({ force: true });
-  const merged = normalizeVenueDefaults({
-    stages:   { ...current.stages,   ...(patch?.stages   || {}) },
-    daySheet: {
-      default: { ...current.daySheet.default, ...(patch?.daySheet?.default || {}) },
-      byDay:   { ...current.daySheet.byDay,   ...(patch?.daySheet?.byDay   || {}) },
-    },
-  });
+  const mergedStages = { ...current.stages };
+  const patchStages = patch?.stages || {};
+  for (const k of Object.keys(HARD_VENUE_DEFAULTS.stages)) {
+    const cur = current.stages[k] || HARD_VENUE_DEFAULTS.stages[k];
+    const p   = patchStages[k];
+    if (!p) { mergedStages[k] = cur; continue; }
+    mergedStages[k] = {
+      capacity: p.capacity !== undefined ? p.capacity : cur.capacity,
+      daySheet: {
+        default: { ...cur.daySheet.default, ...(p.daySheet?.default || {}) },
+        byDay:   { ...cur.daySheet.byDay,   ...(p.daySheet?.byDay   || {}) },
+      },
+    };
+  }
+  const merged = normalizeVenueDefaults({ stages: mergedStages });
   const value = JSON.stringify(merged);
   const rows = await sheets.getRows(config.googleSheets.sheets.appSettings);
   const existing = rows.find(r => r.key === 'venueDefaults');
@@ -377,8 +407,8 @@ async function setVenueDefaults(patch) {
 }
 
 // Resolve the day-sheet times to use for a given show, applying:
-//   show-specific field > per-day-of-week override > default override
-//   > hard-coded template.
+//   show-specific field > per-day-of-week override for the show's stage
+//   > stage default > hard-coded template.
 //
 // Show-specific fields are the ones the user enters on the show form:
 //   • show.doorsTime  → maps to the `doors` day-sheet item
@@ -386,7 +416,9 @@ async function setVenueDefaults(patch) {
 //     (i.e. the first act to hit the stage). We only apply it once; the other
 //     set falls back to the default/override.
 function resolveDaySheetTimes(show, venue) {
-  const daySheet = venue?.daySheet || HARD_VENUE_DEFAULTS.daySheet;
+  const stageKey = show?.stage || 'inside';
+  const stage = venue?.stages?.[stageKey] || HARD_VENUE_DEFAULTS.stages[stageKey] || HARD_VENUE_DEFAULTS.stages.inside;
+  const daySheet = stage.daySheet;
   let dow = null;
   const iso = String(show?.date || '').slice(0, 10);
   if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) {
@@ -738,7 +770,7 @@ app.get('/api/settings/venue', requireAuth, async (req, res) => {
   }
 });
 
-app.put('/api/settings/venue', requireAuth, requireRole('admin'), async (req, res) => {
+app.put('/api/settings/venue', requireAuth, requireRole('admin', 'production_manager'), async (req, res) => {
   try {
     const saved = await setVenueDefaults(req.body || {});
     res.json({ success: true, data: saved });

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import api from '../api'
 import Modal from '../components/Modal'
+import VenueDefaultsCard from '../components/VenueDefaultsCard'
 import { useAuth } from '../context/AuthContext'
 import { useSettings } from '../context/SettingsContext'
 import { formatTime } from '../utils/time'
@@ -211,6 +212,8 @@ function ManagerDashboard({ user, shows, labor, navigate, isManager }) {
           )}
         </div>
       </div>
+
+      {isManager && <VenueDefaultsCard compact />}
     </div>
   )
 }

@@ -3,16 +3,21 @@ import api from '../api'
 import { useAuth } from './AuthContext'
 
 /**
- * Venue-wide defaults (stage capacities + day-of-show timeline) that are
+ * Venue-wide defaults (per-stage capacity + day-of-show timeline) that are
  * persisted server-side and shared across all users. Fetched once per session
- * after login; admins can update via the Settings page.
+ * after login; admins & production managers can update via the Settings page
+ * or the manager dashboard.
  *
  * Shape:
  *   {
- *     stages:   { inside: { capacity }, beach: { capacity } },
- *     daySheet: {
- *       default: { [itemKey]: 'HH:MM' },
- *       byDay:   { '0'..'6': { [itemKey]: 'HH:MM' } }   // 0 = Sunday
+ *     stages: {
+ *       <stageKey>: {
+ *         capacity: <number>,
+ *         daySheet: {
+ *           default: { [itemKey]: 'HH:MM' },
+ *           byDay:   { '0'..'6': { [itemKey]: 'HH:MM' } }   // 0 = Sunday
+ *         }
+ *       }
  *     }
  *   }
  *
@@ -20,22 +25,23 @@ import { useAuth } from './AuthContext'
  * day-sheet template, driven by the server.
  */
 
+const FALLBACK_DAY_SHEET = {
+  default: {
+    loadIn:     '15:00',
+    soundCheck: '17:00',
+    doors:      '19:00',
+    set1:       '20:00',
+    changeover: '21:00',
+    set2:       '21:30',
+    curfew:     '23:00',
+  },
+  byDay: {},
+}
+
 const FALLBACK = {
   stages: {
-    inside: { capacity: 500 },
-    beach:  { capacity: 1200 },
-  },
-  daySheet: {
-    default: {
-      loadIn:     '15:00',
-      soundCheck: '17:00',
-      doors:      '19:00',
-      set1:       '20:00',
-      changeover: '21:00',
-      set2:       '21:30',
-      curfew:     '23:00',
-    },
-    byDay: {},
+    inside: { capacity: 500,  daySheet: FALLBACK_DAY_SHEET },
+    beach:  { capacity: 1200, daySheet: FALLBACK_DAY_SHEET },
   },
 }
 
