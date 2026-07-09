@@ -258,6 +258,10 @@ async function ensureArtistsFromShow(show) {
 // Standard Day-of-Show timeline seeded on every show creation.
 // Idempotent: does nothing if the show already has any schedule rows.
 // Returns the number of rows inserted.
+//
+// The `time` values here are hard-coded fallbacks. Admins can override them
+// (globally, or per day of the week) via /api/settings/venue — see
+// getVenueDefaults() below. Item keys and default labels are fixed.
 const DAY_SHEET_TEMPLATE = [
   { key: 'loadIn',     label: 'Load In',           time: '15:00' },
   { key: 'soundCheck', label: 'Sound Check',       time: '17:00' },
@@ -267,10 +271,155 @@ const DAY_SHEET_TEMPLATE = [
   { key: 'set2',       label: 'Set 2',             time: '21:30' },
   { key: 'curfew',     label: 'Curfew / Load Out', time: '23:00' },
 ];
+const DAY_SHEET_KEYS = DAY_SHEET_TEMPLATE.map(it => it.key);
+
+// ── Venue defaults (stage capacities + day-sheet times) ────────────────────
+// Stored as a single JSON row in the AppSettings sheet under key
+// `venueDefaults`. Cached in memory for a short window to avoid hitting
+// Sheets on every show creation.
+const HARD_VENUE_DEFAULTS = {
+  stages: Object.fromEntries(
+    Object.entries(config.stages).map(([k, s]) => [k, { capacity: s.capacity }])
+  ),
+  daySheet: {
+    // Global fallback times, by day-sheet item key.
+    default: Object.fromEntries(DAY_SHEET_TEMPLATE.map(it => [it.key, it.time])),
+    // Optional per-day-of-week overrides. Keys are '0'..'6' matching JS
+    // Date.getDay() (0 = Sunday). Values are partial { key: time } maps.
+    byDay: {},
+  },
+};
+
+let _venueCache = null;
+let _venueCacheAt = 0;
+const VENUE_CACHE_MS = 15_000;
+
+function normalizeTime(t) {
+  const s = String(t || '').trim();
+  if (!s) return '';
+  // Accept HH:MM (24h). Reject anything else silently.
+  return /^\d{1,2}:\d{2}$/.test(s) ? s.padStart(5, '0') : '';
+}
+
+function normalizeVenueDefaults(raw) {
+  const src = raw && typeof raw === 'object' ? raw : {};
+  const stages = {};
+  for (const k of Object.keys(HARD_VENUE_DEFAULTS.stages)) {
+    const cap = Number(src.stages?.[k]?.capacity);
+    stages[k] = {
+      capacity: Number.isFinite(cap) && cap > 0 ? Math.round(cap) : HARD_VENUE_DEFAULTS.stages[k].capacity,
+    };
+  }
+  const def = {};
+  for (const k of DAY_SHEET_KEYS) {
+    def[k] = normalizeTime(src.daySheet?.default?.[k]) || HARD_VENUE_DEFAULTS.daySheet.default[k];
+  }
+  const byDay = {};
+  for (const d of ['0','1','2','3','4','5','6']) {
+    const raw = src.daySheet?.byDay?.[d];
+    if (!raw || typeof raw !== 'object') continue;
+    const entry = {};
+    for (const k of DAY_SHEET_KEYS) {
+      const t = normalizeTime(raw[k]);
+      if (t) entry[k] = t;
+    }
+    if (Object.keys(entry).length) byDay[d] = entry;
+  }
+  return { stages, daySheet: { default: def, byDay } };
+}
+
+async function getVenueDefaults({ force = false } = {}) {
+  if (!force && _venueCache && (Date.now() - _venueCacheAt) < VENUE_CACHE_MS) {
+    return _venueCache;
+  }
+  try {
+    const rows = await sheets.getRows(config.googleSheets.sheets.appSettings);
+    const row = rows.find(r => r.key === 'venueDefaults');
+    let parsed = {};
+    if (row?.value) {
+      try { parsed = JSON.parse(row.value); }
+      catch (err) { console.warn('[venue-defaults] parse failed:', err.message); }
+    }
+    _venueCache = normalizeVenueDefaults(parsed);
+  } catch (err) {
+    console.warn('[venue-defaults] read failed, using hard defaults:', err.message);
+    _venueCache = normalizeVenueDefaults({});
+  }
+  _venueCacheAt = Date.now();
+  return _venueCache;
+}
+
+async function setVenueDefaults(patch) {
+  const current = await getVenueDefaults({ force: true });
+  const merged = normalizeVenueDefaults({
+    stages:   { ...current.stages,   ...(patch?.stages   || {}) },
+    daySheet: {
+      default: { ...current.daySheet.default, ...(patch?.daySheet?.default || {}) },
+      byDay:   { ...current.daySheet.byDay,   ...(patch?.daySheet?.byDay   || {}) },
+    },
+  });
+  const value = JSON.stringify(merged);
+  const rows = await sheets.getRows(config.googleSheets.sheets.appSettings);
+  const existing = rows.find(r => r.key === 'venueDefaults');
+  if (existing) {
+    await sheets.updateRowById(config.googleSheets.sheets.appSettings, existing.id, { value, updatedAt: new Date().toISOString() });
+  } else {
+    await sheets.appendRow(config.googleSheets.sheets.appSettings, {
+      id: `${Date.now()}${Math.random().toString(36).slice(2, 6)}`,
+      key: 'venueDefaults',
+      value,
+      updatedAt: new Date().toISOString(),
+    });
+  }
+  _venueCache = merged;
+  _venueCacheAt = Date.now();
+  return merged;
+}
+
+// Resolve the day-sheet times to use for a given show, applying:
+//   show-specific field > per-day-of-week override > default override
+//   > hard-coded template.
+//
+// Show-specific fields are the ones the user enters on the show form:
+//   • show.doorsTime  → maps to the `doors` day-sheet item
+//   • show.showTime   → maps to `set1` when a support is booked, else `set2`
+//     (i.e. the first act to hit the stage). We only apply it once; the other
+//     set falls back to the default/override.
+function resolveDaySheetTimes(show, venue) {
+  const daySheet = venue?.daySheet || HARD_VENUE_DEFAULTS.daySheet;
+  let dow = null;
+  const iso = String(show?.date || '').slice(0, 10);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) {
+    const [y, m, d] = iso.split('-').map(Number);
+    dow = String(new Date(y, m - 1, d).getDay());
+  }
+  const perDay = dow != null ? (daySheet.byDay?.[dow] || {}) : {};
+
+  // Which set does the show's `showTime` correspond to?
+  const hasSupport = Boolean(String(show?.support || '').trim());
+  const showTimeKey = hasSupport ? 'set1' : 'set2';
+  const fromShow = {};
+  const doors = normalizeTime(show?.doorsTime);
+  if (doors) fromShow.doors = doors;
+  const showTime = normalizeTime(show?.showTime);
+  if (showTime) fromShow[showTimeKey] = showTime;
+
+  const out = {};
+  for (const it of DAY_SHEET_TEMPLATE) {
+    out[it.key] =
+      fromShow[it.key] ||
+      perDay[it.key] ||
+      daySheet.default?.[it.key] ||
+      it.time;
+  }
+  return out;
+}
 
 // Build day-sheet labels using the show's headliner / support names when
 // available. Support acts play Set 1; the headliner plays Set 2.
-function buildDaySheetLabels(show) {
+// `times` is a { [key]: 'HH:MM' } map (from resolveDaySheetTimes) — falls
+// back to the hard-coded template time when a key is missing.
+function buildDaySheetLabels(show, times = {}) {
   const headliner = (show.artist || '').trim();
   const supportRaw = (show.support || '').trim();
   const supports = supportRaw
@@ -287,7 +436,7 @@ function buildDaySheetLabels(show) {
       if (headliner && firstSupport) label = `${headliner} Set`;
       else if (headliner) label = `${headliner} Set 2`;
     }
-    return { ...it, label };
+    return { ...it, label, time: times[it.key] || it.time };
   });
 }
 
@@ -297,7 +446,9 @@ async function seedDaySheetForShow(show) {
   const existing = await sheets.getRows(config.googleSheets.sheets.schedule);
   const mine = existing.filter(r => String(r.showId) === String(show.id));
   if (mine.length > 0) return 0;
-  const template = buildDaySheetLabels(show);
+  const venue = await getVenueDefaults().catch(() => normalizeVenueDefaults({}));
+  const times = resolveDaySheetTimes(show, venue);
+  const template = buildDaySheetLabels(show, times);
   const stamp = Date.now();
   const rows = template.map((it, i) => ({
     id:          `${stamp}${i}${Math.random().toString(36).slice(2, 5)}`,
@@ -326,7 +477,9 @@ async function backfillDaySheetLabels(show) {
   const rows = await sheets.getRows(config.googleSheets.sheets.schedule);
   const mine = rows.filter(r => String(r.showId) === String(show.id));
   if (mine.length === 0) return 0;
-  const template = buildDaySheetLabels(show);
+  const venue = await getVenueDefaults().catch(() => normalizeVenueDefaults({}));
+  const times = resolveDaySheetTimes(show, venue);
+  const template = buildDaySheetLabels(show, times);
   const wanted = {
     'Set 1': template.find(t => t.key === 'set1')?.label,
     'Set 2': template.find(t => t.key === 'set2')?.label,
@@ -562,6 +715,35 @@ app.post('/api/schedule/ensure-defaults', requireAuth, async (req, res) => {
     res.json({ success: true, seeded, renamed });
   } catch (err) {
     console.error('[schedule/ensure-defaults]', err.message);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ── Venue defaults (stage capacities + day-sheet times) ────────────────────
+// GET is readable by any authed user (the UI needs capacity for progress
+// bars). PUT is admin-only.
+app.get('/api/settings/venue', requireAuth, async (req, res) => {
+  try {
+    const venue = await getVenueDefaults();
+    res.json({
+      success: true,
+      data: venue,
+      meta: {
+        daySheetItems: DAY_SHEET_TEMPLATE.map(it => ({ key: it.key, label: it.label })),
+      },
+    });
+  } catch (err) {
+    console.error('[settings/venue GET]', err.message);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+app.put('/api/settings/venue', requireAuth, requireRole('admin'), async (req, res) => {
+  try {
+    const saved = await setVenueDefaults(req.body || {});
+    res.json({ success: true, data: saved });
+  } catch (err) {
+    console.error('[settings/venue PUT]', err.message);
     res.status(500).json({ success: false, message: err.message });
   }
 });

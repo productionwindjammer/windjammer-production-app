@@ -4,6 +4,7 @@ import api from '../api'
 import Modal from '../components/Modal'
 import { useSettings } from '../context/SettingsContext'
 import { useAuth } from '../context/AuthContext'
+import { useVenue } from '../context/VenueContext'
 import { formatTime } from '../utils/time'
 import { getTicketStats } from '../utils/stages'
 
@@ -59,6 +60,7 @@ export default function ShowDetail() {
   const navigate = useNavigate()
   const { settings } = useSettings()
   const { effectiveRole } = useAuth()
+  const { venue } = useVenue()
   const canEditDocs = ['admin', 'production_manager'].includes(effectiveRole)
   const tf = settings.timeFormat || '12h'
 
@@ -628,7 +630,7 @@ export default function ShowDetail() {
               {show.showTime  && <span>🕐 Show: {formatTime(show.showTime, tf)}</span>}
               {show.doorsTime && <span>🚪 Doors: {formatTime(show.doorsTime, tf)}</span>}
               {(() => {
-                const { sold, capacity, pct } = getTicketStats(show)
+                const { sold, capacity, pct } = getTicketStats(show, venue)
                 if (!capacity && !sold) return null
                 return (
                   <span title="Tickets sold / capacity">

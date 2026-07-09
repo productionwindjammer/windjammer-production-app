@@ -19,11 +19,13 @@ import Calendar from './pages/Calendar'
 import Artists from './pages/Artists'
 import { SettingsProvider } from './context/SettingsContext'
 import { SplitProvider } from './context/SplitContext'
+import { VenueProvider } from './context/VenueContext'
 
 export default function App() {
   return (
     <SettingsProvider>
     <AuthProvider>
+    <VenueProvider>
     <SplitProvider>
       <BrowserRouter>
         <UpdatePrompt />
@@ -50,6 +52,7 @@ export default function App() {
         </Routes>
       </BrowserRouter>
     </SplitProvider>
+    </VenueProvider>
     </AuthProvider>
     </SettingsProvider>
   )

@@ -26,6 +26,7 @@ module.exports = {
       artistDocuments:  'ArtistDocuments',
       gmailLabelMappings: 'GmailLabelMappings',
       gmailSyncedLabels:  'GmailSyncedLabels',
+      appSettings:        'AppSettings',
     }
   }
 };
