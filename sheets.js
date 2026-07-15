@@ -42,7 +42,16 @@ async function getRows(sheetName) {
   if (!headers) return [];
   return rows.map(row => {
     const obj = {};
-    headers.forEach((h, i) => { obj[h] = row[i] !== undefined ? row[i] : ''; });
+    headers.forEach((h, i) => {
+      let v = row[i] !== undefined ? row[i] : '';
+      // Google Sheets auto-coerces the strings "true"/"false" into boolean
+      // cells when we write with valueInputOption: 'USER_ENTERED', then
+      // returns them as "TRUE"/"FALSE" on read. Normalize back to lowercase
+      // so the many `x === 'true'` comparisons across the client still work.
+      if (v === 'TRUE') v = 'true';
+      else if (v === 'FALSE') v = 'false';
+      obj[h] = v;
+    });
     return obj;
   });
 }
