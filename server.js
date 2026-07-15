@@ -660,7 +660,29 @@ async function notifyShiftAssigned(record) {
   }
 }
 
-crudRoutes(app, '/api/shows',           'shows',     ['admin','production_manager','promoter'], { afterCreate: kickoffAdvanceForShow });
+crudRoutes(app, '/api/shows',           'shows',     ['admin','production_manager','promoter'], {
+  afterCreate: kickoffAdvanceForShow,
+  // When an editor changes `artist` or `support`, make sure any newly-named
+  // acts get an Artist Registry entry (and Drive folder) so their documents
+  // tab works. Existing day-sheet labels are left alone so user-customized
+  // rows survive; the Set 1 / Set 2 backfill only re-labels rows that still
+  // have the untouched generic string.
+  afterUpdate: async (next, prev /*, req */) => {
+    try {
+      const artistChanged  = (prev?.artist  || '') !== (next?.artist  || '');
+      const supportChanged = (prev?.support || '') !== (next?.support || '');
+      if (!artistChanged && !supportChanged) return;
+      await ensureArtistsFromShow(next).catch(err =>
+        console.warn('[shows afterUpdate] artist registry sync failed:', err.message)
+      );
+      await backfillDaySheetLabels(next).catch(err =>
+        console.warn('[shows afterUpdate] day-sheet label refresh failed:', err.message)
+      );
+    } catch (err) {
+      console.warn('[shows afterUpdate]', err.message);
+    }
+  },
+});
 
 // ── Artist defaults: shared helpers ──────────────────────────────────────────
 // The artist registry now owns long-term production info (rider, production

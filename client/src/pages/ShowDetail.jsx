@@ -52,6 +52,7 @@ const BLANK_LABOR = {
 const BLANK_SHOW = {
   date: '', artist: '', eventName: '', stage: 'inside', status: 'pending',
   showTime: '', doorsTime: '', capacity: '', ticketPrice: '', ticketsSold: '', guarantee: '',
+  support: '',
   promoter: '', tourManager: '', notes: '',
 }
 
@@ -1258,6 +1259,17 @@ export default function ShowDetail() {
               <div className="form-group">
                 <label>Event Name</label>
                 <input value={showForm.eventName} onChange={e => setShowForm(v => ({ ...v, eventName: e.target.value }))} />
+              </div>
+            </div>
+            <div className="form-group">
+              <label>Support Acts</label>
+              <input
+                value={showForm.support}
+                onChange={e => setShowForm(v => ({ ...v, support: e.target.value }))}
+                placeholder="Comma-separated, e.g. Opener One, Opener Two"
+              />
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
+                Support acts appear on the day sheet and pull their own riders / plots into the Documents tab.
               </div>
             </div>
             <div className="form-row">
