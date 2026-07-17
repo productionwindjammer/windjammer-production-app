@@ -7,6 +7,7 @@ import { useAuth } from '../context/AuthContext'
 import { useVenue } from '../context/VenueContext'
 import { formatTime } from '../utils/time'
 import { getTicketStats } from '../utils/stages'
+import { hasFinancialAccess } from '../utils/roles'
 
 const DOC_TYPES = [
   { value: 'rider',       label: 'Tech Rider' },
@@ -62,7 +63,8 @@ export default function ShowDetail() {
   const { settings } = useSettings()
   const { effectiveRole } = useAuth()
   const { venue } = useVenue()
-  const canEditDocs = ['admin', 'production_manager'].includes(effectiveRole)
+  const canEditDocs      = ['admin', 'production_manager', 'stage_manager'].includes(effectiveRole)
+  const canSeeFinancials = hasFinancialAccess(effectiveRole)
   const tf = settings.timeFormat || '12h'
 
   const [show, setShow]           = useState(null)
@@ -841,7 +843,7 @@ export default function ShowDetail() {
         {[
           { key: 'advancing', label: '🎸 Advancing' },
           { key: 'schedule',  label: `📋 Day of Show${schedule.length ? ` (${schedule.length})` : ''}` },
-          { key: 'labor',     label: `👷 Crew${labor.length ? ` · $${totalLaborCost.toFixed(0)}` : ''}` },
+          { key: 'labor',     label: `👷 Crew${labor.length ? (canSeeFinancials ? ` · $${totalLaborCost.toFixed(0)}` : ` (${labor.length})`) : ''}` },
           { key: 'documents', label: `📎 Documents${showDocs.length ? ` (${showDocs.length})` : ''}` },
         ].map(tab => (
           <button
@@ -1035,8 +1037,10 @@ export default function ShowDetail() {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
             {labor.length > 0 && (
               <div style={{ fontSize: 14, color: 'rgba(255,255,255,0.6)' }}>
-                <strong style={{ color: '#fff' }}>{labor.length}</strong> worker{labor.length !== 1 ? 's' : ''} ·{' '}
-                Total: <strong style={{ color: '#6ee7b7' }}>${totalLaborCost.toFixed(2)}</strong>
+                <strong style={{ color: '#fff' }}>{labor.length}</strong> worker{labor.length !== 1 ? 's' : ''}
+                {canSeeFinancials && (
+                  <> · Total: <strong style={{ color: '#6ee7b7' }}>${totalLaborCost.toFixed(2)}</strong></>
+                )}
               </div>
             )}
             <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
@@ -1057,8 +1061,8 @@ export default function ShowDetail() {
                       <th>Call</th>
                       <th>Wrap</th>
                       <th>Hours</th>
-                      <th>Rate</th>
-                      <th>Total</th>
+                      {canSeeFinancials && <th>Rate</th>}
+                      {canSeeFinancials && <th>Total</th>}
                       <th>Notes</th>
                       <th></th>
                     </tr>
@@ -1071,8 +1075,8 @@ export default function ShowDetail() {
                         <td className="text-muted">{l.callTime ? formatTime(l.callTime, tf) : '—'}</td>
                         <td className="text-muted">{l.wrapTime ? formatTime(l.wrapTime, tf) : '—'}</td>
                         <td className="text-muted">{l.hours || '—'}</td>
-                        <td className="text-muted">{l.rate ? `$${l.rate}` : '—'}</td>
-                        <td><strong style={{ color: '#6ee7b7' }}>{l.total ? `$${l.total}` : '—'}</strong></td>
+                        {canSeeFinancials && <td className="text-muted">{l.rate ? `$${l.rate}` : '—'}</td>}
+                        {canSeeFinancials && <td><strong style={{ color: '#6ee7b7' }}>{l.total ? `$${l.total}` : '—'}</strong></td>}
                         <td className="text-muted" style={{ maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.notes || '—'}</td>
                         <td>
                           <div className="actions-cell">
@@ -1316,10 +1320,12 @@ export default function ShowDetail() {
                 <label>Tickets Sold</label>
                 <input type="number" min="0" value={showForm.ticketsSold} onChange={e => setShowForm(v => ({ ...v, ticketsSold: e.target.value }))} placeholder="e.g. 320" />
               </div>
-              <div className="form-group">
-                <label>Guarantee</label>
-                <input value={showForm.guarantee} onChange={e => setShowForm(v => ({ ...v, guarantee: e.target.value }))} />
-              </div>
+              {canSeeFinancials && (
+                <div className="form-group">
+                  <label>Guarantee</label>
+                  <input value={showForm.guarantee} onChange={e => setShowForm(v => ({ ...v, guarantee: e.target.value }))} />
+                </div>
+              )}
             </div>
             <div className="form-group">
               <label>Notes</label>
@@ -1422,7 +1428,7 @@ export default function ShowDetail() {
                 </div>
               )}
             </div>
-            {selectedLaborRates.length > 1 && (
+            {selectedLaborRates.length > 1 && canSeeFinancials && (
               <div className="form-group">
                 <label>Position (rate)</label>
                 <select onChange={e => pickLaborStaffPosition(e.target.value)} defaultValue="">
@@ -1461,15 +1467,19 @@ export default function ShowDetail() {
                 <input type="number" step="0.5" value={laborForm.hours}
                   onChange={e => setLaborForm(v => ({ ...v, hours: e.target.value, total: calcTotal(e.target.value, v.rate) }))} />
               </div>
-              <div className="form-group">
-                <label>Rate ($/hr)</label>
-                <input type="number" step="0.01" value={laborForm.rate}
-                  onChange={e => setLaborForm(v => ({ ...v, rate: e.target.value, total: calcTotal(v.hours, e.target.value) }))} />
-              </div>
-              <div className="form-group">
-                <label>Total</label>
-                <input value={laborForm.total ? `$${laborForm.total}` : ''} readOnly style={{ opacity: 0.6 }} />
-              </div>
+              {canSeeFinancials && (
+                <div className="form-group">
+                  <label>Rate ($/hr)</label>
+                  <input type="number" step="0.01" value={laborForm.rate}
+                    onChange={e => setLaborForm(v => ({ ...v, rate: e.target.value, total: calcTotal(v.hours, e.target.value) }))} />
+                </div>
+              )}
+              {canSeeFinancials && (
+                <div className="form-group">
+                  <label>Total</label>
+                  <input value={laborForm.total ? `$${laborForm.total}` : ''} readOnly style={{ opacity: 0.6 }} />
+                </div>
+              )}
             </div>
             <div className="form-row">
               <div className="form-group">
@@ -1520,7 +1530,7 @@ export default function ShowDetail() {
                     <th style={{ padding: '6px 4px', width: 90 }}>Wrap</th>
                     <th style={{ padding: '6px 4px', width: 80 }}>Type</th>
                     <th style={{ padding: '6px 4px', width: 75 }}>Units</th>
-                    <th style={{ padding: '6px 4px', width: 90 }}>Rate $</th>
+                    {canSeeFinancials && <th style={{ padding: '6px 4px', width: 90 }}>Rate $</th>}
                     <th style={{ padding: '6px 4px', width: 32 }}></th>
                   </tr>
                 </thead>
@@ -1576,16 +1586,18 @@ export default function ShowDetail() {
                           : <input type="number" step="0.5" value={r.hours} onChange={e => updateCrewRow(r._rid, { hours: e.target.value })} style={{ width: '100%' }} placeholder="0" />
                         }
                       </td>
-                      <td style={{ padding: '6px 4px', verticalAlign: 'top' }}>
-                        <input type="number" step="0.01" value={r.rate} onChange={e => updateCrewRow(r._rid, { rate: e.target.value })} style={{ width: '100%' }} placeholder="0" />
-                      </td>
+                      {canSeeFinancials && (
+                        <td style={{ padding: '6px 4px', verticalAlign: 'top' }}>
+                          <input type="number" step="0.01" value={r.rate} onChange={e => updateCrewRow(r._rid, { rate: e.target.value })} style={{ width: '100%' }} placeholder="0" />
+                        </td>
+                      )}
                       <td style={{ padding: '6px 4px', verticalAlign: 'top', textAlign: 'center' }}>
                         <button type="button" className="btn btn-ghost btn-sm" onClick={() => setCrewRows(rows => rows.filter(x => x._rid !== r._rid))} style={{ padding: '2px 6px' }} title="Remove row">✕</button>
                       </td>
                     </tr>
                   ))}
                   {crewRows.length === 0 && (
-                    <tr><td colSpan={8}><div className="empty-state" style={{ padding: 20 }}>No rows. Use the buttons above to add some.</div></td></tr>
+                    <tr><td colSpan={canSeeFinancials ? 8 : 7}><div className="empty-state" style={{ padding: 20 }}>No rows. Use the buttons above to add some.</div></td></tr>
                   )}
                 </tbody>
               </table>

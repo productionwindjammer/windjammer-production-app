@@ -10,6 +10,7 @@ import Shows from './pages/Shows'
 import ShowDetail from './pages/ShowDetail'
 import Advancing from './pages/Advancing'
 import DayOfShow from './pages/DayOfShow'
+import Labor from './pages/Labor'
 import Vendors from './pages/Vendors'
 import Staff from './pages/Staff'
 import TechPack from './pages/TechPack'
@@ -42,6 +43,7 @@ export default function App() {
             <Route path="/artists/:id" element={<Artists />} />
             <Route path="/advancing"   element={<Advancing />} />
             <Route path="/day-of-show" element={<DayOfShow />} />
+            <Route path="/labor"       element={<Labor />} />
             <Route path="/vendors"     element={<Vendors />} />
             <Route path="/staff"       element={<Staff />} />
             <Route path="/users"       element={<Users />} />

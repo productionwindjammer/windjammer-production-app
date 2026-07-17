@@ -7,12 +7,13 @@ export const NAV_ITEMS = [
   { label: 'Shows',        path: '/shows',         icon: '🎭' },
   { label: 'Calendar',     path: '/calendar',      icon: '🗓️' },
   { label: 'Artists',      path: '/artists',       icon: '🎤' },
-  { label: 'Advancing',    path: '/advancing',     icon: '📋', sub: true, roles: ['admin', 'production_manager', 'venue_management'] },
-  { label: 'Day of Show',  path: '/day-of-show',   icon: '📅', sub: true, roles: ['admin', 'production_manager', 'venue_management', 'crew', 'staff', 'tech'] },
+  { label: 'Advancing',    path: '/advancing',     icon: '📋', sub: true, roles: ['admin', 'production_manager', 'stage_manager', 'venue_management'] },
+  { label: 'Labor',        path: '/labor',         icon: '👷', sub: true, roles: ['admin', 'production_manager', 'stage_manager'] },
+  { label: 'Day of Show',  path: '/day-of-show',   icon: '📅', sub: true, roles: ['admin', 'production_manager', 'stage_manager', 'venue_management', 'crew', 'staff', 'tech'] },
   { label: 'Vendors',      path: '/vendors',       icon: '🏢', roles: ['admin', 'production_manager'] },
   { label: 'Staff',        path: '/staff',         icon: '👥', roles: ['admin', 'production_manager'] },
   { label: 'Users',        path: '/users',         icon: '🔐', roles: ['admin'] },
-  { label: 'Tech Pack',    path: '/tech-pack',     icon: '📁', roles: ['admin', 'production_manager', 'venue_management', 'crew', 'staff', 'tech'] },
+  { label: 'Tech Pack',    path: '/tech-pack',     icon: '📁', roles: ['admin', 'production_manager', 'stage_manager', 'venue_management', 'crew', 'staff', 'tech'] },
   { label: 'Settings',     path: '/settings',      icon: '⚙️' },
 ]
 

@@ -6,9 +6,10 @@ import { useAuth } from '../context/AuthContext'
 const VIEW_AS_OPTIONS = [
   { value: '',                   label: 'Admin (me)' },
   { value: 'production_manager', label: 'Production Manager' },
-  { value: 'crew',               label: 'Crew' },
-  { value: 'promoter',           label: 'Promoter' },
+  { value: 'stage_manager',      label: 'Stage Manager' },
   { value: 'venue_management',   label: 'Venue Management' },
+  { value: 'promoter',           label: 'Promoter' },
+  { value: 'crew',               label: 'Crew' },
 ]
 
 export default function ViewAsSwitcher() {

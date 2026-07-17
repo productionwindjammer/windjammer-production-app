@@ -12,6 +12,7 @@ import SplitPane from './SplitPane'
 const ROLE_LABELS = {
   admin: 'Admin',
   production_manager: 'Production Manager',
+  stage_manager: 'Stage Manager',
   crew: 'Crew',
   staff: 'Crew',
   tech: 'Crew',

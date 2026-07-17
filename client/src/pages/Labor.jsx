@@ -3,7 +3,9 @@ import api from '../api'
 import Modal from '../components/Modal'
 import { filterShowList } from '../utils/showFilters'
 import { useSettings } from '../context/SettingsContext'
+import { useAuth } from '../context/AuthContext'
 import { formatTime } from '../utils/time'
+import { hasFinancialAccess } from '../utils/roles'
 
 const BLANK = {
   showId: '', showName: '', stage: 'inside',
@@ -12,8 +14,19 @@ const BLANK = {
   notes: ''
 }
 
+// A blank showId in the labor sheet means the row is a "facility" or
+// "shop" call — work happening at the venue that isn't tied to a show
+// (deep cleans, load-outs between runs, maintenance, etc.). The
+// `showName` field is repurposed as the facility task label.
+function isFacilityRow(row) {
+  return !row.showId
+}
+
 export default function Labor() {
   const { settings } = useSettings()
+  const { user, effectiveRole } = useAuth()
+  const role = effectiveRole || user?.role || ''
+  const canSeeFinancials = hasFinancialAccess(role)
   const tf = settings.timeFormat || '12h'
   const [entries, setEntries] = useState([])
   const [shows, setShows]     = useState([])
@@ -22,6 +35,8 @@ export default function Labor() {
   const [modal, setModal]     = useState(false)
   const [editing, setEditing] = useState(null)
   const [form, setForm]       = useState(BLANK)
+  // 'show' = work call tied to a show, 'facility' = shop / venue work (no showId).
+  const [formMode, setFormMode] = useState('show')
   const [saving, setSaving]   = useState(false)
   const [filter, setFilter]   = useState({ show: '', stage: '' })
   const [showPastShows, setShowPastShows] = useState(false)
@@ -145,8 +160,27 @@ export default function Labor() {
     setStaff(st.data.data || [])
   }
 
-  function openAdd() { setEditing(null); setForm(BLANK); setModal(true) }
-  function openEdit(r) { setEditing(r); setForm({ ...BLANK, ...r }); setModal(true) }
+  function openAdd() { setEditing(null); setForm(BLANK); setFormMode('show'); setModal(true) }
+  function openEdit(r) {
+    setEditing(r)
+    setForm({ ...BLANK, ...r })
+    setFormMode(isFacilityRow(r) ? 'facility' : 'show')
+    setModal(true)
+  }
+  function openAddFacility() {
+    setEditing(null)
+    setForm({ ...BLANK, showId: '', showName: '', stage: '' })
+    setFormMode('facility')
+    setModal(true)
+  }
+  function switchFormMode(next) {
+    setFormMode(next)
+    if (next === 'facility') {
+      // Drop the show link + any auto-populated "date — artist" text so
+      // the task-name field starts fresh.
+      setForm(v => ({ ...v, showId: '', showName: '', stage: '' }))
+    }
+  }
 
   function calcTotal(form) {
     if ((form.payType || 'day') === 'day') {
@@ -257,8 +291,12 @@ export default function Labor() {
   const f = form
 
   const filtered = entries.filter(e => {
-    if (filter.show && e.showId !== filter.show) return false
-    if (filter.stage && e.stage !== filter.stage) return false
+    if (filter.show === '__facility__') { if (!isFacilityRow(e)) return false }
+    else if (filter.show) { if (e.showId !== filter.show) return false }
+    if (filter.stage) {
+      if (filter.stage === '__facility__') { if (!isFacilityRow(e)) return false }
+      else if (e.stage !== filter.stage) return false
+    }
     return true
   })
 
@@ -269,17 +307,19 @@ export default function Labor() {
       <div className="page-header">
         <div>
           <div className="page-title">Labor</div>
-          <div className="page-subtitle">Stagehand, casual labor, and runner assignments</div>
+          <div className="page-subtitle">Show crew, casual labor, runners, and facility / shop calls</div>
         </div>
-        <div style={{ display: 'flex', gap: 8 }}>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <button className="btn btn-ghost" onClick={openCrewBuilder}>+ Build Crew (per show)</button>
+          <button className="btn btn-ghost" onClick={openAddFacility}>+ Facility Call</button>
           <button className="btn btn-primary" onClick={openAdd}>+ Add Labor</button>
         </div>
       </div>
 
       <div className="filter-bar">
         <select value={filter.show} onChange={e => setFilter(f => ({ ...f, show: e.target.value }))}>
-          <option value="">All Shows</option>
+          <option value="">All Shows &amp; Facility Calls</option>
+          <option value="__facility__">— Facility calls only —</option>
           {filterShowList(shows, { showPast: showPastShows }).map(s => (
             <option key={s.id} value={s.id}>{s.date} — {s.artist || s.eventName}</option>
           ))}
@@ -293,7 +333,7 @@ export default function Labor() {
           <input type="checkbox" checked={showPastShows} onChange={e => setShowPastShows(e.target.checked)} />
           Show all (incl. past)
         </label>
-        {filtered.length > 0 && (
+        {filtered.length > 0 && canSeeFinancials && (
           <span style={{ marginLeft: 'auto', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
             Total: <strong style={{ color: 'var(--text)' }}>${totalCost.toFixed(2)}</strong>
           </span>
@@ -308,32 +348,40 @@ export default function Labor() {
                 <tr>
                   <th>Worker</th>
                   <th>Role</th>
-                  <th>Show</th>
+                  <th>Show / Task</th>
                   <th>Stage</th>
                   <th>Call</th>
                   <th>Wrap</th>
                   <th>Units</th>
-                  <th>Rate</th>
-                  <th>Total</th>
+                  {canSeeFinancials && <th>Rate</th>}
+                  {canSeeFinancials && <th>Total</th>}
                   <th>Union</th>
                   <th></th>
                 </tr>
               </thead>
               <tbody>
                 {filtered.length === 0 && (
-                  <tr><td colSpan={11}><div className="empty-state">No labor entries found</div></td></tr>
+                  <tr><td colSpan={canSeeFinancials ? 11 : 9}><div className="empty-state">No labor entries found</div></td></tr>
                 )}
                 {filtered.map(e => (
                   <tr key={e.id}>
                     <td><strong>{e.workerName || '—'}</strong></td>
                     <td className="text-muted">{e.role || '—'}</td>
-                    <td className="text-muted">{e.showName || '—'}</td>
-                    <td><span className={`badge badge-${e.stage}`}>{e.stage === 'inside' ? 'Inside' : 'Beach'}</span></td>
+                    <td className="text-muted">
+                      {isFacilityRow(e)
+                        ? <><span className="badge badge-warning" style={{ marginRight: 6 }}>Facility</span>{e.showName || '(unlabeled)'}</>
+                        : (e.showName || '—')}
+                    </td>
+                    <td>
+                      {e.stage
+                        ? <span className={`badge badge-${e.stage}`}>{e.stage === 'inside' ? 'Inside' : 'Beach'}</span>
+                        : <span className="text-muted">—</span>}
+                    </td>
                     <td className="text-muted">{e.callTime ? formatTime(e.callTime, tf) : '—'}</td>
                     <td className="text-muted">{e.wrapTime ? formatTime(e.wrapTime, tf) : '—'}</td>
                     <td>{(e.payType || 'hour') === 'day' ? `${e.days || 1} day${(e.days || 1) == 1 ? '' : 's'}` : (e.hours ? `${e.hours} hr` : '—')}</td>
-                    <td>{e.rate ? `$${e.rate}${(e.payType || 'hour') === 'day' ? '/day' : '/hr'}` : '—'}</td>
-                    <td><strong>{e.total ? `$${e.total}` : '—'}</strong></td>
+                    {canSeeFinancials && <td>{e.rate ? `$${e.rate}${(e.payType || 'hour') === 'day' ? '/day' : '/hr'}` : '—'}</td>}
+                    {canSeeFinancials && <td><strong>{e.total ? `$${e.total}` : '—'}</strong></td>}
                     <td>{e.union === 'true' ? '✅' : '—'}</td>
                     <td>
                       <div className="actions-cell">
@@ -351,7 +399,7 @@ export default function Labor() {
 
       {modal && (
         <Modal
-          title={editing ? 'Edit Labor Entry' : 'Add Labor Entry'}
+          title={editing ? 'Edit Labor Entry' : (formMode === 'facility' ? 'Add Facility Call' : 'Add Labor Entry')}
           onClose={() => setModal(false)}
           footer={
             <>
@@ -363,27 +411,79 @@ export default function Labor() {
           }
         >
           <div className="form-grid">
-            <div className="form-row">
-              <div className="form-group">
-                <label>Show</label>
-                <select value={f.showId} onChange={e => {
-                  const s = shows.find(s => s.id === e.target.value)
-                  setForm(v => ({ ...v, showId: e.target.value, showName: s ? `${s.date} — ${s.artist || s.eventName}` : '', stage: s?.stage || v.stage }))
-                }}>
-                  <option value="">Select show…</option>
-                  {filterShowList(shows, { showPast: showPastShows }).map(s => (
-                    <option key={s.id} value={s.id}>{s.date} — {s.artist || s.eventName}</option>
-                  ))}
-                </select>
+            {/* Work type toggle: show-tied vs facility / shop call */}
+            <div className="form-group">
+              <label>Work Type</label>
+              <div style={{ display: 'inline-flex', border: '1px solid var(--border)', borderRadius: 7, overflow: 'hidden' }}>
+                {[
+                  { v: 'show',     l: '🎭 For a Show' },
+                  { v: 'facility', l: '🏗️ Facility / Shop' },
+                ].map(opt => {
+                  const active = formMode === opt.v
+                  return (
+                    <button
+                      key={opt.v}
+                      type="button"
+                      onClick={() => switchFormMode(opt.v)}
+                      style={{
+                        background: active ? 'rgba(59,130,246,0.18)' : 'transparent',
+                        color: active ? 'var(--accent)' : 'var(--text-muted)',
+                        border: 'none', padding: '7px 14px', fontSize: 13,
+                        cursor: 'pointer', fontWeight: active ? 600 : 500,
+                      }}
+                    >
+                      {opt.l}
+                    </button>
+                  )
+                })}
               </div>
-              <div className="form-group">
-                <label>Stage</label>
-                <select value={f.stage} onChange={set('stage')}>
-                  <option value="inside">Inside Stage</option>
-                  <option value="beach">Beach Stage</option>
-                </select>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
+                Facility calls aren't tied to any show — use them for shop work, load-outs between runs, deep cleans, or maintenance.
               </div>
             </div>
+
+            {formMode === 'show' ? (
+              <div className="form-row">
+                <div className="form-group">
+                  <label>Show</label>
+                  <select value={f.showId} onChange={e => {
+                    const s = shows.find(s => s.id === e.target.value)
+                    setForm(v => ({ ...v, showId: e.target.value, showName: s ? `${s.date} — ${s.artist || s.eventName}` : '', stage: s?.stage || v.stage }))
+                  }}>
+                    <option value="">Select show…</option>
+                    {filterShowList(shows, { showPast: showPastShows }).map(s => (
+                      <option key={s.id} value={s.id}>{s.date} — {s.artist || s.eventName}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label>Stage</label>
+                  <select value={f.stage} onChange={set('stage')}>
+                    <option value="inside">Inside Stage</option>
+                    <option value="beach">Beach Stage</option>
+                  </select>
+                </div>
+              </div>
+            ) : (
+              <div className="form-row">
+                <div className="form-group">
+                  <label>Task / Call Name *</label>
+                  <input
+                    value={f.showName}
+                    onChange={set('showName')}
+                    placeholder="e.g. Beach Stage deep clean, Amp room reorg"
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Location</label>
+                  <select value={f.stage} onChange={set('stage')}>
+                    <option value="">— Any / Shop —</option>
+                    <option value="inside">Inside Stage</option>
+                    <option value="beach">Beach Stage</option>
+                  </select>
+                </div>
+              </div>
+            )}
             <div className="form-group">
               <label>Worker *</label>
               <select value={form.staffId || ''} onChange={e => pickStaff(e.target.value)}>
@@ -416,7 +516,7 @@ export default function Labor() {
                 </div>
               )}
             </div>
-            {selectedRates.length > 1 && (
+            {selectedRates.length > 1 && canSeeFinancials && (
               <div className="form-group">
                 <label>Position (rate)</label>
                 <select onChange={e => pickStaffPosition(e.target.value)} defaultValue="">
@@ -434,13 +534,15 @@ export default function Labor() {
                 <label>Role / Position</label>
                 <input value={f.role} onChange={set('role')} placeholder="Stagehand, Runner, Security…" />
               </div>
-              <div className="form-group">
-                <label>Pay Type</label>
-                <select value={f.payType} onChange={set('payType')}>
-                  <option value="day">Day Rate</option>
-                  <option value="hour">Hourly</option>
-                </select>
-              </div>
+              {canSeeFinancials && (
+                <div className="form-group">
+                  <label>Pay Type</label>
+                  <select value={f.payType} onChange={set('payType')}>
+                    <option value="day">Day Rate</option>
+                    <option value="hour">Hourly</option>
+                  </select>
+                </div>
+              )}
             </div>
             <div className="form-row">
               <div className="form-group">
@@ -453,7 +555,7 @@ export default function Labor() {
               </div>
             </div>
             <div className="form-row-3">
-              {f.payType === 'day' ? (
+              {(f.payType || 'day') === 'day' ? (
                 <div className="form-group">
                   <label>Days</label>
                   <input type="number" step="0.5" value={f.days} onChange={set('days')} placeholder="1" />
@@ -464,14 +566,18 @@ export default function Labor() {
                   <input type="number" step="0.5" value={f.hours} onChange={set('hours')} placeholder="0.0" />
                 </div>
               )}
-              <div className="form-group">
-                <label>{f.payType === 'day' ? 'Day Rate ($)' : 'Rate ($/hr)'}</label>
-                <input type="number" step="0.01" value={f.rate} onChange={set('rate')} placeholder="0.00" />
-              </div>
-              <div className="form-group">
-                <label>Auto Total</label>
-                <input value={calcTotal(f) ? `$${calcTotal(f)}` : ''} readOnly placeholder="—" style={{ opacity: 0.7 }} />
-              </div>
+              {canSeeFinancials && (
+                <div className="form-group">
+                  <label>{(f.payType || 'day') === 'day' ? 'Day Rate ($)' : 'Rate ($/hr)'}</label>
+                  <input type="number" step="0.01" value={f.rate} onChange={set('rate')} placeholder="0.00" />
+                </div>
+              )}
+              {canSeeFinancials && (
+                <div className="form-group">
+                  <label>Auto Total</label>
+                  <input value={calcTotal(f) ? `$${calcTotal(f)}` : ''} readOnly placeholder="—" style={{ opacity: 0.7 }} />
+                </div>
+              )}
             </div>
             <div className="form-row">
               <div className="form-group">

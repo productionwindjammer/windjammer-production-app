@@ -5,6 +5,7 @@ import Modal from '../components/Modal'
 import { useSettings } from '../context/SettingsContext'
 import { useAuth } from '../context/AuthContext'
 import { formatTime } from '../utils/time'
+import { hasFinancialAccess } from '../utils/roles'
 
 const DEFAULT_PROMOTER = 'Scottie Frier'
 
@@ -18,7 +19,7 @@ export default function Shows() {
   const { settings } = useSettings()
   const { user, effectiveRole } = useAuth()
   const role = effectiveRole || user?.role || ''
-  const canSeeLaborCost = ['admin', 'production_manager', 'venue_management'].includes(role)
+  const canSeeLaborCost = hasFinancialAccess(role)
   const tf = settings.timeFormat || '12h'
   const navigate = useNavigate()
   const [shows, setShows]       = useState([])

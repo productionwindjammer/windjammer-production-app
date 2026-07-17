@@ -113,6 +113,18 @@ export default function Settings() {
             <SegBtn options={[{ v: '12h', l: '12-hour (1:30 PM)' }, { v: '24h', l: '24-hour (13:30)' }]}
                     value={settings.timeFormat} onChange={v => update({ timeFormat: v })} />
           </Field>
+
+          <Field label="Layout" hint="Force the phone-style layout on this browser, or let it follow the viewport width. Choice is remembered per device — desktop on your laptop, mobile on your phone.">
+            <SegBtn
+              options={[
+                { v: 'auto', l: '🖥 Auto' },
+                { v: 'on',   l: '📱 Mobile' },
+                { v: 'off',  l: '💻 Desktop' },
+              ]}
+              value={settings.mobileMode}
+              onChange={v => update({ mobileMode: v })}
+            />
+          </Field>
         </div>
       </div>
 

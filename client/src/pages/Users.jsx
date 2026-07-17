@@ -9,9 +9,10 @@ const BLANK = { name: '', email: '', role: 'crew', password: '', active: 'true' 
 const ROLES = [
   { value: 'admin',              label: 'Admin' },
   { value: 'production_manager', label: 'Production Manager' },
-  { value: 'crew',               label: 'Crew' },
-  { value: 'promoter',           label: 'Promoter' },
+  { value: 'stage_manager',      label: 'Stage Manager' },
   { value: 'venue_management',   label: 'Venue Management' },
+  { value: 'promoter',           label: 'Promoter' },
+  { value: 'crew',               label: 'Crew' },
 ]
 
 export default function Users() {

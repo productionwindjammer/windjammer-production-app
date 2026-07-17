@@ -660,7 +660,7 @@ async function notifyShiftAssigned(record) {
   }
 }
 
-crudRoutes(app, '/api/shows',           'shows',     ['admin','production_manager','promoter'], {
+crudRoutes(app, '/api/shows',           'shows',     ['admin','production_manager','stage_manager','promoter'], {
   afterCreate: kickoffAdvanceForShow,
   // When an editor changes `artist` or `support`, make sure any newly-named
   // acts get an Artist Registry entry (and Drive folder) so their documents
@@ -752,7 +752,7 @@ app.get('/api/advancing', requireAuth, async (req, res) => {
   }
 });
 
-crudRoutes(app, '/api/advancing',       'advancing', ['admin','production_manager','promoter','venue_management']);
+crudRoutes(app, '/api/advancing',       'advancing', ['admin','production_manager','stage_manager','promoter','venue_management']);
 
 // Ensure a show's day-sheet has the standard timeline seeded.
 // Idempotent — safe to call on every visit. Backfills shows created before
@@ -803,12 +803,12 @@ app.put('/api/settings/venue', requireAuth, requireRole('admin', 'production_man
 });
 
 crudRoutes(app, '/api/schedule',        'schedule');
-crudRoutes(app, '/api/labor',           'labor',     ['admin','production_manager'], { afterCreate: notifyShiftAssigned });
+crudRoutes(app, '/api/labor',           'labor',     ['admin','production_manager','stage_manager'], { afterCreate: notifyShiftAssigned });
 crudRoutes(app, '/api/vendors',         'vendors');
 crudRoutes(app, '/api/vendor-bookings', 'vendorBookings');
 crudRoutes(app, '/api/settlement',      'settlement');
 crudRoutes(app, '/api/unavailability',  'unavailability', ['admin','production_manager']);
-crudRoutes(app, '/api/artists',         'artists',        ['admin','production_manager','promoter'], { afterCreate: (row) => ensureArtistFolder(row.id) });
+crudRoutes(app, '/api/artists',         'artists',        ['admin','production_manager','stage_manager','promoter'], { afterCreate: (row) => ensureArtistFolder(row.id) });
 // Note: artist-documents writes go through the upload endpoint below (which handles Drive too).
 // We expose only GET via crudRoutes-equivalent below to avoid orphaning Drive files on direct deletes.
 
@@ -1189,7 +1189,7 @@ app.get('/api/techpack', requireAuth, async (req, res) => {
   } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 });
 
-app.put('/api/techpack/:id', requireAuth, requireRole('admin', 'production_manager'), async (req, res) => {
+app.put('/api/techpack/:id', requireAuth, requireRole('admin', 'production_manager', 'stage_manager'), async (req, res) => {
   try {
     await sheets.updateRowById(config.googleSheets.sheets.techpack, req.params.id, req.body);
     res.json({ success: true });
@@ -1403,10 +1403,10 @@ app.get('/api/artists/:id/documents', requireAuth, async (req, res) => {
   }
 });
 
-// Upload a document to an artist's folder (PM+)
+// Upload a document to an artist's folder (PM+ / Stage Manager)
 // Body: { filename, mimeType, data (base64), type, year, notes, showId, showDate }
 app.post('/api/artists/:id/documents',
-  requireAuth, requireRole('admin','production_manager'),
+  requireAuth, requireRole('admin','production_manager','stage_manager'),
   async (req, res) => {
     try {
       const { filename, mimeType, data, type, year, notes, showId, showDate } = req.body || {};
@@ -1467,9 +1467,9 @@ app.post('/api/artists/:id/documents',
   }
 );
 
-// Delete a document — removes both the sheet row and the Drive file (PM+)
+// Delete a document — removes both the sheet row and the Drive file (PM+ / Stage Manager)
 app.delete('/api/artist-documents/:id',
-  requireAuth, requireRole('admin','production_manager'),
+  requireAuth, requireRole('admin','production_manager','stage_manager'),
   async (req, res) => {
     try {
       const rows = await sheets.getRows(config.googleSheets.sheets.artistDocuments);
@@ -1498,7 +1498,7 @@ app.delete('/api/artist-documents/:id',
 // Body: { advanceId, fields: ['riderNotes','productionNeeds',...] }
 // Only the listed fields are written; anything not in ARTIST_DEFAULT_FIELDS is ignored.
 app.post('/api/artists/:id/promote-from-advance',
-  requireAuth, requireRole('admin','production_manager'),
+  requireAuth, requireRole('admin','production_manager','stage_manager'),
   async (req, res) => {
     try {
       const { advanceId, fields } = req.body || {};
@@ -1610,7 +1610,7 @@ async function migrateOneShowToArtist(show, artists, drive, uploadedBy) {
 }
 
 app.post('/api/shows/:id/migrate-attachments-to-artist',
-  requireAuth, requireRole('admin','production_manager'),
+  requireAuth, requireRole('admin','production_manager','stage_manager'),
   async (req, res) => {
     try {
       const [shows, artists] = await Promise.all([
@@ -1929,7 +1929,7 @@ app.get('/api/emails', requireAuth, async (req, res) => {
 // If setAdvanceEmail is true, the email's sender (or recipient if outbound)
 // is also written into the Advancing record's advanceEmail so future syncs
 // pick up the contact automatically.
-app.post('/api/emails/:id/assign', requireAuth, requireRole('admin', 'production_manager', 'promoter'), async (req, res) => {
+app.post('/api/emails/:id/assign', requireAuth, requireRole('admin', 'production_manager', 'stage_manager', 'promoter'), async (req, res) => {
   try {
     const { id } = req.params;
     const { showId, artistId: bodyArtistId, setAdvanceEmail } = req.body;
@@ -2006,7 +2006,7 @@ app.post('/api/emails/:id/assign', requireAuth, requireRole('admin', 'production
 // At least one of showId / artistId must be provided. If both are supplied,
 // the show's matched artist is used (body artistId is ignored when showId is set).
 // Returns: { success, showId, showName, artistId, artistName, linked, missing }
-app.post('/api/emails/assign-bulk', requireAuth, requireRole('admin', 'production_manager', 'promoter'), async (req, res) => {
+app.post('/api/emails/assign-bulk', requireAuth, requireRole('admin', 'production_manager', 'stage_manager', 'promoter'), async (req, res) => {
   try {
     const { ids, showId, artistId: bodyArtistId } = req.body || {};
     if (!Array.isArray(ids) || ids.length === 0) return res.status(400).json({ success: false, message: 'ids[] required' });
@@ -2231,7 +2231,7 @@ app.post('/api/emails/sync', requireAuth, async (req, res) => {
 });
 
 // POST /api/emails/sync-all  — sync all open advances (also called by auto-sync)
-app.post('/api/emails/sync-all', requireAuth, requireRole('admin', 'production_manager', 'promoter'), async (req, res) => {
+app.post('/api/emails/sync-all', requireAuth, requireRole('admin', 'production_manager', 'stage_manager', 'promoter'), async (req, res) => {
   try {
     const picked = await pickGmailClient(req);
     if (!picked) return res.status(503).json({ success: false, message: 'Gmail not configured.' });

@@ -3,7 +3,8 @@ import { createContext, useContext, useEffect, useState, useCallback } from 'rea
 /**
  * User-level UI preferences persisted in localStorage and reflected onto
  * <html data-theme="…" data-menu="…"> so CSS can style everything.
- * These are per-browser, not synced server-side.
+ * These are per-browser, not synced server-side — a user can have desktop
+ * layout on their laptop and mobile layout on their phone simultaneously.
  */
 const DEFAULTS = {
   theme:    'dark',   // 'dark' | 'light'
@@ -11,6 +12,12 @@ const DEFAULTS = {
   density:  'comfortable', // 'comfortable' | 'compact'
   landing:  '/dashboard',  // default route after login
   timeFormat: '12h',       // '12h' | '24h' — applies to all displayed/outbound times
+  // 'auto'  → follow viewport width (mobile styles under 720px)
+  // 'on'    → force the mobile layout regardless of viewport (great when
+  //           a user prefers the phone-style chrome on a tablet or wants
+  //           to work on their laptop with the mobile navigation)
+  // 'off'   → force desktop layout even on narrow screens
+  mobileMode: 'auto',
 }
 
 const STORAGE_KEY = 'wj_settings'
@@ -30,6 +37,11 @@ function applyToDom(s) {
   root.setAttribute('data-theme',   s.theme)
   root.setAttribute('data-menu',    s.menuPos)
   root.setAttribute('data-density', s.density)
+  // Explicit override wins; 'auto' clears the attribute so the media
+  // query is the only thing deciding mobile-vs-desktop at that point.
+  if (s.mobileMode === 'on')       root.setAttribute('data-mobile', 'true')
+  else if (s.mobileMode === 'off') root.setAttribute('data-mobile', 'false')
+  else                             root.removeAttribute('data-mobile')
 }
 
 const SettingsContext = createContext(null)

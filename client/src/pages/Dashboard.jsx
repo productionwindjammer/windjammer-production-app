@@ -61,10 +61,11 @@ export default function Dashboard() {
   const tf = settings.timeFormat || '12h'
   const navigate = useNavigate()
   const role = effectiveRole || user?.role || ''
-  const isCrew     = role === 'crew' || role === 'staff' || role === 'tech'
-  const isManager  = role === 'admin' || role === 'production_manager'
-  const isPromoter = role === 'promoter'
-  const isVenue    = role === 'venue_management'
+  const isCrew         = role === 'crew' || role === 'staff' || role === 'tech'
+  const isManager      = role === 'admin' || role === 'production_manager'
+  const isStageManager = role === 'stage_manager'
+  const isPromoter     = role === 'promoter'
+  const isVenue        = role === 'venue_management'
 
   const [shows, setShows] = useState([])
   const [labor, setLabor] = useState([])
@@ -77,11 +78,11 @@ export default function Dashboard() {
 
   useEffect(() => {
     const requests = [api.get('/shows')]
-    if (isCrew || isManager || isVenue) requests.push(api.get('/labor'))
+    if (isCrew || isManager || isStageManager || isVenue) requests.push(api.get('/labor'))
     else requests.push(null)
-    if (isVenue || isManager || isPromoter) requests.push(api.get('/advancing'))
+    if (isVenue || isManager || isStageManager || isPromoter) requests.push(api.get('/advancing'))
     else requests.push(null)
-    if (isPromoter || isManager) {
+    if (isPromoter || isManager || isStageManager) {
       requests.push(api.get('/artists').catch(() => ({ data: { data: [] } })))
     } else {
       requests.push(null)
@@ -94,7 +95,7 @@ export default function Dashboard() {
         if (results[3]) setArtists(results[3].data.data || [])
       })
       .finally(() => setLoading(false))
-  }, [isCrew, isManager, isVenue, isPromoter, reloadKey])
+  }, [isCrew, isManager, isStageManager, isVenue, isPromoter, reloadKey])
 
   if (loading) return <div className="loading">Loading dashboard…</div>
 
@@ -111,12 +112,12 @@ export default function Dashboard() {
   )
   if (isVenue)    return <VenueDashboard    user={user} shows={shows} labor={labor} advancing={advancing} navigate={navigate} tf={tf} />
   if (isCrew)     return <CrewDashboard     user={user} shows={shows} labor={labor} navigate={navigate} />
-  return <ManagerDashboard user={user} shows={shows} labor={labor} navigate={navigate} isManager={isManager} />
+  return <ManagerDashboard user={user} shows={shows} labor={labor} navigate={navigate} isManager={isManager} isStageManager={isStageManager} />
 }
 
 /* ─────────────────────────────────────────────────────────────── Manager ── */
 
-function ManagerDashboard({ user, shows, labor, navigate, isManager }) {
+function ManagerDashboard({ user, shows, labor, navigate, isManager, isStageManager }) {
   const today = startOfToday()
   const upcomingRaw = shows.filter(s => {
     const d = parseDate(s.date); return d && d >= today && s.status !== 'cancelled'
@@ -131,7 +132,12 @@ function ManagerDashboard({ user, shows, labor, navigate, isManager }) {
   const { venue } = useVenue()
   const tf = settings.timeFormat || '12h'
 
-  const todos = useMemo(() => buildTodoList(upcoming, labor), [upcoming, labor])
+  // Stage Manager doesn't drive advancing/labor triage, so skip the todo list
+  // entirely for them — no Action Items stat, no Needs Attention panel.
+  const todos = useMemo(
+    () => (isStageManager ? [] : buildTodoList(upcoming, labor)),
+    [upcoming, labor, isStageManager],
+  )
   const laborByShow = useMemo(() => {
     const m = new Map()
     for (const l of labor) {
@@ -187,11 +193,13 @@ function ManagerDashboard({ user, shows, labor, navigate, isManager }) {
           <div className="stat-value" style={{ color: '#4ade80' }}>{beachShows.length}</div>
           <div className="stat-sub">upcoming events</div>
         </div>
-        <div className="stat-card">
-          <div className="stat-label">Action Items</div>
-          <div className="stat-value" style={{ color: 'var(--warning)' }}>{todos.length}</div>
-          <div className="stat-sub">need attention</div>
-        </div>
+        {!isStageManager && (
+          <div className="stat-card">
+            <div className="stat-label">Action Items</div>
+            <div className="stat-value" style={{ color: 'var(--warning)' }}>{todos.length}</div>
+            <div className="stat-sub">need attention</div>
+          </div>
+        )}
       </div>
 
       <OperationsCenter
@@ -199,6 +207,7 @@ function ManagerDashboard({ user, shows, labor, navigate, isManager }) {
         navigate={navigate}
         onAddShow={openQuickAdd}
         isManager={isManager}
+        isStageManager={isStageManager}
       />
 
       <div className="card">
@@ -281,28 +290,36 @@ function ManagerDashboard({ user, shows, labor, navigate, isManager }) {
  * Operations Center — quick-launch actions plus a triage list of the
  * top items needing the PM's attention. Replaces the venue-defaults
  * card on the manager dashboard; venue defaults live on Settings.
+ * Stage Manager sees the same quick actions minus financial pages
+ * (Vendors, Staff) and without the Needs Attention triage list.
  */
-function OperationsCenter({ todos, navigate, onAddShow, isManager }) {
+function OperationsCenter({ todos, navigate, onAddShow, isManager, isStageManager }) {
   const topTodos = todos.slice(0, 5)
   const actions = [
     { icon: '➕', label: 'Add Show',    hint: 'Quick add',      onClick: onAddShow,                      primary: true },
-    { icon: '👥', label: 'Add Staff',   hint: 'Crew & techs',   onClick: () => navigate('/staff') },
-    { icon: '✉️', label: 'Invite User', hint: 'Accounts',       onClick: () => navigate('/users') },
+    !isStageManager && { icon: '👥', label: 'Add Staff',   hint: 'Crew & techs',   onClick: () => navigate('/staff') },
+    !isStageManager && { icon: '✉️', label: 'Invite User', hint: 'Accounts',       onClick: () => navigate('/users') },
+    { icon: '👷', label: 'Labor',       hint: 'Crew & calls',   onClick: () => navigate('/labor') },
     { icon: '🎭', label: 'Artists',     hint: 'Roster',         onClick: () => navigate('/artists') },
-    { icon: '🏢', label: 'Vendors',     hint: 'Suppliers',      onClick: () => navigate('/vendors') },
+    !isStageManager && { icon: '🏢', label: 'Vendors',     hint: 'Suppliers',      onClick: () => navigate('/vendors') },
     { icon: '📋', label: 'Advancing',   hint: 'Production',     onClick: () => navigate('/advancing') },
     { icon: '🎬', label: 'Day of Show', hint: 'Run of show',    onClick: () => navigate('/day-of-show') },
     { icon: '📄', label: 'Tech Pack',   hint: 'Docs',           onClick: () => navigate('/tech-pack') },
-  ]
+  ].filter(Boolean)
+
+  // Stage Manager sees only the quick-actions column — no triage list.
+  const showTodos = !isStageManager
 
   return (
     <div className="card">
       <div className="card-header">
         <span className="card-title">Operations Center</span>
-        <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Quick actions &amp; open items</span>
+        <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+          {showTodos ? 'Quick actions & open items' : 'Quick actions'}
+        </span>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.35fr) minmax(0, 1fr)', gap: 20 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: showTodos ? 'minmax(0, 1.35fr) minmax(0, 1fr)' : 'minmax(0, 1fr)', gap: 20 }}>
         {/* ── Quick Actions ────────────────────────────────────── */}
         <div>
           <div style={{ fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-muted)', fontWeight: 600, marginBottom: 10 }}>
@@ -343,40 +360,42 @@ function OperationsCenter({ todos, navigate, onAddShow, isManager }) {
         </div>
 
         {/* ── Needs Attention ──────────────────────────────────── */}
-        <div>
-          <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 10 }}>
-            <div style={{ fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-muted)', fontWeight: 600 }}>
-              Needs Attention
+        {showTodos && (
+          <div>
+            <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 10 }}>
+              <div style={{ fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-muted)', fontWeight: 600 }}>
+                Needs Attention
+              </div>
+              {isManager && todos.length > topTodos.length && (
+                <button className="btn btn-ghost btn-sm" onClick={() => navigate('/advancing')}>
+                  See all {todos.length}
+                </button>
+              )}
             </div>
-            {isManager && todos.length > topTodos.length && (
-              <button className="btn btn-ghost btn-sm" onClick={() => navigate('/advancing')}>
-                See all {todos.length}
-              </button>
+            {topTodos.length === 0 ? (
+              <div className="empty-state" style={{ padding: '20px 12px', fontSize: '0.85rem' }}>
+                🎉 All caught up — nothing needs you right now.
+              </div>
+            ) : (
+              <ul className="todo-list">
+                {topTodos.map((t, i) => (
+                  <li
+                    key={`${t.showId}-${t.kind}-${i}`}
+                    className="todo-item"
+                    onClick={() => navigate(`/shows/${t.showId}`)}
+                  >
+                    <span className={`todo-badge todo-${t.severity}`}>{t.icon}</span>
+                    <div className="todo-body">
+                      <div className="todo-title">{t.title}</div>
+                      <div className="todo-meta">{t.subtitle}</div>
+                    </div>
+                    <span className="todo-date">{t.dateLabel}</span>
+                  </li>
+                ))}
+              </ul>
             )}
           </div>
-          {topTodos.length === 0 ? (
-            <div className="empty-state" style={{ padding: '20px 12px', fontSize: '0.85rem' }}>
-              🎉 All caught up — nothing needs you right now.
-            </div>
-          ) : (
-            <ul className="todo-list">
-              {topTodos.map((t, i) => (
-                <li
-                  key={`${t.showId}-${t.kind}-${i}`}
-                  className="todo-item"
-                  onClick={() => navigate(`/shows/${t.showId}`)}
-                >
-                  <span className={`todo-badge todo-${t.severity}`}>{t.icon}</span>
-                  <div className="todo-body">
-                    <div className="todo-title">{t.title}</div>
-                    <div className="todo-meta">{t.subtitle}</div>
-                  </div>
-                  <span className="todo-date">{t.dateLabel}</span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
+        )}
       </div>
     </div>
   )
