@@ -13,6 +13,7 @@ import DayOfShow from './pages/DayOfShow'
 import Labor from './pages/Labor'
 import Vendors from './pages/Vendors'
 import Staff from './pages/Staff'
+import StaffDetail from './pages/StaffDetail'
 import TechPack from './pages/TechPack'
 import Users from './pages/Users'
 import Settings from './pages/Settings'
@@ -46,6 +47,7 @@ export default function App() {
             <Route path="/labor"       element={<Labor />} />
             <Route path="/vendors"     element={<Vendors />} />
             <Route path="/staff"       element={<Staff />} />
+            <Route path="/staff/:id"   element={<StaffDetail />} />
             <Route path="/users"       element={<Users />} />
             <Route path="/tech-pack"   element={<TechPack />} />
             <Route path="/settings"    element={<Settings />} />

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import api from '../api'
 import Modal from '../components/Modal'
 import { useAuth } from '../context/AuthContext'
@@ -27,6 +28,8 @@ const ONBOARDING = [
 
 export default function Staff() {
   const { user: authUser } = useAuth()
+  const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
   const [staff, setStaff]     = useState([])
   const [loading, setLoading] = useState(true)
   const [modal, setModal]     = useState(false)
@@ -48,6 +51,21 @@ export default function Staff() {
 
   function openAdd() { setEditing(null); setForm(BLANK); setModal(true) }
   function openEdit(s) { setEditing(s); setForm({ ...BLANK, ...s, rates: typeof s.rates === 'string' ? s.rates : JSON.stringify(parseRates(s.rates)) }); setModal(true) }
+
+  // Support `?edit=<id>` so StaffDetail's "Edit Profile" button can jump
+  // straight to the edit modal on the list page without duplicating the form.
+  useEffect(() => {
+    const editId = searchParams.get('edit')
+    if (!editId || loading || modal) return
+    const target = staff.find(s => String(s.id) === String(editId))
+    if (target) {
+      openEdit(target)
+      // Clean up the URL so a refresh doesn't reopen the modal.
+      const next = new URLSearchParams(searchParams)
+      next.delete('edit')
+      setSearchParams(next, { replace: true })
+    }
+  }, [searchParams, staff, loading])
 
   const rateList = parseRates(form.rates)
   function updateRates(next) { setForm(v => ({ ...v, rates: JSON.stringify(next) })) }
@@ -173,7 +191,15 @@ export default function Staff() {
                 )}
                 {filtered.map(s => (
                   <tr key={s.id}>
-                    <td><strong>{s.name || '—'}</strong></td>
+                    <td>
+                      <a
+                        href={`/staff/${s.id}`}
+                        onClick={e => { e.preventDefault(); navigate(`/staff/${s.id}`) }}
+                        style={{ color: 'var(--text)', textDecoration: 'none', fontWeight: 700 }}
+                      >
+                        {s.name || '—'}
+                      </a>
+                    </td>
                     <td className="text-muted">{s.role || '—'}</td>
                     <td>
                       {s.stage === 'both'
@@ -196,6 +222,7 @@ export default function Staff() {
                     </td>
                     <td>
                       <div className="actions-cell">
+                        <button className="btn btn-ghost btn-sm" onClick={() => navigate(`/staff/${s.id}`)}>View</button>
                         {s.email && s.onboardingComplete !== 'true' && (
                           <button className="btn btn-ghost btn-sm" onClick={() => handleSendInvite(s)} title="Email an onboarding link">📧 Invite</button>
                         )}
