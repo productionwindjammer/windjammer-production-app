@@ -2,9 +2,9 @@ import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import api from '../api'
 import Modal from '../components/Modal'
-import VenueDefaultsCard from '../components/VenueDefaultsCard'
 import { useAuth } from '../context/AuthContext'
 import { useSettings } from '../context/SettingsContext'
+import { useVenue } from '../context/VenueContext'
 import { formatTime } from '../utils/time'
 import { getTicketStats } from '../utils/stages'
 
@@ -124,13 +124,42 @@ function ManagerDashboard({ user, shows, labor, navigate, isManager }) {
   // Collapse multi-night runs (same artist + stage) into a single event
   const upcoming = useMemo(() => groupShowRuns(upcomingRaw), [shows])
   const thisWeek = upcoming.filter(s => (parseDate(s.date) - today) / 86400000 <= 7)
+  const next30   = upcoming.filter(s => (parseDate(s.date) - today) / 86400000 <= 30)
   const insideShows = upcoming.filter(s => s.stage === 'inside')
   const beachShows  = upcoming.filter(s => s.stage === 'beach')
   const { settings } = useSettings()
+  const { venue } = useVenue()
   const tf = settings.timeFormat || '12h'
 
   const todos = useMemo(() => buildTodoList(upcoming, labor), [upcoming, labor])
+  const laborByShow = useMemo(() => {
+    const m = new Map()
+    for (const l of labor) {
+      const cur = m.get(l.showId) || 0
+      m.set(l.showId, cur + 1)
+    }
+    return m
+  }, [labor])
   const greeting = user?.name ? `Hi ${user.name.split(' ')[0]}` : 'Welcome'
+
+  // ─── Quick Add Show (Operations Center) ─────────────────────────
+  const [addOpen, setAddOpen]     = useState(false)
+  const [addForm, setAddForm]     = useState(QUICK_BLANK)
+  const [addSaving, setAddSaving] = useState(false)
+  const [addError, setAddError]   = useState('')
+  function openQuickAdd() { setAddForm(QUICK_BLANK); setAddError(''); setAddOpen(true) }
+  async function saveQuickAdd() {
+    if (!addForm.date || !addForm.artist) { setAddError('Date and Artist are required.'); return }
+    setAddSaving(true); setAddError('')
+    try {
+      await api.post('/shows', { ...addForm, status: 'confirmed', eventName: addForm.artist })
+      setAddOpen(false)
+      // Simple refresh — take the manager to the shows list so they see it.
+      navigate('/shows')
+    } catch (e) {
+      setAddError(e?.response?.data?.message || e.message || 'Could not add show')
+    } finally { setAddSaving(false) }
+  }
 
   return (
     <div>
@@ -139,6 +168,7 @@ function ManagerDashboard({ user, shows, labor, navigate, isManager }) {
           <div className="page-title">{greeting} — here's what needs you</div>
           <div className="page-subtitle">The Windjammer · Inside Stage &amp; Beach Stage</div>
         </div>
+        <button className="btn btn-primary" onClick={openQuickAdd}>+ Add Show</button>
       </div>
 
       <div className="stat-grid">
@@ -164,64 +194,192 @@ function ManagerDashboard({ user, shows, labor, navigate, isManager }) {
         </div>
       </div>
 
-      <div className="two-col-grid">
-        <div className="card">
-          <div className="card-header">
-            <span className="card-title">Shows Requiring Attention</span>
-            {isManager && (
-              <button className="btn btn-ghost btn-sm" onClick={() => navigate('/advancing')}>Advancing</button>
-            )}
-          </div>
-          {todos.length === 0 ? (
-            <div className="empty-state">🎉 All caught up — nothing needs you right now.</div>
-          ) : (
-            <div style={{ display:'flex', alignItems:'center', gap:16, padding:'12px 4px' }}>
-              <span style={{
-                display:'inline-flex', alignItems:'center', justifyContent:'center',
-                minWidth:64, height:64, padding:'0 14px',
-                borderRadius:'50%', background:'rgba(245,158,11,0.15)',
-                border:'2px solid var(--warning)', color:'var(--warning)',
-                fontSize:28, fontWeight:700, lineHeight:1,
-              }}>{todoShowCount(todos)}</span>
-              <div style={{ flex:1 }}>
-                <div style={{ fontSize:15, fontWeight:600, marginBottom:2 }}>
-                  {todoShowCount(todos)} show{todoShowCount(todos) === 1 ? '' : 's'} need{todoShowCount(todos) === 1 ? 's' : ''} attention
-                </div>
-                <div style={{ fontSize:13, color:'rgba(255,255,255,0.6)' }}>
-                  {todos.length} open item{todos.length === 1 ? '' : 's'} across advancing, labor, and prep.
-                </div>
-              </div>
-              <button className="btn btn-primary btn-sm" onClick={() => navigate('/advancing')}>Review</button>
-            </div>
-          )}
-        </div>
+      <OperationsCenter
+        todos={todos}
+        navigate={navigate}
+        onAddShow={openQuickAdd}
+        isManager={isManager}
+      />
 
-        <div className="card">
-          <div className="card-header">
-            <span className="card-title">This Week</span>
-            <button className="btn btn-ghost btn-sm" onClick={() => navigate('/shows')}>All shows</button>
-          </div>
-          {thisWeek.length === 0 ? (
-            <div className="empty-state">No shows in the next 7 days</div>
-          ) : (
-            <div className="form-grid">
-              {thisWeek.map(show => (
-                <ShowRow key={show.id} show={show} tf={tf} onClick={() => navigate(`/shows/${show.id}`)} />
-              ))}
-            </div>
-          )}
+      <div className="card">
+        <div className="card-header">
+          <span className="card-title">Next 30 Days</span>
+          <button className="btn btn-ghost btn-sm" onClick={() => navigate('/shows')}>All shows</button>
         </div>
+        {next30.length === 0 ? (
+          <div className="empty-state">No shows in the next 30 days</div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {next30.map(show => (
+              <DetailedShowRow
+                key={show.id}
+                show={show}
+                tf={tf}
+                venue={venue}
+                today={today}
+                crewCount={(show._allShowIds || [show.id]).reduce((n, id) => n + (laborByShow.get(id) || 0), 0)}
+                onClick={() => navigate(`/shows/${show.id}`)}
+              />
+            ))}
+          </div>
+        )}
       </div>
 
-      {isManager && <VenueDefaultsCard compact />}
+      {/* ── Quick-add show modal (Operations Center) ─────────────── */}
+      {addOpen && (
+        <Modal
+          title="Add a Show"
+          onClose={() => setAddOpen(false)}
+          footer={
+            <>
+              <button className="btn btn-ghost" onClick={() => setAddOpen(false)}>Cancel</button>
+              <button className="btn btn-primary" onClick={saveQuickAdd} disabled={addSaving}>
+                {addSaving ? 'Saving…' : 'Add Show'}
+              </button>
+            </>
+          }
+        >
+          <div className="form-grid">
+            <div className="form-row">
+              <div className="form-group">
+                <label>Date *</label>
+                <input type="date" value={addForm.date} onChange={e => setAddForm(f => ({ ...f, date: e.target.value }))} />
+              </div>
+              <div className="form-group">
+                <label>Stage</label>
+                <select value={addForm.stage} onChange={e => setAddForm(f => ({ ...f, stage: e.target.value }))}>
+                  <option value="inside">Inside Stage</option>
+                  <option value="beach">Beach Stage</option>
+                </select>
+              </div>
+            </div>
+            <div className="form-group">
+              <label>Artist *</label>
+              <input value={addForm.artist} placeholder="Headliner / event name" autoFocus
+                onChange={e => setAddForm(f => ({ ...f, artist: e.target.value }))} />
+            </div>
+            <div className="form-group">
+              <label>Show Time</label>
+              <input type="time" value={addForm.showTime} onChange={e => setAddForm(f => ({ ...f, showTime: e.target.value }))} />
+            </div>
+            <div className="form-group">
+              <label>Notes</label>
+              <textarea value={addForm.notes} onChange={e => setAddForm(f => ({ ...f, notes: e.target.value }))} placeholder="Anything the team should know up front…" />
+            </div>
+            {addError && <div className="error-msg">{addError}</div>}
+            <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+              Details like tickets, support, and contacts can be filled in from the show page.
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   )
 }
 
-function todoShowCount(todos) {
-  const ids = new Set()
-  for (const t of todos) if (t.showId) ids.add(t.showId)
-  return ids.size || todos.length
+/**
+ * Operations Center — quick-launch actions plus a triage list of the
+ * top items needing the PM's attention. Replaces the venue-defaults
+ * card on the manager dashboard; venue defaults live on Settings.
+ */
+function OperationsCenter({ todos, navigate, onAddShow, isManager }) {
+  const topTodos = todos.slice(0, 5)
+  const actions = [
+    { icon: '➕', label: 'Add Show',    hint: 'Quick add',      onClick: onAddShow,                      primary: true },
+    { icon: '👥', label: 'Add Staff',   hint: 'Crew & techs',   onClick: () => navigate('/staff') },
+    { icon: '✉️', label: 'Invite User', hint: 'Accounts',       onClick: () => navigate('/users') },
+    { icon: '🎭', label: 'Artists',     hint: 'Roster',         onClick: () => navigate('/artists') },
+    { icon: '🏢', label: 'Vendors',     hint: 'Suppliers',      onClick: () => navigate('/vendors') },
+    { icon: '📋', label: 'Advancing',   hint: 'Production',     onClick: () => navigate('/advancing') },
+    { icon: '🎬', label: 'Day of Show', hint: 'Run of show',    onClick: () => navigate('/day-of-show') },
+    { icon: '📄', label: 'Tech Pack',   hint: 'Docs',           onClick: () => navigate('/tech-pack') },
+  ]
+
+  return (
+    <div className="card">
+      <div className="card-header">
+        <span className="card-title">Operations Center</span>
+        <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Quick actions &amp; open items</span>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.35fr) minmax(0, 1fr)', gap: 20 }}>
+        {/* ── Quick Actions ────────────────────────────────────── */}
+        <div>
+          <div style={{ fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-muted)', fontWeight: 600, marginBottom: 10 }}>
+            Quick Actions
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', gap: 10 }}>
+            {actions.map(a => (
+              <button
+                key={a.label}
+                type="button"
+                onClick={a.onClick}
+                style={{
+                  display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 4,
+                  padding: '12px 14px',
+                  borderRadius: 10,
+                  border: `1px solid ${a.primary ? 'var(--accent)' : 'var(--border)'}`,
+                  background: a.primary ? 'rgba(59,130,246,0.12)' : 'rgba(255,255,255,0.02)',
+                  color: 'var(--text)',
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                  transition: 'background 0.15s, border-color 0.15s',
+                }}
+                onMouseEnter={e => {
+                  e.currentTarget.style.background = a.primary ? 'rgba(59,130,246,0.2)' : 'rgba(255,255,255,0.06)'
+                  e.currentTarget.style.borderColor = a.primary ? 'var(--accent)' : 'rgba(255,255,255,0.2)'
+                }}
+                onMouseLeave={e => {
+                  e.currentTarget.style.background = a.primary ? 'rgba(59,130,246,0.12)' : 'rgba(255,255,255,0.02)'
+                  e.currentTarget.style.borderColor = a.primary ? 'var(--accent)' : 'var(--border)'
+                }}
+              >
+                <span style={{ fontSize: '1.25rem', lineHeight: 1 }}>{a.icon}</span>
+                <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>{a.label}</span>
+                <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{a.hint}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* ── Needs Attention ──────────────────────────────────── */}
+        <div>
+          <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 10 }}>
+            <div style={{ fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-muted)', fontWeight: 600 }}>
+              Needs Attention
+            </div>
+            {isManager && todos.length > topTodos.length && (
+              <button className="btn btn-ghost btn-sm" onClick={() => navigate('/advancing')}>
+                See all {todos.length}
+              </button>
+            )}
+          </div>
+          {topTodos.length === 0 ? (
+            <div className="empty-state" style={{ padding: '20px 12px', fontSize: '0.85rem' }}>
+              🎉 All caught up — nothing needs you right now.
+            </div>
+          ) : (
+            <ul className="todo-list">
+              {topTodos.map((t, i) => (
+                <li
+                  key={`${t.showId}-${t.kind}-${i}`}
+                  className="todo-item"
+                  onClick={() => navigate(`/shows/${t.showId}`)}
+                >
+                  <span className={`todo-badge todo-${t.severity}`}>{t.icon}</span>
+                  <div className="todo-body">
+                    <div className="todo-title">{t.title}</div>
+                    <div className="todo-meta">{t.subtitle}</div>
+                  </div>
+                  <span className="todo-date">{t.dateLabel}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
+    </div>
+  )
 }
 
 function buildTodoList(upcomingShows, laborRows) {
@@ -298,6 +456,117 @@ function ShowRow({ show, onClick, tf = '12h' }) {
         </div>
       </div>
       <span className={`badge badge-${show.stage}`}>{show.stage === 'inside' ? 'Inside' : 'Beach'}</span>
+    </div>
+  )
+}
+
+/**
+ * Full-width detailed row used by the manager dashboard's "Next 30 Days"
+ * view. Shows date, artist / run info, times, ticket status, advance
+ * progress, crew count, and contact — enough for a PM to triage at a
+ * glance without clicking into each show.
+ */
+function DetailedShowRow({ show, onClick, tf = '12h', venue, today, crewCount = 0 }) {
+  const isRun = (show._nights || 1) > 1
+  const d = parseDate(show.date)
+  const days = d && today ? Math.round((d - today) / 86400000) : null
+  const inLabel = days == null ? '' : days === 0 ? 'Today' : days === 1 ? 'Tomorrow' : `in ${days}d`
+  const stageRgb = show.stage === 'inside' ? '96,174,255' : '74,222,128'
+  const { sold, capacity, pct } = getTicketStats(show, venue)
+  const advanceDone = show.advancingComplete === true || show.advancingComplete === 'true'
+  const hasContact  = !!(show.tourManager || show.promoter || show.advanceEmail)
+  const contactLabel = show.tourManager || show.promoter || show.advanceEmail || ''
+
+  return (
+    <div
+      onClick={onClick}
+      style={{
+        display: 'grid',
+        gridTemplateColumns: '72px 1fr auto',
+        gap: 16,
+        alignItems: 'center',
+        padding: '14px 16px',
+        borderRadius: 10,
+        border: `1px solid rgba(${stageRgb}, 0.25)`,
+        background: `linear-gradient(135deg, rgba(${stageRgb},0.08) 0%, rgba(255,255,255,0.02) 100%)`,
+        cursor: 'pointer',
+        transition: 'background 0.15s, border-color 0.15s',
+      }}
+      onMouseEnter={e => { e.currentTarget.style.borderColor = `rgba(${stageRgb}, 0.55)` }}
+      onMouseLeave={e => { e.currentTarget.style.borderColor = `rgba(${stageRgb}, 0.25)` }}
+    >
+      {/* Date block */}
+      <div style={{ textAlign: 'center' }}>
+        <div style={{ fontSize: '0.68rem', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-muted)', fontWeight: 600 }}>
+          {d ? d.toLocaleDateString('en-US', { weekday: 'short' }) : ''}
+        </div>
+        <div style={{ fontSize: '1.6rem', fontWeight: 700, lineHeight: 1.1, color: 'var(--text)' }}>
+          {d ? d.getDate() : '—'}
+        </div>
+        <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+          {d ? d.toLocaleDateString('en-US', { month: 'short' }) : ''}
+        </div>
+        {inLabel && (
+          <div style={{ marginTop: 4, fontSize: '0.65rem', fontWeight: 600, color: days != null && days <= 3 ? 'var(--warning)' : 'var(--text-muted)' }}>
+            {inLabel}
+          </div>
+        )}
+      </div>
+
+      {/* Main info */}
+      <div style={{ minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 4 }}>
+          <span style={{ fontWeight: 700, fontSize: '1rem', color: 'var(--text)' }}>
+            {show.artist || show.eventName || 'Untitled show'}
+          </span>
+          <span className={`badge badge-${show.stage}`}>{show.stage === 'inside' ? 'Inside' : 'Beach'}</span>
+          {show.status && show.status !== 'confirmed' && (
+            <span className={`badge badge-${show.status}`}>{show.status}</span>
+          )}
+          {isRun && (
+            <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 500 }}>
+              · {show._nights} nights ({dateRangeLabel(show._dates)})
+            </span>
+          )}
+        </div>
+        <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+          {show.showTime  && <span>🕐 Show {formatTime(show.showTime, tf)}</span>}
+          {show.doorsTime && <span>🚪 Doors {formatTime(show.doorsTime, tf)}</span>}
+          {!show.showTime && !show.doorsTime && <span style={{ color: 'var(--warning)' }}>⏰ No times set</span>}
+          {hasContact
+            ? <span>🎭 {contactLabel}</span>
+            : <span style={{ color: 'var(--warning)' }}>📞 No contact</span>}
+          {show.ticketPrice && <span>💵 ${show.ticketPrice}</span>}
+        </div>
+        {show.notes && (
+          <div style={{ marginTop: 6, fontSize: '0.75rem', color: 'rgba(255,255,255,0.5)', fontStyle: 'italic', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {show.notes}
+          </div>
+        )}
+      </div>
+
+      {/* Right-side stats */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-end', minWidth: 130 }}>
+        {(capacity || sold > 0) && (
+          <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textAlign: 'right' }}>
+            🎟 <strong style={{ color: 'var(--text)' }}>{sold}</strong>{capacity ? ` / ${capacity}` : ''}
+            {pct != null && (
+              <span style={{ marginLeft: 6, fontWeight: 700, color: pct >= 80 ? '#86efac' : pct >= 40 ? '#fde68a' : '#fca5a5' }}>
+                {pct}%
+              </span>
+            )}
+          </div>
+        )}
+        <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+          👥 <strong style={{ color: crewCount > 0 ? 'var(--text)' : 'var(--warning)' }}>{crewCount}</strong> crew
+        </div>
+        <span
+          className={`badge badge-${advanceDone ? 'success' : hasContact ? 'warning' : 'inside'}`}
+          style={{ fontSize: '0.68rem' }}
+        >
+          {advanceDone ? '✓ Advanced' : hasContact ? 'Advancing' : 'Needs contact'}
+        </span>
+      </div>
     </div>
   )
 }
