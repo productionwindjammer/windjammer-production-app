@@ -434,6 +434,9 @@ function ArtistDetail({ id }) {
       {/* Production defaults — single source of truth for rider/needs/contact */}
       <ArtistDefaults artist={artist} canEdit={canEdit} onSaved={load} />
 
+      {/* Patch list templates saved for this artist */}
+      <ArtistPatchTemplates artist={artist} canEdit={canEdit} />
+
       {/* Upload (PM+) */}
       {canEdit && (
         <div className="card" style={{ padding: 16, marginBottom: 20 }}>
@@ -695,4 +698,122 @@ function formatLongDate(ymd) {
   if (!m) return ymd
   const d = new Date(+m[1], +m[2] - 1, +m[3])
   return d.toLocaleDateString('en-US', { weekday: 'short', month: 'long', day: 'numeric', year: 'numeric' })
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ArtistPatchTemplates — lists patch-list templates saved for this artist
+// and lets admins delete stale ones. New templates are created from the
+// Patch List tab on a show (via "💾 Save as artist template").
+// ═══════════════════════════════════════════════════════════════════════════
+function ArtistPatchTemplates({ artist, canEdit }) {
+  const [rows,    setRows]    = useState([])
+  const [loading, setLoading] = useState(true)
+  const [error,   setError]   = useState('')
+
+  async function load() {
+    setLoading(true); setError('')
+    try {
+      const res = await api.get('/patch-lists')
+      const all = res.data.data || []
+      const mine = all.filter(r =>
+        r.isTemplate === 'true' &&
+        (r.artistId === artist.id ||
+          (artist.name && (r.artistName || '').toLowerCase() === (artist.name || '').toLowerCase()))
+      )
+      setRows(mine)
+    } catch (err) {
+      setError(err?.response?.data?.error || err.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => { load() }, [artist.id]) // eslint-disable-line
+
+  async function remove(t) {
+    if (!confirm(`Delete template "${t.name}"?\n\nThis cannot be undone.`)) return
+    try {
+      await api.delete(`/patch-lists/${t.id}`)
+      setRows(prev => prev.filter(x => x.id !== t.id))
+    } catch (err) {
+      alert('Delete failed: ' + (err?.response?.data?.error || err.message))
+    }
+  }
+
+  function summarize(t) {
+    const inputs  = parseCount(t.inputs)
+    const outputs = parseCount(t.outputs)
+    const inCols  = parseCount(t.inputPatchPoints)
+    const outCols = parseCount(t.outputPatchPoints)
+    const bits = []
+    if (inputs)  bits.push(`${inputs} in`)
+    if (outputs) bits.push(`${outputs} out`)
+    if (inCols + outCols) bits.push(`${inCols + outCols} patch pt${inCols + outCols === 1 ? '' : 's'}`)
+    return bits.join(' · ') || 'empty'
+  }
+
+  return (
+    <div className="card" style={{ padding: 16, marginBottom: 20 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+        <h3 style={{ margin: 0 }}>🔌 Patch list templates</h3>
+        <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.5)' }}>
+          Reusable patch configurations for {artist.name}
+        </span>
+      </div>
+
+      {loading && <div style={{ color: 'rgba(255,255,255,0.5)', fontSize: 13 }}>Loading…</div>}
+
+      {!loading && error && (
+        <div style={{ color: '#fca5a5', fontSize: 13 }}>Couldn't load templates: {error}</div>
+      )}
+
+      {!loading && !error && rows.length === 0 && (
+        <div style={{ color: 'rgba(255,255,255,0.55)', fontSize: 13, fontStyle: 'italic' }}>
+          No templates saved yet. From any show for {artist.name}, open the Patch List tab and click
+          <strong> 💾 Save as artist template</strong> to build a starting point for future shows.
+        </div>
+      )}
+
+      {!loading && rows.length > 0 && (
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Summary</th>
+                <th>Saved</th>
+                {canEdit && <th style={{ width: 40 }}></th>}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map(t => (
+                <tr key={t.id}>
+                  <td>{t.name || '(untitled)'}</td>
+                  <td style={{ color: 'rgba(255,255,255,0.7)', fontSize: 12 }}>{summarize(t)}</td>
+                  <td style={{ color: 'rgba(255,255,255,0.55)', fontSize: 12 }}>
+                    {t.createdAt ? new Date(t.createdAt).toLocaleDateString() : '—'}
+                  </td>
+                  {canEdit && (
+                    <td>
+                      <button
+                        className="btn btn-ghost btn-sm"
+                        title="Delete template"
+                        onClick={() => remove(t)}
+                      >🗑</button>
+                    </td>
+                  )}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function parseCount(raw) {
+  if (Array.isArray(raw)) return raw.length
+  if (!raw) return 0
+  try { const v = JSON.parse(raw); return Array.isArray(v) ? v.length : 0 } catch { return 0 }
 }

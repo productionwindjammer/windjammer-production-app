@@ -4,7 +4,7 @@ import Modal from '../components/Modal'
 import GmailConnect from '../components/GmailConnect'
 import { useAuth } from '../context/AuthContext'
 
-const BLANK = { name: '', email: '', role: 'crew', password: '', active: 'true' }
+const BLANK = { name: '', email: '', role: 'crew', password: '', active: 'true', invite: true }
 
 const ROLES = [
   { value: 'admin',              label: 'Admin' },
@@ -25,6 +25,7 @@ export default function Users() {
   const [saving, setSav]    = useState(false)
   const [filter, setFilter] = useState('')
   const [error, setError]   = useState('')
+  const [invited, setInvited] = useState(null)   // { email, inviteUrl } after a successful invite
 
   useEffect(() => { load() }, [])
 
@@ -38,25 +39,45 @@ export default function Users() {
     } finally { setLoad(false) }
   }
 
-  function openAdd()  { setEdit(null); setForm(BLANK);                  setError(''); setModal(true) }
-  function openEdit(u){ setEdit(u);    setForm({ ...BLANK, ...u, password: '' }); setError(''); setModal(true) }
+  function openAdd()  { setEdit(null); setForm(BLANK);                                       setError(''); setModal(true) }
+  function openEdit(u){ setEdit(u);    setForm({ ...BLANK, ...u, password: '', invite: false }); setError(''); setModal(true) }
 
   async function handleSave() {
     setSav(true); setError('')
     try {
       if (editing) {
         const payload = { ...form }
+        delete payload.invite
         if (!payload.password) delete payload.password   // don't overwrite hash with blank
         await api.put(`/users/${editing.id}`, payload)
       } else {
-        if (!form.password) { setError('Password is required for new users.'); setSav(false); return }
-        await api.post('/users', form)
+        if (!form.invite && !form.password) {
+          setError('Password is required for new users (or switch to invite mode).')
+          setSav(false); return
+        }
+        const payload = { ...form }
+        if (payload.invite) delete payload.password
+        const res = await api.post('/users', payload)
+        if (res.data?.invited) setInvited(res.data.invited)
       }
       await load()
       setModal(false)
     } catch (err) {
       setError(err.response?.data?.message || err.message)
     } finally { setSav(false) }
+  }
+
+  async function handleResendInvite(u) {
+    try {
+      const res = await api.post(`/users/${u.id}/invite`)
+      if (res.data?.success) {
+        setInvited({ email: u.email, inviteUrl: res.data.inviteUrl })
+      } else {
+        alert(res.data?.message || 'Could not send invite.')
+      }
+    } catch (err) {
+      alert(err.response?.data?.message || err.message)
+    }
   }
 
   async function handleDelete(u) {
@@ -97,6 +118,25 @@ export default function Users() {
         </div>
         <button className="btn btn-primary" onClick={openAdd}>+ Add User</button>
       </div>
+
+      {invited && (
+        <div className="card" style={{ background: 'rgba(16,185,129,0.1)', border: '1px solid rgba(16,185,129,0.35)', color: '#86efac', padding: 14, marginBottom: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <div style={{ flex: 1, minWidth: 280 }}>
+            ✉️ <strong>Invite sent</strong> to <code>{invited.email}</code>. They'll set their own password and complete their profile.
+            {invited.inviteUrl && (
+              <div style={{ marginTop: 6, fontSize: 12 }}>
+                Direct link (in case email didn't arrive): <code style={{ background: 'rgba(0,0,0,0.3)', padding: '2px 6px', borderRadius: 4, userSelect: 'all', wordBreak: 'break-all' }}>{invited.inviteUrl}</code>
+              </div>
+            )}
+          </div>
+          <div style={{ display: 'flex', gap: 6 }}>
+            {invited.inviteUrl && (
+              <button className="btn btn-ghost btn-sm" onClick={() => { navigator.clipboard?.writeText(invited.inviteUrl) }}>Copy Link</button>
+            )}
+            <button className="btn btn-ghost btn-sm" onClick={() => setInvited(null)}>Dismiss</button>
+          </div>
+        </div>
+      )}
 
       <div style={{ marginBottom: 12 }}>
         <GmailConnect />
@@ -161,6 +201,15 @@ export default function Users() {
                     <td className="text-muted">{(u.createdAt || '').slice(0, 10)}</td>
                     <td>
                       <div className="actions-cell">
+                        {u.onboardingComplete !== 'true' && u.email && (
+                          <button
+                            className="btn btn-ghost btn-sm"
+                            onClick={() => handleResendInvite(u)}
+                            title="Send onboarding invite email"
+                          >
+                            ✉️ Invite
+                          </button>
+                        )}
                         <button className="btn btn-ghost btn-sm" onClick={() => openEdit(u)}>Edit</button>
                         <button className="btn btn-danger btn-sm" onClick={() => handleDelete(u)}>Del</button>
                       </div>
@@ -175,14 +224,16 @@ export default function Users() {
 
       {modal && (
         <Modal
-          title={editing ? `Edit User — ${editing.email}` : 'Add User'}
+          title={editing ? `Edit User — ${editing.email}` : (f.invite ? 'Invite User' : 'Add User')}
           onClose={() => setModal(false)}
           size="modal-lg"
           footer={
             <>
               <button className="btn btn-ghost" onClick={() => setModal(false)}>Cancel</button>
               <button className="btn btn-primary" onClick={handleSave} disabled={saving}>
-                {saving ? 'Saving…' : 'Save'}
+                {saving
+                  ? (!editing && f.invite ? 'Sending…' : 'Saving…')
+                  : (!editing && f.invite ? '✉️ Send Invite' : 'Save')}
               </button>
             </>
           }
@@ -219,11 +270,39 @@ export default function Users() {
               </div>
             </div>
             <div className="form-group">
-              <label>{editing ? 'Reset Password (leave blank to keep current)' : 'Password *'}</label>
-              <input type="text" value={f.password} onChange={set('password')} placeholder={editing ? 'Leave blank to keep current password' : 'Initial password'} />
-              <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.4)', marginTop: 4 }}>
-                Password will be bcrypt-hashed before storage.
-              </div>
+              <label>{editing ? 'Reset Password (leave blank to keep current)' : (f.invite ? 'Password' : 'Password *')}</label>
+              {!editing && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                  <input
+                    id="invite-mode"
+                    type="checkbox"
+                    checked={!!f.invite}
+                    onChange={e => setForm(v => ({ ...v, invite: e.target.checked, password: e.target.checked ? '' : v.password }))}
+                    style={{ width: 'auto' }}
+                  />
+                  <label htmlFor="invite-mode" style={{ margin: 0, cursor: 'pointer', fontSize: 13, fontWeight: 500 }}>
+                    Send invite email — user sets their own password
+                  </label>
+                </div>
+              )}
+              {(editing || !f.invite) && (
+                <>
+                  <input
+                    type="text"
+                    value={f.password}
+                    onChange={set('password')}
+                    placeholder={editing ? 'Leave blank to keep current password' : 'Initial password'}
+                  />
+                  <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.4)', marginTop: 4 }}>
+                    Password will be bcrypt-hashed before storage.
+                  </div>
+                </>
+              )}
+              {!editing && f.invite && (
+                <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.55)', marginTop: 4, padding: 10, background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.25)', borderRadius: 6 }}>
+                  An email with a signed onboarding link will be sent to <strong>{f.email || 'this address'}</strong>. The link is valid for 7 days. If no house Gmail mailbox is connected, you'll get a direct link to copy after saving.
+                </div>
+              )}
             </div>
           </div>
         </Modal>

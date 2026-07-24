@@ -41,7 +41,10 @@ function signToken(user) {
 
 function requireAuth(req, res, next) {
   const auth  = req.headers['authorization'] || '';
-  const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
+  const headerToken = auth.startsWith('Bearer ') ? auth.slice(7) : null;
+  // Query-string fallback for EventSource / <img> / <a download> flows that
+  // can't send an Authorization header. Never accepted from a POST body.
+  const token = headerToken || req.query.access_token || null;
   if (!token) return res.status(401).json({ success: false, message: 'Not authenticated' });
   try {
     req.user = jwt.verify(token, config.jwtSecret);
@@ -1080,15 +1083,66 @@ app.get('/api/users', requireAuth, requireRole('admin'), async (req, res) => {
 
 app.post('/api/users', requireAuth, requireRole('admin'), async (req, res) => {
   try {
-    const { name, email, password, role } = req.body;
-    if (!name || !email || !password || !role)
-      return res.status(400).json({ success: false, message: 'All fields required' });
-    const hashed = await bcrypt.hash(password, 12);
-    const user = { id: Date.now().toString(), name, email, role, password: hashed, active: 'true', createdAt: new Date().toISOString() };
+    const { name, email, password, role, invite } = req.body;
+    if (!name || !email || !role)
+      return res.status(400).json({ success: false, message: 'Name, email, and role are required' });
+    if (!invite && !password)
+      return res.status(400).json({ success: false, message: 'Password is required (or enable invite mode)' });
+
+    const normalizedEmail = String(email).trim().toLowerCase();
+    const existing = await sheets.getRows(config.googleSheets.sheets.users);
+    if (existing.some(u => (u.email || '').toLowerCase() === normalizedEmail))
+      return res.status(400).json({ success: false, message: 'A user with that email already exists.' });
+
+    // Invite flow: create a placeholder password; the invitee sets a real one via the onboarding link.
+    const rawPassword = invite
+      ? `pending-${Date.now()}-${Math.random()}`
+      : password;
+    const hashed = await bcrypt.hash(rawPassword, 12);
+    const user = {
+      id: Date.now().toString(),
+      name,
+      email: normalizedEmail,
+      role,
+      password: hashed,
+      active: 'true',
+      onboardingComplete: invite ? 'false' : 'true',
+      createdAt: new Date().toISOString(),
+    };
     await sheets.appendRow(config.googleSheets.sheets.users, user);
+
+    let inviteUrl = null;
+    if (invite) {
+      inviteUrl = await sendInviteEmailIfPossible(user, null, req);
+    }
+
     const { password: _, ...safe } = user;
-    res.json({ success: true, data: safe });
+    res.json({ success: true, data: safe, invited: invite ? { email: user.email, inviteUrl } : null });
   } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+
+// POST /api/users/:id/invite — (re)send an invite email to an existing user.
+// Used to re-issue the onboarding link if the user never completed setup or
+// the original link expired.
+app.post('/api/users/:id/invite', requireAuth, requireRole('admin'), async (req, res) => {
+  try {
+    const users = await sheets.getRows(config.googleSheets.sheets.users);
+    const user  = users.find(u => u.id === req.params.id);
+    if (!user)         return res.status(404).json({ success: false, message: 'User not found' });
+    if (!user.email)   return res.status(400).json({ success: false, message: 'User has no email on file' });
+    if (user.onboardingComplete === 'true')
+      return res.status(400).json({ success: false, message: 'User has already completed onboarding. Reset their password via Edit instead.' });
+    // Look up an optional linked staff record so onboarding can prefill.
+    let staff = null;
+    if (user.staffId) {
+      const staffRows = await sheets.getRows(config.googleSheets.sheets.staff);
+      staff = staffRows.find(s => s.id === user.staffId) || null;
+    }
+    const inviteUrl = await sendInviteEmailIfPossible(user, staff, req);
+    res.json({ success: true, inviteUrl });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
 });
 
 app.put('/api/users/:id', requireAuth, requireRole('admin'), async (req, res) => {
@@ -1195,6 +1249,256 @@ app.put('/api/techpack/:id', requireAuth, requireRole('admin', 'production_manag
     res.json({ success: true });
   } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 });
+
+// ── Patch Lists ───────────────────────────────────────────────────────────────
+// A patch list is a per-show (or per-artist-as-template) I/O document for the
+// audio console. Rows are stored one-per-list with the channel data as JSON
+// blobs (inputs / outputs / inputPatchPoints / outputPatchPoints) so the whole
+// list is one round-trip to load or save.
+//
+// REAL-TIME COLLABORATION
+// -----------------------
+// During a show multiple engineers can be editing the same patch list at once
+// (FOH, monitors, stage tech). To make that safe:
+//   1. Each cell edit goes through PATCH /api/patch-lists/:id/cell (not PUT).
+//      That endpoint mutates just the one cell in the JSON blob so two
+//      engineers hitting different rows don't clobber each other.
+//   2. All writes to a given patch list are serialized through an in-memory
+//      per-list promise chain (patchWriteQueues) — the second write reads
+//      the row state produced by the first write, not the pre-write state.
+//   3. GET /api/patch-lists/:id/stream is a Server-Sent Events endpoint;
+//      after any successful write the server pushes the delta to every
+//      connected client so their editors update within ~50ms. Presence
+//      counts are broadcast on connect/disconnect for the "N engineers
+//      editing" indicator.
+//   4. Clients include a sourceId with each PATCH so they can suppress the
+//      echo of their own change and avoid caret-jumping while typing.
+//
+// Note: the SSE fan-out is in-memory and therefore single-process. If the
+// deployment ever scales to multiple app instances this needs a shared
+// pub/sub (Redis, Pusher, etc.).
+const PATCH_WRITE_ROLES = ['admin','production_manager','stage_manager'];
+
+const patchSubscribers  = new Map(); // patchListId -> Set<res>
+const patchWriteQueues  = new Map(); // patchListId -> Promise chain (serializes writes)
+
+function broadcastPatch(patchListId, event) {
+  const subs = patchSubscribers.get(String(patchListId));
+  if (!subs || subs.size === 0) return;
+  const payload = `data: ${JSON.stringify(event)}\n\n`;
+  for (const res of subs) {
+    try { res.write(payload); } catch { /* client vanished; will be cleaned on close */ }
+  }
+}
+
+// Serialize writes for one patch list so overlapping edits merge sequentially
+// instead of racing on stale reads. Returns the awaited result of `work()`.
+function queuePatchWrite(patchListId, work) {
+  const key  = String(patchListId);
+  const prev = patchWriteQueues.get(key) || Promise.resolve();
+  const next = prev.catch(() => {}).then(work);
+  patchWriteQueues.set(key, next);
+  next.finally(() => {
+    if (patchWriteQueues.get(key) === next) patchWriteQueues.delete(key);
+  });
+  return next;
+}
+
+crudRoutes(app, '/api/patch-lists', 'patchLists', PATCH_WRITE_ROLES, {
+  // Any full-document update (e.g. adding/removing a patch-point column,
+  // renaming the list) tells all connected editors to refetch. Fire-and-forget.
+  afterUpdate: (row) => broadcastPatch(row.id, {
+    type: 'reload',
+    at:   new Date().toISOString(),
+  }),
+});
+
+// GET /api/patch-lists/:id/stream — Server-Sent Events channel for live
+// updates. Clients pass ?access_token=<jwt> because EventSource can't set
+// headers. Emits:
+//   { type: 'cell',     path, value, sourceId, by, at }
+//   { type: 'reload',   at }                          — after a full PUT
+//   { type: 'presence', count }                       — active editor count
+app.get('/api/patch-lists/:id/stream', requireAuth, (req, res) => {
+  res.writeHead(200, {
+    'Content-Type':      'text/event-stream',
+    'Cache-Control':     'no-cache, no-transform',
+    'Connection':        'keep-alive',
+    'X-Accel-Buffering': 'no', // disable proxy buffering (nginx, Railway)
+  });
+  res.write(`: connected ${new Date().toISOString()}\n\n`);
+
+  const id = String(req.params.id);
+  if (!patchSubscribers.has(id)) patchSubscribers.set(id, new Set());
+  const subs = patchSubscribers.get(id);
+  subs.add(res);
+  broadcastPatch(id, { type: 'presence', count: subs.size });
+
+  // Heartbeat every 25s to defeat idle proxy timeouts.
+  const heartbeat = setInterval(() => {
+    try { res.write(`: ping ${Date.now()}\n\n`); }
+    catch { /* handled by close */ }
+  }, 25000);
+
+  req.on('close', () => {
+    clearInterval(heartbeat);
+    subs.delete(res);
+    if (subs.size === 0) patchSubscribers.delete(id);
+    else broadcastPatch(id, { type: 'presence', count: subs.size });
+  });
+});
+
+// PATCH /api/patch-lists/:id/cell — apply ONE cell change and broadcast it.
+// Body: { path, value, sourceId? }
+// `path` grammar (dot-delimited):
+//   inputs.<index>.name                       — string
+//   inputs.<index>.phantom                    — 'true' | 'false'
+//   inputs.<index>.patch.<Patch Point Name>   — string (channel # on device)
+//   outputs.<index>.name                      — string
+//   outputs.<index>.patch.<Patch Point Name>  — string
+//   name                                      — string (rename the whole list)
+//   inputPatchPoints                          — value must be an array
+//   outputPatchPoints                         — value must be an array
+app.patch('/api/patch-lists/:id/cell',
+  requireAuth, requireRole(...PATCH_WRITE_ROLES),
+  async (req, res) => {
+    try {
+      const { path, value, sourceId } = req.body || {};
+      if (!path || typeof path !== 'string')
+        return res.status(400).json({ success: false, message: 'path is required' });
+
+      const patchListId = req.params.id;
+      const now = new Date().toISOString();
+      const by  = req.user?.name || req.user?.email || '';
+
+      await queuePatchWrite(patchListId, async () => {
+        const rows = await sheets.getRows(config.googleSheets.sheets.patchLists);
+        const row  = rows.find(r => r.id === patchListId);
+        if (!row) throw Object.assign(new Error('Patch list not found'), { status: 404 });
+
+        const parts   = path.split('.');
+        const updates = { updatedAt: now, updatedBy: by };
+
+        if (parts[0] === 'inputs' || parts[0] === 'outputs') {
+          const blobField = parts[0];
+          const index     = parseInt(parts[1], 10);
+          if (Number.isNaN(index))
+            throw Object.assign(new Error('index required'), { status: 400 });
+          const subfield = parts[2];
+          // Patch-point names can theoretically contain dots — rejoin everything
+          // after parts[2] so "patch.Sub Snake A.1" style names survive.
+          const subkey   = parts.slice(3).join('.') || null;
+
+          let arr;
+          try { arr = JSON.parse(row[blobField] || '[]'); }
+          catch { arr = []; }
+          if (!Array.isArray(arr)) arr = [];
+          while (arr.length <= index) arr.push({ n: arr.length + 1 });
+
+          const item = { ...(arr[index] || { n: index + 1 }) };
+          if (subfield === 'patch') {
+            item.patch = { ...(item.patch || {}) };
+            if (subkey) item.patch[subkey] = value;
+          } else if (subfield) {
+            item[subfield] = value;
+          }
+          arr[index] = item;
+          updates[blobField] = JSON.stringify(arr);
+        } else if (['name', 'inputPatchPoints', 'outputPatchPoints'].includes(parts[0])) {
+          updates[parts[0]] = typeof value === 'string' ? value : JSON.stringify(value);
+        } else {
+          throw Object.assign(new Error('Unknown path: ' + path), { status: 400 });
+        }
+
+        await sheets.updateRowById(config.googleSheets.sheets.patchLists, patchListId, updates);
+      });
+
+      broadcastPatch(patchListId, {
+        type:     'cell',
+        path,
+        value,
+        sourceId: sourceId || null,
+        by,
+        at:       now,
+      });
+
+      res.json({ success: true });
+    } catch (err) {
+      const status = err.status || 500;
+      if (status >= 500) console.error('[patch-lists/cell]', err.message);
+      res.status(status).json({ success: false, message: err.message });
+    }
+  }
+);
+
+// POST /api/patch-lists/from-template/:templateId
+// Duplicate an artist template into a brand-new show patch list. Body: { showId, name? }
+app.post('/api/patch-lists/from-template/:templateId',
+  requireAuth, requireRole(...PATCH_WRITE_ROLES),
+  async (req, res) => {
+    try {
+      const { showId, name } = req.body || {};
+      if (!showId) return res.status(400).json({ success: false, message: 'showId is required' });
+      const rows = await sheets.getRows(config.googleSheets.sheets.patchLists);
+      const tpl  = rows.find(r => r.id === req.params.templateId);
+      if (!tpl) return res.status(404).json({ success: false, message: 'Template not found' });
+      const copy = {
+        id: Date.now().toString(),
+        showId,
+        artistId:          tpl.artistId || '',
+        artistName:        tpl.artistName || '',
+        name:              name || tpl.name || 'Patch List',
+        inputPatchPoints:  tpl.inputPatchPoints  || '[]',
+        outputPatchPoints: tpl.outputPatchPoints || '[]',
+        inputs:            tpl.inputs  || '[]',
+        outputs:           tpl.outputs || '[]',
+        isTemplate:        'false',
+        createdBy:         req.user?.name || req.user?.email || '',
+        createdAt:         new Date().toISOString(),
+        updatedAt:         new Date().toISOString(),
+      };
+      await sheets.appendRow(config.googleSheets.sheets.patchLists, copy);
+      res.json({ success: true, data: copy });
+    } catch (err) {
+      res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
+
+// POST /api/patch-lists/:id/save-as-template
+// Snapshot a show's patch list into a reusable artist template.
+// Body: { artistId, artistName?, name? } — creates a NEW row with isTemplate='true'.
+app.post('/api/patch-lists/:id/save-as-template',
+  requireAuth, requireRole(...PATCH_WRITE_ROLES),
+  async (req, res) => {
+    try {
+      const { artistId, artistName, name } = req.body || {};
+      if (!artistId) return res.status(400).json({ success: false, message: 'artistId is required' });
+      const rows = await sheets.getRows(config.googleSheets.sheets.patchLists);
+      const src  = rows.find(r => r.id === req.params.id);
+      if (!src) return res.status(404).json({ success: false, message: 'Patch list not found' });
+      const tpl = {
+        id: Date.now().toString(),
+        showId:            '',
+        artistId,
+        artistName:        artistName || '',
+        name:              name || src.name || 'Template',
+        inputPatchPoints:  src.inputPatchPoints  || '[]',
+        outputPatchPoints: src.outputPatchPoints || '[]',
+        inputs:            src.inputs  || '[]',
+        outputs:           src.outputs || '[]',
+        isTemplate:        'true',
+        createdBy:         req.user?.name || req.user?.email || '',
+        createdAt:         new Date().toISOString(),
+        updatedAt:         new Date().toISOString(),
+      };
+      await sheets.appendRow(config.googleSheets.sheets.patchLists, tpl);
+      res.json({ success: true, data: tpl });
+    } catch (err) {
+      res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
 
 // ── Image Upload (Google Drive) ───────────────────────────────────────────────
 const { Readable } = require('stream');

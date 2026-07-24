@@ -99,6 +99,16 @@ const SHEETS = [
   {
     name: 'TechPack',
     headers: ['id', 'stage', 'docType', 'title', 'content', 'updatedAt']
+  },
+  {
+    name: 'PatchLists',
+    headers: [
+      'id', 'showId', 'artistId', 'artistName', 'name',
+      'inputPatchPoints', 'outputPatchPoints',
+      'inputs', 'outputs',
+      'isTemplate', 'createdBy', 'createdAt', 'updatedAt'
+    ],
+    note: 'inputs/outputs/patch-points stored as JSON blobs'
   }
 ];
 

@@ -27,6 +27,7 @@ module.exports = {
       gmailLabelMappings: 'GmailLabelMappings',
       gmailSyncedLabels:  'GmailSyncedLabels',
       appSettings:        'AppSettings',
+      patchLists:         'PatchLists',
     }
   }
 };

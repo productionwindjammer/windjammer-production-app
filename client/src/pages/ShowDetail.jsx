@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import api from '../api'
 import Modal from '../components/Modal'
+import PatchListEditor from '../components/PatchListEditor'
 import { useSettings } from '../context/SettingsContext'
 import { useAuth } from '../context/AuthContext'
 import { useVenue } from '../context/VenueContext'
@@ -844,6 +845,7 @@ export default function ShowDetail() {
           { key: 'advancing', label: '🎸 Advancing' },
           { key: 'schedule',  label: `📋 Day of Show${schedule.length ? ` (${schedule.length})` : ''}` },
           { key: 'labor',     label: `👷 Crew${labor.length ? (canSeeFinancials ? ` · $${totalLaborCost.toFixed(0)}` : ` (${labor.length})`) : ''}` },
+          { key: 'patch',     label: '🔌 Patch List' },
           { key: 'documents', label: `📎 Documents${showDocs.length ? ` (${showDocs.length})` : ''}` },
         ].map(tab => (
           <button
@@ -1092,6 +1094,18 @@ export default function ShowDetail() {
             )}
           </div>
         </div>
+      )}
+
+      {/* ══════════════════════════════════════════════════════════════════════
+          PATCH LIST TAB — live collaborative I/O patch grid
+      ══════════════════════════════════════════════════════════════════════ */}
+      {activeTab === 'patch' && (
+        <PatchTab
+          showId={id}
+          artistId={artistId}
+          artistName={show.artist || ''}
+          canEdit={canEditDocs}
+        />
       )}
 
       {/* ══════════════════════════════════════════════════════════════════════
@@ -1609,6 +1623,214 @@ export default function ShowDetail() {
         </Modal>
       )}
 
+    </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PATCH LIST TAB — thin wrapper that owns loading/creating the patch-list
+// row for this show and offers template import / save-as-template controls.
+// The heavy lifting (grid rendering + real-time sync) lives in
+// <PatchListEditor>.
+// ═══════════════════════════════════════════════════════════════════════════
+function PatchTab({ showId, artistId, artistName, canEdit }) {
+  const [loading,     setLoading]     = useState(true)
+  const [patchList,   setPatchList]   = useState(null)
+  const [error,       setError]       = useState('')
+  const [templates,   setTemplates]   = useState([])
+  const [creating,    setCreating]    = useState(false)
+  const [savingTpl,   setSavingTpl]   = useState(false)
+  const [importingId, setImportingId] = useState('')
+
+  // Load (or create) the patch list for this show, plus any artist templates.
+  useEffect(() => {
+    let cancelled = false
+    async function load() {
+      setLoading(true); setError('')
+      try {
+        const res  = await api.get('/patch-lists')
+        const rows = res.data.data || []
+        if (cancelled) return
+        const existing = rows.find(r => r.showId === showId && r.isTemplate !== 'true')
+        setPatchList(existing || null)
+        setTemplates(
+          rows.filter(r =>
+            r.isTemplate === 'true' &&
+            (!artistId || r.artistId === artistId || (artistName && (r.artistName || '').toLowerCase() === artistName.toLowerCase()))
+          )
+        )
+      } catch (err) {
+        if (!cancelled) setError(err?.response?.data?.error || err.message)
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+    load()
+    return () => { cancelled = true }
+  }, [showId, artistId, artistName])
+
+  async function createBlank() {
+    setCreating(true); setError('')
+    try {
+      const res = await api.post('/patch-lists', {
+        showId,
+        artistId:          artistId || '',
+        artistName:        artistName || '',
+        name:              `${artistName || 'Show'} — Main Patch`,
+        inputPatchPoints:  JSON.stringify([]),
+        outputPatchPoints: JSON.stringify([]),
+        inputs:            JSON.stringify([]),
+        outputs:           JSON.stringify([]),
+        isTemplate:        'false',
+      })
+      setPatchList(res.data.data)
+    } catch (err) {
+      setError(err?.response?.data?.error || err.message)
+    } finally {
+      setCreating(false)
+    }
+  }
+
+  async function importTemplate(tplId) {
+    if (!tplId) return
+    setImportingId(tplId); setError('')
+    try {
+      const res = await api.post(`/patch-lists/from-template/${tplId}`, { showId })
+      setPatchList(res.data.data)
+    } catch (err) {
+      setError(err?.response?.data?.error || err.message)
+    } finally {
+      setImportingId('')
+    }
+  }
+
+  async function saveAsTemplate() {
+    if (!patchList) return
+    const name = prompt(
+      `Save this patch list as a template for ${artistName || 'this artist'}?\n\nEnter a template name:`,
+      `${artistName || 'Template'} — ${new Date().toLocaleDateString()}`
+    )
+    if (!name?.trim()) return
+    setSavingTpl(true); setError('')
+    try {
+      const res = await api.post(`/patch-lists/${patchList.id}/save-as-template`, {
+        artistId:   artistId || '',
+        artistName: artistName || '',
+        name:       name.trim(),
+      })
+      setTemplates(prev => [...prev, res.data.data])
+      alert('Template saved. Future shows can import it from this tab.')
+    } catch (err) {
+      alert('Save-as-template failed: ' + (err?.response?.data?.error || err.message))
+    } finally {
+      setSavingTpl(false)
+    }
+  }
+
+  if (loading) {
+    return <div className="card" style={{ padding: 24, textAlign: 'center', color: 'rgba(255,255,255,0.55)' }}>Loading patch list…</div>
+  }
+
+  if (error && !patchList) {
+    return (
+      <div className="card" style={{ padding: 24 }}>
+        <div style={{ color: '#fca5a5', marginBottom: 12 }}>Couldn't load patch lists: {error}</div>
+        {canEdit && <button className="btn btn-primary" onClick={createBlank} disabled={creating}>Try creating a new one</button>}
+      </div>
+    )
+  }
+
+  // No patch list yet — offer to create blank or import a template.
+  if (!patchList) {
+    return (
+      <div className="card" style={{ padding: 24 }}>
+        <h3 style={{ marginTop: 0 }}>No patch list yet</h3>
+        <p style={{ color: 'rgba(255,255,255,0.6)', fontSize: 13, marginTop: 4 }}>
+          Create a fresh 48-in / 16-out patch grid for this show, or import a template saved for
+          <strong> {artistName || 'this artist'}</strong>.
+        </p>
+
+        {!canEdit && (
+          <div style={{ padding: 12, borderRadius: 6, background: 'rgba(234,179,8,0.1)', color: '#fde68a', fontSize: 13 }}>
+            You don't have permission to create a patch list. Ask an admin, PM, or SM.
+          </div>
+        )}
+
+        {canEdit && (
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 16 }}>
+            <button className="btn btn-primary" onClick={createBlank} disabled={creating}>
+              {creating ? 'Creating…' : '+ New blank patch list'}
+            </button>
+
+            {templates.length > 0 && (
+              <select
+                defaultValue=""
+                onChange={e => { const v = e.target.value; e.target.value = ''; importTemplate(v) }}
+                disabled={!!importingId}
+                style={{ padding: '8px 12px' }}
+              >
+                <option value="">📋 Import from template…</option>
+                {templates.map(t => (
+                  <option key={t.id} value={t.id}>
+                    {t.name}{t.createdAt ? ` (${new Date(t.createdAt).toLocaleDateString()})` : ''}
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      {/* Toolbar for template import / save-as-template */}
+      {canEdit && (
+        <div className="card" style={{
+          padding: '10px 14px', display: 'flex', alignItems: 'center',
+          gap: 10, flexWrap: 'wrap',
+        }}>
+          <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.55)' }}>Templates:</span>
+          {templates.length > 0 ? (
+            <select
+              defaultValue=""
+              onChange={e => {
+                const v = e.target.value; e.target.value = ''
+                if (v && confirm('Import this template? It will overwrite the current patch list for this show.')) {
+                  importTemplate(v)
+                }
+              }}
+              disabled={!!importingId}
+              style={{ padding: '4px 8px', fontSize: 13 }}
+            >
+              <option value="">Copy from artist template…</option>
+              {templates.map(t => (
+                <option key={t.id} value={t.id}>{t.name}</option>
+              ))}
+            </select>
+          ) : (
+            <span style={{ fontSize: 12, fontStyle: 'italic', color: 'rgba(255,255,255,0.4)' }}>
+              None saved for {artistName || 'this artist'} yet.
+            </span>
+          )}
+          <div style={{ flex: 1 }} />
+          <button
+            className="btn btn-ghost btn-sm"
+            onClick={saveAsTemplate}
+            disabled={savingTpl || !artistId}
+            title={!artistId ? 'Requires an artist registry entry' : 'Save current patch list as a template'}
+          >
+            {savingTpl ? 'Saving…' : '💾 Save as artist template'}
+          </button>
+        </div>
+      )}
+
+      <PatchListEditor
+        patchList={patchList}
+        canEdit={canEdit}
+        onLocalChange={setPatchList}
+      />
     </div>
   )
 }
