@@ -212,6 +212,9 @@ function ManagerDashboard({ user, shows, labor, navigate, isManager, isStageMana
         onAddShow={openQuickAdd}
         isManager={isManager}
         isStageManager={isStageManager}
+        showRequests={showRequests}
+        shows={shows}
+        labor={labor}
       />
 
       <div className="card">
@@ -297,7 +300,7 @@ function ManagerDashboard({ user, shows, labor, navigate, isManager, isStageMana
  * Stage Manager sees the same quick actions minus financial pages
  * (Vendors, Staff) and without the Needs Attention triage list.
  */
-function OperationsCenter({ todos, navigate, onAddShow, isManager, isStageManager }) {
+function OperationsCenter({ todos, navigate, onAddShow, isManager, isStageManager, showRequests = [], shows = [], labor = [] }) {
   const topTodos = todos.slice(0, 5)
   const actions = [
     { icon: '➕', label: 'Add Show',    hint: 'Quick add',      onClick: onAddShow,                      primary: true },
