@@ -15,11 +15,26 @@ const DOC_TYPES = [
   { value: 'hospitality', label: 'Hospitality Rider' },
   { value: 'stagePlot',   label: 'Stage Plot' },
   { value: 'inputList',   label: 'Input List' },
+  { value: 'consoleFile', label: 'Console File / Scene' },
   { value: 'contract',    label: 'Contract' },
   { value: 'w9',          label: 'W-9' },
   { value: 'other',       label: 'Other' },
 ]
 const DOC_TYPE_LABEL = Object.fromEntries(DOC_TYPES.map(t => [t.value, t.label]))
+
+const CONSOLE_MODELS = [
+  'Digico SD5', 'Digico SD7', 'Digico SD9', 'Digico SD10', 'Digico SD11', 'Digico SD12',
+  'Digico Quantum 225', 'Digico Quantum 338', 'Digico Quantum 5', 'Digico Quantum 7',
+  'Avid S6L', 'Avid Profile', 'Avid SC48', 'Avid VENUE',
+  'Yamaha CL5', 'Yamaha CL3', 'Yamaha CL1', 'Yamaha QL5', 'Yamaha QL1',
+  'Yamaha Rivage PM7', 'Yamaha Rivage PM10',
+  'Allen & Heath dLive', 'Allen & Heath SQ-7', 'Allen & Heath Avantis',
+  'Midas Pro X', 'Midas Pro2', 'Midas HD96-24',
+  'SSL Live L500', 'SSL Live L550',
+  'Behringer X32', 'Behringer Wing',
+  'Soundcraft Vi7000', 'Soundcraft Vi3000',
+]
+const ENGINEER_ROLES = ['FOH', 'Monitors', 'Broadcast', 'RF', 'Other']
 
 function fileToBase64(file) {
   return new Promise((resolve, reject) => {
@@ -32,6 +47,12 @@ function fileToBase64(file) {
     reader.onerror = reject
     reader.readAsDataURL(file)
   })
+}
+
+// Signed download URL — server accepts ?access_token= so <a download> works.
+function docDownloadUrl(id) {
+  const token = localStorage.getItem('wj_token') || ''
+  return `/api/artist-documents/${id}/download?access_token=${encodeURIComponent(token)}`
 }
 
 const BLANK_ADV = {
@@ -62,7 +83,7 @@ export default function ShowDetail() {
   const { id } = useParams()
   const navigate = useNavigate()
   const { settings } = useSettings()
-  const { effectiveRole } = useAuth()
+  const { user, effectiveRole } = useAuth()
   const { venue } = useVenue()
   const canEditDocs      = ['admin', 'production_manager', 'stage_manager'].includes(effectiveRole)
   const canSeeFinancials = hasFinancialAccess(effectiveRole)
@@ -82,7 +103,10 @@ export default function ShowDetail() {
   const [artists, setArtists]       = useState([])
   const [docs, setDocs]             = useState([])
   const [uploading, setUploading]   = useState(false)
-  const [uploadMeta, setUploadMeta] = useState({ type: 'rider', notes: '' })
+  const [uploadMeta, setUploadMeta] = useState({
+    type: 'rider', notes: '',
+    console: '', consoleFirmware: '', engineerRole: '',
+  })
   const [ensuringArtist, setEnsuringArtist] = useState(false)
 
   // Show edit
@@ -119,6 +143,12 @@ export default function ShowDetail() {
   const [crewQuickRow, setCrewQuickRow] = useState(null)
   const [crewQuickName, setCrewQuickName] = useState('')
   const [crewQuickBusy, setCrewQuickBusy] = useState(false)
+
+  // Show requests ("I'd like to work this show" — does NOT auto-assign)
+  const [requests, setRequests]     = useState([])
+  const [reqRole, setReqRole]       = useState('')
+  const [reqNotes, setReqNotes]     = useState('')
+  const [reqBusy, setReqBusy]       = useState(false)
 
   useEffect(() => { loadAll() }, [id]) // eslint-disable-line
 
@@ -204,8 +234,44 @@ export default function ShowDetail() {
       )
       setLabor((laborRes.data.data || []).filter(l => l.showId === id))
       setStaff(staffRes.data.data || [])
+      reloadRequests()
     } finally {
       setLoading(false)
+    }
+  }
+
+  async function reloadRequests() {
+    try {
+      const res = await api.get('/show-requests')
+      setRequests((res.data.data || []).filter(r => r.showId === id && (r.status || 'requested') !== 'withdrawn'))
+    } catch { setRequests([]) }
+  }
+
+  const myRequest = requests.find(r => user?.staffId && r.staffId === user.staffId)
+
+  async function submitRequest() {
+    if (!user?.staffId) { alert('Your login isn\'t linked to a staff profile yet — ask a manager to link it.'); return }
+    setReqBusy(true)
+    try {
+      await api.post('/show-requests', {
+        showId: id,
+        role: reqRole.trim(),
+        notes: reqNotes.trim(),
+      })
+      setReqRole(''); setReqNotes('')
+      await reloadRequests()
+    } catch (err) {
+      alert('Request failed: ' + (err?.response?.data?.message || err.message))
+    } finally { setReqBusy(false) }
+  }
+
+  async function withdrawRequest(r) {
+    if (!confirm(`Withdraw ${r.staffName || 'this'} request for this show?`)) return
+    try {
+      await api.delete(`/show-requests/${r.id}`)
+      await reloadRequests()
+    } catch (err) {
+      alert('Withdraw failed: ' + (err?.response?.data?.message || err.message))
     }
   }
 
@@ -292,8 +358,11 @@ export default function ShowDetail() {
         notes:    uploadMeta.notes,
         showId:   id,
         showDate: show.date || '',
+        console:         uploadMeta.type === 'consoleFile' ? uploadMeta.console : '',
+        consoleFirmware: uploadMeta.type === 'consoleFile' ? uploadMeta.consoleFirmware : '',
+        engineerRole:    uploadMeta.type === 'consoleFile' ? uploadMeta.engineerRole : '',
       })
-      setUploadMeta(m => ({ ...m, type: 'rider', notes: '' }))
+      setUploadMeta(m => ({ ...m, type: 'rider', notes: '', console: '', consoleFirmware: '', engineerRole: '' }))
       await reloadDocs()
     } catch (err) {
       alert('Upload failed: ' + (err?.response?.data?.message || err.message))
@@ -507,6 +576,15 @@ export default function ShowDetail() {
   }
   function updateCrewRow(rid, patch) {
     setCrewRows(rows => rows.map(r => r._rid === rid ? { ...r, ...patch } : r))
+  }
+  function addCrewRowFromRequest(reqRow) {
+    const row = makeCrewRow(reqRow.role || '')
+    setCrewRows(rows => [...rows, row])
+    // Defer the staff pick so the row is in state before pickCrewWorker looks it up.
+    setTimeout(() => {
+      pickCrewWorker(row._rid, reqRow.staffId)
+      if (reqRow.role) updateCrewRow(row._rid, { role: reqRow.role })
+    }, 0)
   }
   function pickCrewWorker(rid, sid) {
     if (sid === '__new__') { setCrewQuickRow(rid); setCrewQuickName(''); return }
@@ -1036,6 +1114,74 @@ export default function ShowDetail() {
       ══════════════════════════════════════════════════════════════════════ */}
       {activeTab === 'labor' && (
         <div>
+          {/* Interested crew — staff who requested this show. Does NOT auto-assign. */}
+          {(requests.length > 0 || (!!user?.staffId && !canEditDocs)) && (
+            <div className="card" style={{ padding: 14, marginBottom: 12 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                <div style={{ fontSize: 13, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'rgba(255,255,255,0.7)' }}>
+                  🙋 Interested crew ({requests.length})
+                </div>
+                {!!user?.staffId && (
+                  myRequest
+                    ? <button className="btn btn-ghost btn-sm" onClick={() => withdrawRequest(myRequest)}>Withdraw my request</button>
+                    : (
+                      <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                        <input
+                          value={reqRole}
+                          onChange={e => setReqRole(e.target.value)}
+                          placeholder="Position (e.g. FOH)"
+                          style={{ width: 150, fontSize: 13 }}
+                        />
+                        <input
+                          value={reqNotes}
+                          onChange={e => setReqNotes(e.target.value)}
+                          placeholder="Notes (optional)"
+                          style={{ width: 200, fontSize: 13 }}
+                        />
+                        <button className="btn btn-primary btn-sm" onClick={submitRequest} disabled={reqBusy}>
+                          {reqBusy ? 'Requesting…' : '✋ Request this show'}
+                        </button>
+                      </div>
+                    )
+                )}
+              </div>
+              {requests.length === 0 ? (
+                <div style={{ marginTop: 8, fontSize: 12, color: 'rgba(255,255,255,0.4)', fontStyle: 'italic' }}>
+                  No one has raised their hand yet.
+                </div>
+              ) : (
+                <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {requests.map(r => {
+                    const alreadyOnCrew = labor.some(l => l.staffId === r.staffId)
+                    return (
+                      <div key={r.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, padding: '6px 10px', background: 'rgba(255,255,255,0.03)', borderRadius: 4 }}>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <strong style={{ fontSize: 13 }}>{r.staffName}</strong>
+                          {r.role && <span style={{ marginLeft: 8, fontSize: 11, padding: '1px 6px', borderRadius: 3, background: 'rgba(96,165,250,0.15)', color: '#93c5fd' }}>{r.role}</span>}
+                          {alreadyOnCrew && <span style={{ marginLeft: 8, fontSize: 11, color: '#86efac' }}>✓ on crew</span>}
+                          {r.notes && <span style={{ marginLeft: 8, fontSize: 12, color: 'rgba(255,255,255,0.55)' }}>· {r.notes}</span>}
+                        </div>
+                        <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                          <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.4)' }}>
+                            {r.createdAt ? new Date(r.createdAt).toLocaleDateString() : ''}
+                          </span>
+                          {(canEditDocs || (user?.staffId && user.staffId === r.staffId)) && (
+                            <button className="btn btn-ghost btn-sm" onClick={() => withdrawRequest(r)} title="Withdraw / remove">✕</button>
+                          )}
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+              {canEditDocs && requests.length > 0 && (
+                <div style={{ marginTop: 8, fontSize: 12, color: 'rgba(255,255,255,0.5)' }}>
+                  Tip: use <strong>+ Build Crew</strong> below to review requests side-by-side and pick your call.
+                </div>
+              )}
+            </div>
+          )}
+
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
             {labor.length > 0 && (
               <div style={{ fontSize: 14, color: 'rgba(255,255,255,0.6)' }}>
@@ -1172,6 +1318,41 @@ export default function ShowDetail() {
                       <input type="file" hidden onChange={onUploadDoc} disabled={uploading} />
                     </label>
                   </div>
+                  {uploadMeta.type === 'consoleFile' && (
+                    <div className="form-row" style={{ alignItems: 'flex-end', flexWrap: 'wrap', marginTop: 10 }}>
+                      <label style={{ minWidth: 220 }}>Console
+                        <input
+                          list="wj-console-models-show"
+                          value={uploadMeta.console}
+                          placeholder="e.g. Digico SD10"
+                          onChange={e => setUploadMeta(m => ({ ...m, console: e.target.value }))}
+                        />
+                        <datalist id="wj-console-models-show">
+                          {CONSOLE_MODELS.map(c => <option key={c} value={c} />)}
+                        </datalist>
+                      </label>
+                      <label>Firmware / version
+                        <input
+                          value={uploadMeta.consoleFirmware}
+                          placeholder="optional"
+                          onChange={e => setUploadMeta(m => ({ ...m, consoleFirmware: e.target.value }))}
+                          style={{ width: 140 }}
+                        />
+                      </label>
+                      <label>Position
+                        <select
+                          value={uploadMeta.engineerRole}
+                          onChange={e => setUploadMeta(m => ({ ...m, engineerRole: e.target.value }))}
+                        >
+                          <option value="">—</option>
+                          {ENGINEER_ROLES.map(r => <option key={r} value={r}>{r}</option>)}
+                        </select>
+                      </label>
+                      <div style={{ flex: 1, minWidth: 200, fontSize: 12, color: 'rgba(255,255,255,0.5)' }}>
+                        Console scene / showfile so engineers can load it onto the desk.
+                      </div>
+                    </div>
+                  )}
                   <div style={{ marginTop: 8, fontSize: 12, color: 'rgba(255,255,255,0.5)' }}>
                     Max 25MB. File is filed under the selected artist's registry and tagged to this show ({show.date}).
                   </div>
@@ -1206,7 +1387,16 @@ export default function ShowDetail() {
                           </td>
                           <td>{DOC_TYPE_LABEL[d.type] || d.type || 'Other'}</td>
                           <td>
-                            <a href={d.webViewLink} target="_blank" rel="noreferrer">{d.name}</a>
+                            <a href={d.webViewLink} target="_blank" rel="noreferrer">
+                              {d.type === 'consoleFile' ? '🎛️ ' : ''}{d.name}
+                            </a>
+                            {d.console && (
+                              <div style={{ fontSize: 11, color: '#93c5fd', marginTop: 2 }}>
+                                {d.console}
+                                {d.consoleFirmware && ` · v${d.consoleFirmware}`}
+                                {d.engineerRole && ` · ${d.engineerRole}`}
+                              </div>
+                            )}
                           </td>
                           <td className="text-muted">{d.notes || '—'}</td>
                           <td className="text-muted" style={{ whiteSpace: 'nowrap' }}>
@@ -1217,6 +1407,7 @@ export default function ShowDetail() {
                             {canEditDocs && (
                               <button className="btn btn-danger btn-sm" onClick={() => removeDoc(d)}>Del</button>
                             )}
+                            <a className="btn btn-ghost btn-sm" href={docDownloadUrl(d.id)} download={d.name} title="Download original file">↓</a>
                           </td>
                         </tr>
                       ))}
@@ -1534,6 +1725,31 @@ export default function ShowDetail() {
           }
         >
           <div className="form-grid">
+            {requests.length > 0 && (
+              <div style={{ padding: 10, border: '1px dashed rgba(147,197,253,0.35)', borderRadius: 6, background: 'rgba(59,130,246,0.06)', marginBottom: 6 }}>
+                <div style={{ fontSize: 12, textTransform: 'uppercase', letterSpacing: '0.06em', color: '#93c5fd', marginBottom: 6 }}>
+                  🙋 {requests.length} staff requested this show — click to add a row
+                </div>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {requests.map(r => {
+                    const inRows = crewRows.some(row => row.staffId === r.staffId)
+                    return (
+                      <button
+                        key={r.id}
+                        type="button"
+                        className="btn btn-ghost btn-sm"
+                        disabled={inRows}
+                        onClick={() => addCrewRowFromRequest(r)}
+                        title={r.notes || ''}
+                        style={{ fontSize: 12 }}
+                      >
+                        {inRows ? '✓ ' : '+ '}{r.staffName}{r.role ? ` — ${r.role}` : ''}
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
             <div style={{ display: 'flex', gap: 8, margin: '4px 0 8px', flexWrap: 'wrap' }}>
               <button type="button" className="btn btn-ghost btn-sm" onClick={() => setCrewRows(r => [...r, makeCrewRow('House Crew')])}>+ House Crew row</button>
               <button type="button" className="btn btn-ghost btn-sm" onClick={() => setCrewRows(r => [...r, makeCrewRow('Stagehand')])}>+ Stagehand row</button>

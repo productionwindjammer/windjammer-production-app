@@ -28,6 +28,7 @@ module.exports = {
       gmailSyncedLabels:  'GmailSyncedLabels',
       appSettings:        'AppSettings',
       patchLists:         'PatchLists',
+      showRequests:       'ShowRequests',
     }
   }
 };

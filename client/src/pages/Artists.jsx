@@ -20,12 +20,29 @@ const DOC_TYPES = [
   { value: 'hospitality', label: 'Hospitality Rider' },
   { value: 'stagePlot',   label: 'Stage Plot' },
   { value: 'inputList',   label: 'Input List' },
+  { value: 'consoleFile', label: 'Console File / Scene' },
   { value: 'contract',    label: 'Contract' },
   { value: 'w9',          label: 'W-9' },
   { value: 'other',       label: 'Other' },
 ]
 
 const DOC_TYPE_LABEL = Object.fromEntries(DOC_TYPES.map(t => [t.value, t.label]))
+
+// Common digital consoles engineers will load these files onto.
+const CONSOLE_MODELS = [
+  'Digico SD5', 'Digico SD7', 'Digico SD9', 'Digico SD10', 'Digico SD11', 'Digico SD12',
+  'Digico Quantum 225', 'Digico Quantum 338', 'Digico Quantum 5', 'Digico Quantum 7',
+  'Avid S6L', 'Avid Profile', 'Avid SC48', 'Avid VENUE',
+  'Yamaha CL5', 'Yamaha CL3', 'Yamaha CL1', 'Yamaha QL5', 'Yamaha QL1',
+  'Yamaha Rivage PM7', 'Yamaha Rivage PM10',
+  'Allen & Heath dLive', 'Allen & Heath SQ-7', 'Allen & Heath Avantis',
+  'Midas Pro X', 'Midas Pro2', 'Midas HD96-24',
+  'SSL Live L500', 'SSL Live L550',
+  'Behringer X32', 'Behringer Wing',
+  'Soundcraft Vi7000', 'Soundcraft Vi3000',
+]
+
+const ENGINEER_ROLES = ['FOH', 'Monitors', 'Broadcast', 'RF', 'Other']
 
 function fileToBase64(file) {
   return new Promise((resolve, reject) => {
@@ -38,6 +55,12 @@ function fileToBase64(file) {
     reader.onerror = reject
     reader.readAsDataURL(file)
   })
+}
+
+// Signed download URL — server accepts ?access_token= so <a download> works.
+function docDownloadUrl(id) {
+  const token = localStorage.getItem('wj_token') || ''
+  return `/api/artist-documents/${id}/download?access_token=${encodeURIComponent(token)}`
 }
 
 export default function Artists() {
@@ -307,7 +330,10 @@ function ArtistDetail({ id }) {
   const [advancing, setAdvancing] = useState([])
   const [loading, setLoading] = useState(true)
   const [uploading, setUploading] = useState(false)
-  const [uploadMeta, setUploadMeta] = useState({ type: 'rider', year: '', notes: '', showId: '' })
+  const [uploadMeta, setUploadMeta] = useState({
+    type: 'rider', year: '', notes: '', showId: '',
+    console: '', consoleFirmware: '', engineerRole: '',
+  })
 
   useEffect(() => { load() }, [id])
   async function load() {
@@ -347,8 +373,14 @@ function ArtistDetail({ id }) {
         notes:    uploadMeta.notes,
         showId:   uploadMeta.showId || '',
         showDate,
+        console:         uploadMeta.type === 'consoleFile' ? uploadMeta.console : '',
+        consoleFirmware: uploadMeta.type === 'consoleFile' ? uploadMeta.consoleFirmware : '',
+        engineerRole:    uploadMeta.type === 'consoleFile' ? uploadMeta.engineerRole : '',
       })
-      setUploadMeta({ type: 'rider', year: '', notes: '', showId: uploadMeta.showId })
+      setUploadMeta({
+        type: 'rider', year: '', notes: '', showId: uploadMeta.showId,
+        console: '', consoleFirmware: '', engineerRole: '',
+      })
       await load()
     } catch (err) {
       alert('Upload failed: ' + (err?.response?.data?.message || err.message))
@@ -525,6 +557,41 @@ function ArtistDetail({ id }) {
               <input type="file" hidden onChange={onUpload} disabled={uploading} />
             </label>
           </div>
+          {uploadMeta.type === 'consoleFile' && (
+            <div className="form-row" style={{ alignItems: 'flex-end', flexWrap: 'wrap', marginTop: 10 }}>
+              <label style={{ minWidth: 220 }}>Console
+                <input
+                  list="wj-console-models"
+                  value={uploadMeta.console}
+                  placeholder="e.g. Digico SD10"
+                  onChange={e => setUploadMeta(m => ({ ...m, console: e.target.value }))}
+                />
+                <datalist id="wj-console-models">
+                  {CONSOLE_MODELS.map(c => <option key={c} value={c} />)}
+                </datalist>
+              </label>
+              <label>Firmware / version
+                <input
+                  value={uploadMeta.consoleFirmware}
+                  placeholder="optional"
+                  onChange={e => setUploadMeta(m => ({ ...m, consoleFirmware: e.target.value }))}
+                  style={{ width: 140 }}
+                />
+              </label>
+              <label>Position
+                <select
+                  value={uploadMeta.engineerRole}
+                  onChange={e => setUploadMeta(m => ({ ...m, engineerRole: e.target.value }))}
+                >
+                  <option value="">—</option>
+                  {ENGINEER_ROLES.map(r => <option key={r} value={r}>{r}</option>)}
+                </select>
+              </label>
+              <div style={{ flex: 1, minWidth: 200, fontSize: 12, color: 'rgba(255,255,255,0.5)' }}>
+                Console scene / showfile — upload the archive (.zip / .dlvproj / .snp / .csd / etc.) so engineers can pull it onto the desk.
+              </div>
+            </div>
+          )}
           <div style={{ marginTop: 8, fontSize: 12, color: 'rgba(255,255,255,0.5)' }}>
             Tip: link a document to a specific show to file it under that performance's history. Skip the show to keep it as a reusable template (e.g. a stage plot that doesn't change).
           </div>
@@ -599,12 +666,18 @@ function ArtistDetail({ id }) {
                             <span style={{ fontSize: 11, padding: '1px 6px', borderRadius: 3, background: 'rgba(255,255,255,0.08)', color: 'rgba(255,255,255,0.7)', marginRight: 8 }}>
                               {DOC_TYPE_LABEL[d.type] || d.type}
                             </span>
-                            <strong style={{ fontSize: 13 }}>📄 {d.name}</strong>
+                            <strong style={{ fontSize: 13 }}>{d.type === 'consoleFile' ? '🎛️' : '📄'} {d.name}</strong>
+                            {d.console && (
+                              <span style={{ marginLeft: 8, fontSize: 11, padding: '1px 6px', borderRadius: 3, background: 'rgba(96,165,250,0.15)', color: '#93c5fd' }}>
+                                {d.console}{d.engineerRole ? ` · ${d.engineerRole}` : ''}
+                              </span>
+                            )}
                             {d.notes && <span style={{ marginLeft: 8, fontSize: 12, color: 'rgba(255,255,255,0.55)' }}>· {d.notes}</span>}
                           </div>
                           <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
                             <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.4)' }}>{d.uploadedBy}</span>
                             <a className="btn btn-ghost btn-sm" target="_blank" rel="noreferrer" href={d.webViewLink}>Open</a>
+                            <a className="btn btn-ghost btn-sm" href={docDownloadUrl(d.id)} download={d.name} title="Download original file">↓</a>
                             {canEdit && <button className="btn btn-danger btn-sm" onClick={() => removeDoc(d)}>✕</button>}
                           </div>
                         </div>
@@ -622,6 +695,7 @@ function ArtistDetail({ id }) {
 }
 
 function DocTable({ title, docs, canEdit, onDelete }) {
+  const hasConsole = docs.some(d => d.console || d.engineerRole)
   return (
     <div style={{ marginBottom: 14 }}>
       <h3 style={{ marginBottom: 6, fontSize: 13, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'rgba(255,255,255,0.5)' }}>
@@ -632,6 +706,7 @@ function DocTable({ title, docs, canEdit, onDelete }) {
           <thead>
             <tr>
               <th>File</th>
+              {hasConsole && <th style={{ width: 200 }}>Console</th>}
               <th style={{ width: 70 }}>Year</th>
               <th>Notes</th>
               <th style={{ width: 140 }}>Uploaded</th>
@@ -642,6 +717,13 @@ function DocTable({ title, docs, canEdit, onDelete }) {
             {docs.map(d => (
               <tr key={d.id}>
                 <td><strong>📄 {d.name}</strong></td>
+                {hasConsole && (
+                  <td style={{ fontSize: 12 }}>
+                    {d.console && <div><strong>{d.console}</strong></div>}
+                    {d.consoleFirmware && <div style={{ color: 'rgba(255,255,255,0.55)' }}>v{d.consoleFirmware}</div>}
+                    {d.engineerRole && <div style={{ color: 'rgba(255,255,255,0.55)' }}>{d.engineerRole}</div>}
+                  </td>
+                )}
                 <td>{d.year || ''}</td>
                 <td style={{ fontSize: 13, color: 'rgba(255,255,255,0.7)' }}>{d.notes}</td>
                 <td style={{ fontSize: 12, color: 'rgba(255,255,255,0.5)' }}>
@@ -650,6 +732,7 @@ function DocTable({ title, docs, canEdit, onDelete }) {
                 </td>
                 <td>
                   <a className="btn btn-ghost btn-sm" target="_blank" rel="noreferrer" href={d.webViewLink}>Open</a>
+                  <a className="btn btn-ghost btn-sm" href={docDownloadUrl(d.id)} download={d.name}>↓</a>
                   {canEdit && <button className="btn btn-danger btn-sm" onClick={() => onDelete(d)}>Del</button>}
                 </td>
               </tr>

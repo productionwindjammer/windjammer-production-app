@@ -71,6 +71,7 @@ export default function Dashboard() {
   const [labor, setLabor] = useState([])
   const [advancing, setAdvancing] = useState([])
   const [artists, setArtists]     = useState([])
+  const [showRequests, setShowRequests] = useState([])
   const [loading, setLoading] = useState(true)
   // Bumped whenever a promoter action saves new data, so the dashboard
   // refresh is independent from the initial fetch.
@@ -87,12 +88,15 @@ export default function Dashboard() {
     } else {
       requests.push(null)
     }
+    // Show requests are cheap to fetch and useful on every dashboard.
+    requests.push(api.get('/show-requests').catch(() => ({ data: { data: [] } })))
     Promise.all(requests.map(r => r || Promise.resolve(null)))
       .then(results => {
         setShows(results[0].data.data || [])
         if (results[1]) setLabor(results[1].data.data || [])
         if (results[2]) setAdvancing(results[2].data.data || [])
         if (results[3]) setArtists(results[3].data.data || [])
+        if (results[4]) setShowRequests(results[4].data.data || [])
       })
       .finally(() => setLoading(false))
   }, [isCrew, isManager, isStageManager, isVenue, isPromoter, reloadKey])
@@ -111,13 +115,13 @@ export default function Dashboard() {
     />
   )
   if (isVenue)    return <VenueDashboard    user={user} shows={shows} labor={labor} advancing={advancing} navigate={navigate} tf={tf} />
-  if (isCrew)     return <CrewDashboard     user={user} shows={shows} labor={labor} navigate={navigate} />
-  return <ManagerDashboard user={user} shows={shows} labor={labor} navigate={navigate} isManager={isManager} isStageManager={isStageManager} />
+  if (isCrew)     return <CrewDashboard     user={user} shows={shows} labor={labor} navigate={navigate} showRequests={showRequests} onReload={() => setReloadKey(k => k + 1)} />
+  return <ManagerDashboard user={user} shows={shows} labor={labor} navigate={navigate} isManager={isManager} isStageManager={isStageManager} showRequests={showRequests} />
 }
 
 /* ─────────────────────────────────────────────────────────────── Manager ── */
 
-function ManagerDashboard({ user, shows, labor, navigate, isManager, isStageManager }) {
+function ManagerDashboard({ user, shows, labor, navigate, isManager, isStageManager, showRequests = [] }) {
   const today = startOfToday()
   const upcomingRaw = shows.filter(s => {
     const d = parseDate(s.date); return d && d >= today && s.status !== 'cancelled'
@@ -394,9 +398,64 @@ function OperationsCenter({ todos, navigate, onAddShow, isManager, isStageManage
                 ))}
               </ul>
             )}
+
+            {/* Crew requests — shows staff who have raised their hand for upcoming shows */}
+            <PendingRequestsPanel
+              showRequests={showRequests}
+              shows={shows}
+              labor={labor}
+              navigate={navigate}
+            />
           </div>
         )}
       </div>
+    </div>
+  )
+}
+
+function PendingRequestsPanel({ showRequests = [], shows = [], labor = [], navigate }) {
+  const today = startOfToday()
+  const grouped = new Map()
+  for (const r of showRequests) {
+    if ((r.status || 'requested') === 'withdrawn') continue
+    const show = shows.find(s => s.id === r.showId)
+    const d = parseDate(show?.date)
+    if (!d || d < today || show?.status === 'cancelled') continue
+    const onCrew = labor.some(l => l.showId === r.showId && l.staffId === r.staffId)
+    const list = grouped.get(r.showId) || []
+    list.push({ ...r, _onCrew: onCrew })
+    grouped.set(r.showId, list)
+  }
+  if (grouped.size === 0) return null
+  const rows = [...grouped.entries()]
+    .map(([showId, list]) => ({ show: shows.find(s => s.id === showId), list }))
+    .sort((a, b) => (a.show?.date || '').localeCompare(b.show?.date || ''))
+
+  return (
+    <div style={{ marginTop: 18 }}>
+      <div style={{ fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-muted)', fontWeight: 600, marginBottom: 10 }}>
+        🙋 Crew Requests
+      </div>
+      <ul className="todo-list">
+        {rows.map(({ show, list }) => {
+          const openCount = list.filter(r => !r._onCrew).length
+          return (
+            <li key={show?.id || Math.random()} className="todo-item" onClick={() => show?.id && navigate(`/shows/${show.id}`)}>
+              <span className="todo-badge todo-low">🙋</span>
+              <div className="todo-body">
+                <div className="todo-title">
+                  {show?.artist || show?.eventName || 'Show'} — {list.length} request{list.length === 1 ? '' : 's'}
+                  {openCount !== list.length && <span style={{ marginLeft: 8, color: '#86efac' }}>({list.length - openCount} on crew)</span>}
+                </div>
+                <div className="todo-meta">
+                  {list.map(r => `${r.staffName}${r.role ? ' · ' + r.role : ''}${r._onCrew ? ' ✓' : ''}`).join(', ')}
+                </div>
+              </div>
+              <span className="todo-date">{show?.date || ''}</span>
+            </li>
+          )
+        })}
+      </ul>
     </div>
   )
 }
@@ -592,7 +651,7 @@ function DetailedShowRow({ show, onClick, tf = '12h', venue, today, crewCount = 
 
 /* ────────────────────────────────────────────────────────────────── Crew ── */
 
-function CrewDashboard({ user, shows, labor, navigate }) {
+function CrewDashboard({ user, shows, labor, navigate, showRequests = [], onReload }) {
   const { settings } = useSettings()
   const tf = settings.timeFormat || '12h'
   const today = startOfToday()
@@ -607,6 +666,27 @@ function CrewDashboard({ user, shows, labor, navigate }) {
     })
     .filter(l => l._date && l._date >= today && l._show?.status !== 'cancelled')
     .sort((a, b) => a._date - b._date)
+
+  // My open requests (upcoming, non-withdrawn) that haven't turned into an assignment yet
+  const assignedShowIds = new Set(mine.map(l => l.showId))
+  const myOpenRequests = showRequests
+    .filter(r => myId && r.staffId === myId && (r.status || 'requested') !== 'withdrawn')
+    .map(r => {
+      const show = shows.find(s => s.id === r.showId)
+      return { ...r, _show: show, _date: parseDate(show?.date) }
+    })
+    .filter(r => r._date && r._date >= today && r._show?.status !== 'cancelled')
+    .sort((a, b) => a._date - b._date)
+
+  async function withdraw(reqId) {
+    if (!confirm('Withdraw this request?')) return
+    try {
+      await api.delete(`/show-requests/${reqId}`)
+      if (typeof onReload === 'function') onReload()
+    } catch (err) {
+      alert('Withdraw failed: ' + (err?.response?.data?.message || err.message))
+    }
+  }
 
   const next = mine[0]
   const greeting = user?.name ? `Hi ${user.name.split(' ')[0]}` : 'Welcome'
@@ -637,6 +717,50 @@ function CrewDashboard({ user, shows, labor, navigate }) {
             </div>
           </div>
           <div className="next-call-role">{next.role || 'Crew'}</div>
+        </div>
+      )}
+
+      {myOpenRequests.length > 0 && (
+        <div className="card">
+          <div className="card-header">
+            <span className="card-title">🙋 My show requests ({myOpenRequests.length})</span>
+          </div>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Show</th>
+                  <th>Position</th>
+                  <th>Status</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {myOpenRequests.map(r => {
+                  const onCrew = assignedShowIds.has(r.showId)
+                  return (
+                    <tr key={r.id} style={{ cursor: 'pointer' }} onClick={() => navigate(`/shows/${r.showId}`)}>
+                      <td><strong>{r._date.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}</strong></td>
+                      <td>{r._show?.artist || r._show?.eventName || r.showName || '—'}</td>
+                      <td>{r.role || '—'}</td>
+                      <td>
+                        {onCrew
+                          ? <span style={{ color: '#86efac' }}>✓ On crew</span>
+                          : <span style={{ color: '#fde68a' }}>Awaiting review</span>}
+                      </td>
+                      <td onClick={e => e.stopPropagation()}>
+                        <button className="btn btn-ghost btn-sm" onClick={() => withdraw(r.id)}>Withdraw</button>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ padding: '8px 14px', fontSize: 12, color: 'var(--text-muted)' }}>
+            Requests don't guarantee a shift — production reviews them when the crew call is built.
+          </div>
         </div>
       )}
 

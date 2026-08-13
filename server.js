@@ -663,6 +663,97 @@ async function notifyShiftAssigned(record) {
   }
 }
 
+// ── Show Requests ────────────────────────────────────────────────────────────
+// Staff/crew "raise their hand" for a show. This does NOT auto-assign them —
+// production reviews the list when building the crew call (see /labor).
+// Roles allowed to submit: any authed user. A user may only submit on behalf
+// of themselves (or PM+ may submit on behalf of any staff).
+const REQUEST_PM_ROLES = ['admin', 'production_manager', 'stage_manager'];
+
+app.get('/api/show-requests', requireAuth, async (req, res) => {
+  try {
+    const rows = await sheets.getRows(config.googleSheets.sheets.showRequests);
+    res.json({ success: true, data: rows });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+
+app.post('/api/show-requests', requireAuth, async (req, res) => {
+  try {
+    const body = req.body || {};
+    const showId = String(body.showId || '').trim();
+    if (!showId) return res.status(400).json({ success: false, message: 'showId required' });
+
+    // Resolve the staff row: non-PM users may only request for themselves.
+    const isPM = REQUEST_PM_ROLES.includes(req.user?.role);
+    let staffId = String(body.staffId || '').trim();
+    if (!isPM || !staffId) staffId = req.user?.staffId || '';
+    if (!staffId) return res.status(400).json({ success: false, message: 'No staff record linked to your account' });
+
+    const [staffRows, showRows, existing] = await Promise.all([
+      sheets.getRows(config.googleSheets.sheets.staff),
+      sheets.getRows(config.googleSheets.sheets.shows),
+      sheets.getRows(config.googleSheets.sheets.showRequests),
+    ]);
+    const staff = staffRows.find(s => s.id === staffId);
+    if (!staff) return res.status(404).json({ success: false, message: 'Staff not found' });
+    const show = showRows.find(s => s.id === showId);
+    if (!show) return res.status(404).json({ success: false, message: 'Show not found' });
+
+    const dup = existing.find(r =>
+      r.showId === showId && r.staffId === staffId && (r.status || 'requested') !== 'withdrawn'
+    );
+    if (dup) return res.status(409).json({ success: false, message: 'You already requested this show', data: dup });
+
+    const record = {
+      id:         Date.now().toString(),
+      showId,
+      showDate:   show.date || '',
+      showName:   show.artist || show.eventName || '',
+      staffId,
+      staffName:  staff.name || '',
+      role:       (body.role || staff.role || '').trim(),
+      notes:      (body.notes || '').trim(),
+      status:     'requested',
+      createdAt:  new Date().toISOString(),
+    };
+    await sheets.appendRow(config.googleSheets.sheets.showRequests, record);
+
+    // Ping the production team so requests don't sit unseen.
+    push.sendToRole(
+      ['admin', 'production_manager'],
+      {
+        title: 'Show request',
+        body: `${staff.name || 'Someone'} requested ${record.showName || 'a show'}${record.role ? ' — ' + record.role : ''}`,
+        url: `/shows/${showId}`,
+        tag: `show-req-${record.id}`,
+      },
+      'shiftAssigned'
+    ).catch(err => console.warn('[push] show-request notify failed:', err.message));
+
+    res.json({ success: true, data: record });
+  } catch (err) {
+    console.error('Show request error:', err.message);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Withdraw a request. Owner or PM+ only.
+app.delete('/api/show-requests/:id', requireAuth, async (req, res) => {
+  try {
+    const rows = await sheets.getRows(config.googleSheets.sheets.showRequests);
+    const row = rows.find(r => r.id === req.params.id);
+    if (!row) return res.status(404).json({ success: false, message: 'Request not found' });
+    const isPM = REQUEST_PM_ROLES.includes(req.user?.role);
+    const isOwner = req.user?.staffId && String(req.user.staffId) === String(row.staffId);
+    if (!isPM && !isOwner) return res.status(403).json({ success: false, message: 'Not allowed' });
+    await sheets.deleteRowById(config.googleSheets.sheets.showRequests, req.params.id);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Show request delete error:', err.message);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 crudRoutes(app, '/api/shows',           'shows',     ['admin','production_manager','stage_manager','promoter'], {
   afterCreate: kickoffAdvanceForShow,
   // When an editor changes `artist` or `support`, make sure any newly-named
@@ -1708,12 +1799,18 @@ app.get('/api/artists/:id/documents', requireAuth, async (req, res) => {
 });
 
 // Upload a document to an artist's folder (PM+ / Stage Manager)
-// Body: { filename, mimeType, data (base64), type, year, notes, showId, showDate }
+// Body: { filename, mimeType, data (base64), type, year, notes, showId, showDate,
+//         console, consoleFirmware, engineerRole }
+// The console-* fields are optional metadata used for console scene/showfiles
+// (e.g. type: 'consoleFile', console: 'Digico SD10', engineerRole: 'FOH').
 app.post('/api/artists/:id/documents',
   requireAuth, requireRole('admin','production_manager','stage_manager'),
   async (req, res) => {
     try {
-      const { filename, mimeType, data, type, year, notes, showId, showDate } = req.body || {};
+      const {
+        filename, mimeType, data, type, year, notes, showId, showDate,
+        console: consoleModel, consoleFirmware, engineerRole,
+      } = req.body || {};
       if (!filename || !mimeType || !data)
         return res.status(400).json({ success: false, message: 'filename, mimeType, data required' });
 
@@ -1743,6 +1840,9 @@ app.post('/api/artists/:id/documents',
         notes:       notes || '',
         showId:      showId || '',
         showDate:    showDate || '',
+        console:     consoleModel || '',
+        consoleFirmware: consoleFirmware || '',
+        engineerRole:    engineerRole || '',
         mimeType,
         driveFileId: uploaded.data.id,
         webViewLink: uploaded.data.webViewLink || `https://drive.google.com/file/d/${uploaded.data.id}/view`,
@@ -1752,11 +1852,15 @@ app.post('/api/artists/:id/documents',
       await sheets.appendRow(config.googleSheets.sheets.artistDocuments, record);
 
       // Notify the production team that a new document landed.
+      const labelBits = [];
+      if (type) labelBits.push(type);
+      if (consoleModel) labelBits.push(consoleModel);
+      const label = labelBits.length ? ` (${labelBits.join(' · ')})` : '';
       push.sendToRole(
         ['admin', 'production_manager'],
         {
-          title: 'Document uploaded',
-          body: `${artist.name || 'Artist'}: ${filename}${type ? ' (' + type + ')' : ''}`,
+          title: type === 'consoleFile' ? 'Console file uploaded' : 'Document uploaded',
+          body: `${artist.name || 'Artist'}: ${filename}${label}`,
           url: showId ? `/shows/${showId}` : `/artists`,
           tag: `doc-${record.id}`,
         },
@@ -1770,6 +1874,47 @@ app.post('/api/artists/:id/documents',
     }
   }
 );
+
+// Stream a document straight from Drive with a Content-Disposition so
+// browsers save the original file (needed for binary console showfiles that
+// Drive's viewer can't preview). Accepts ?access_token= for <a download> flows.
+app.get('/api/artist-documents/:id/download', requireAuth, async (req, res) => {
+  try {
+    const rows = await sheets.getRows(config.googleSheets.sheets.artistDocuments);
+    const doc = rows.find(d => d.id === req.params.id);
+    if (!doc)              return res.status(404).json({ success: false, message: 'Document not found' });
+    if (!doc.driveFileId)  return res.status(404).json({ success: false, message: 'No Drive file for this document' });
+
+    const drive = await sheets.getDriveClient();
+    const meta = await drive.files.get({
+      fileId: doc.driveFileId,
+      fields: 'name,mimeType,size',
+    });
+    const filename = doc.name || meta.data.name || 'download';
+    const mimeType = meta.data.mimeType || doc.mimeType || 'application/octet-stream';
+
+    res.setHeader('Content-Type', mimeType);
+    res.setHeader('Content-Disposition',
+      `attachment; filename="${filename.replace(/"/g, '\\"')}"; filename*=UTF-8''${encodeURIComponent(filename)}`);
+    if (meta.data.size) res.setHeader('Content-Length', meta.data.size);
+    res.setHeader('Cache-Control', 'private, no-store');
+
+    const stream = await drive.files.get(
+      { fileId: doc.driveFileId, alt: 'media' },
+      { responseType: 'stream' },
+    );
+    stream.data
+      .on('error', err => {
+        console.error('Artist doc download stream error:', err.message);
+        if (!res.headersSent) res.status(502).end();
+        else res.destroy(err);
+      })
+      .pipe(res);
+  } catch (err) {
+    console.error('Artist doc download error:', err.message);
+    if (!res.headersSent) res.status(500).json({ success: false, message: err.message });
+  }
+});
 
 // Delete a document — removes both the sheet row and the Drive file (PM+ / Stage Manager)
 app.delete('/api/artist-documents/:id',

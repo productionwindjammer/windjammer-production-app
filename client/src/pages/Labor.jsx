@@ -33,6 +33,7 @@ export default function Labor() {
   const [entries, setEntries] = useState([])
   const [shows, setShows]     = useState([])
   const [staff, setStaff]     = useState([])
+  const [requests, setRequests] = useState([])
   const [loading, setLoading] = useState(true)
   const [modal, setModal]     = useState(false)
   const [editing, setEditing] = useState(null)
@@ -74,6 +75,14 @@ export default function Labor() {
   }
   function updateCrewRow(rid, patch) {
     setCrewRows(rows => rows.map(r => r._rid === rid ? { ...r, ...patch } : r))
+  }
+  function addCrewRowFromRequest(reqRow) {
+    const row = makeCrewRow(reqRow.role || '')
+    setCrewRows(rows => [...rows, row])
+    setTimeout(() => {
+      pickCrewWorker(row._rid, reqRow.staffId)
+      if (reqRow.role) updateCrewRow(row._rid, { role: reqRow.role })
+    }, 0)
   }
   function pickCrewWorker(rid, staffId) {
     if (staffId === '__new__') {
@@ -148,16 +157,18 @@ export default function Labor() {
   }
 
   useEffect(() => {
-    Promise.all([api.get('/labor'), api.get('/shows'), api.get('/staff')]).then(([l, s, st]) => {
+    Promise.all([api.get('/labor'), api.get('/shows'), api.get('/staff'), api.get('/show-requests').catch(() => ({ data: { data: [] } }))]).then(([l, s, st, r]) => {
       setEntries(l.data.data || [])
       setShows(s.data.data || [])
       setStaff(st.data.data || [])
+      setRequests(r.data.data || [])
     }).finally(() => setLoading(false))
   }, [])
 
   async function load() {
-    const [l, s, st] = await Promise.all([api.get('/labor'), api.get('/shows'), api.get('/staff')])
+    const [l, s, st, r] = await Promise.all([api.get('/labor'), api.get('/shows'), api.get('/staff'), api.get('/show-requests').catch(() => ({ data: { data: [] } }))])
     setEntries(l.data.data || [])
+    setRequests(r.data.data || [])
     setShows(s.data.data || [])
     setStaff(st.data.data || [])
   }
@@ -690,6 +701,36 @@ export default function Labor() {
               <button type="button" className="btn btn-ghost btn-sm" onClick={() => setCrewRows(r => [...r, makeCrewRow('Stagehand')])}>+ Stagehand row</button>
               <button type="button" className="btn btn-ghost btn-sm" onClick={() => setCrewRows(r => [...r, makeCrewRow('')])}>+ Custom row</button>
             </div>
+
+            {crewShowId && (() => {
+              const showReqs = requests.filter(r => r.showId === crewShowId && (r.status || 'requested') !== 'withdrawn')
+              if (showReqs.length === 0) return null
+              return (
+                <div style={{ padding: 10, border: '1px dashed rgba(147,197,253,0.35)', borderRadius: 6, background: 'rgba(59,130,246,0.06)', marginBottom: 8 }}>
+                  <div style={{ fontSize: 12, textTransform: 'uppercase', letterSpacing: '0.06em', color: '#93c5fd', marginBottom: 6 }}>
+                    🙋 {showReqs.length} staff requested this show — click to add
+                  </div>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    {showReqs.map(r => {
+                      const inRows = crewRows.some(row => row.staffId === r.staffId)
+                      return (
+                        <button
+                          key={r.id}
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          disabled={inRows}
+                          onClick={() => addCrewRowFromRequest(r)}
+                          title={r.notes || ''}
+                          style={{ fontSize: 12 }}
+                        >
+                          {inRows ? '✓ ' : '+ '}{r.staffName}{r.role ? ` — ${r.role}` : ''}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              )
+            })()}
 
             <div style={{ overflowX: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
