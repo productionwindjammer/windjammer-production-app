@@ -1327,16 +1327,114 @@ app.get('/api/me/notification-prefs', requireAuth, async (req, res) => {
 });
 
 // ── Tech Pack ─────────────────────────────────────────────────────────────────
+// One long-form document per stage. The sheet stores a single row per stage
+// with a JSON `sections` blob (array of { key, title, icon, content }).
+// Legacy rows (one per docType — overview/audio/lighting/etc.) are merged into
+// the new shape on read; they stay in the sheet as backup and are ignored once
+// a `docType='stage'` row exists.
+const TECHPACK_STAGES = ['inside', 'beach'];
+const TECHPACK_DEFAULT_SECTIONS = [
+  { key: 'overview',    title: 'Venue Overview',            icon: '📍' },
+  { key: 'staging',     title: 'Stage Dimensions & Specs',  icon: '📐' },
+  { key: 'power',       title: 'Power Distribution',        icon: '⚡' },
+  { key: 'audio',       title: 'Audio System',              icon: '🔊' },
+  { key: 'lighting',    title: 'Lighting',                  icon: '💡' },
+  { key: 'backline',    title: 'Backline / House Gear',     icon: '🎸' },
+  { key: 'stagePlot',   title: 'Stage Plot & Photos',       icon: '🎥' },
+  { key: 'loadIn',      title: 'Load-in / Parking / Push',  icon: '🗺' },
+  { key: 'hospitality', title: 'Hospitality / Dressing Room', icon: '🍽' },
+];
+// docType key on a legacy row  →  section key in the new format
+const TECHPACK_LEGACY_MAP = {
+  overview:  'overview',
+  techpack:  'overview',
+  stageplot: 'stagePlot',
+  lighting:  'lighting',
+  audio:     'audio',
+  power:     'power',
+  catering:  'hospitality',
+  loadinmap: 'loadIn',
+};
+
+function techpackBuildFromLegacy(stage, legacyRows) {
+  const byKey = new Map();
+  for (const row of legacyRows) {
+    const sectionKey = TECHPACK_LEGACY_MAP[row.docType];
+    if (!sectionKey || !row.content) continue;
+    const prev = byKey.get(sectionKey) || '';
+    byKey.set(sectionKey, prev + row.content);
+  }
+  return TECHPACK_DEFAULT_SECTIONS.map(s => ({ ...s, content: byKey.get(s.key) || '' }));
+}
+
+function techpackParseSections(raw) {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return null;
+    // Merge in any defaults the user hasn't got yet (for future additions)
+    const byKey = new Map(parsed.map(s => [s.key, s]));
+    return TECHPACK_DEFAULT_SECTIONS.map(def => ({
+      ...def,
+      ...(byKey.get(def.key) || {}),
+      content: byKey.get(def.key)?.content || '',
+    }));
+  } catch { return null; }
+}
+
 app.get('/api/techpack', requireAuth, async (req, res) => {
   try {
     const rows = await sheets.getRows(config.googleSheets.sheets.techpack);
-    res.json({ success: true, data: rows });
+    const data = TECHPACK_STAGES.map(stage => {
+      const stageRows = rows.filter(r => r.stage === stage);
+      const modern = stageRows.find(r => r.docType === 'stage');
+      if (modern) {
+        const sections = techpackParseSections(modern.sections)
+          || TECHPACK_DEFAULT_SECTIONS.map(s => ({ ...s, content: '' }));
+        return { id: modern.id, stage, sections, updatedAt: modern.updatedAt || '' };
+      }
+      const sections = techpackBuildFromLegacy(stage, stageRows);
+      const latest = stageRows
+        .map(r => r.updatedAt)
+        .filter(Boolean)
+        .sort()
+        .pop() || '';
+      return { id: null, stage, sections, updatedAt: latest };
+    });
+    res.json({ success: true, data });
   } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 });
 
-app.put('/api/techpack/:id', requireAuth, requireRole('admin', 'production_manager', 'stage_manager'), async (req, res) => {
+app.put('/api/techpack/:stage', requireAuth, requireRole('admin', 'production_manager', 'stage_manager'), async (req, res) => {
   try {
-    await sheets.updateRowById(config.googleSheets.sheets.techpack, req.params.id, req.body);
+    const stage = req.params.stage;
+    if (!TECHPACK_STAGES.includes(stage))
+      return res.status(400).json({ success: false, message: 'Unknown stage' });
+    const sections = Array.isArray(req.body?.sections) ? req.body.sections : null;
+    if (!sections)
+      return res.status(400).json({ success: false, message: 'sections array required' });
+    // Only persist the fields we care about (drop transient UI state)
+    const clean = sections.map(s => ({
+      key:     String(s.key || ''),
+      title:   String(s.title || ''),
+      icon:    String(s.icon || ''),
+      content: String(s.content || ''),
+    }));
+    const payload = {
+      stage,
+      docType: 'stage',
+      sections: JSON.stringify(clean),
+      updatedAt: new Date().toISOString(),
+    };
+    const rows = await sheets.getRows(config.googleSheets.sheets.techpack);
+    const modern = rows.find(r => r.stage === stage && r.docType === 'stage');
+    if (modern) {
+      await sheets.updateRowById(config.googleSheets.sheets.techpack, modern.id, payload);
+    } else {
+      payload.id = 'tp_' + Date.now();
+      payload.title = stage === 'beach' ? 'Beach Stage Tech Pack' : 'Inside Stage Tech Pack';
+      await sheets.appendRow(config.googleSheets.sheets.techpack, payload);
+    }
     res.json({ success: true });
   } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 });

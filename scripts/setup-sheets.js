@@ -98,7 +98,8 @@ const SHEETS = [
   },
   {
     name: 'TechPack',
-    headers: ['id', 'stage', 'docType', 'title', 'content', 'updatedAt']
+    headers: ['id', 'stage', 'docType', 'title', 'sections', 'content', 'updatedAt'],
+    note: 'One row per stage with docType="stage" and sections (JSON). Legacy per-docType rows still supported for backwards read-compat.'
   },
   {
     name: 'PatchLists',
@@ -173,38 +174,37 @@ async function run() {
     if (sheet.note) console.log(`     Note: ${sheet.note}`);
   }
 
-  // Seed default TechPack documents if empty
+  // Seed default TechPack documents if empty (one row per stage, new long-form format)
   const tpCheck = await api.spreadsheets.values.get({
     spreadsheetId: SPREADSHEET_ID,
     range: 'TechPack!A2:A2'
   });
   if (!tpCheck.data.values?.length) {
-    const DOC_TYPES = [
-      { key: 'overview',  label: 'Stage Overview & Specs' },
-      { key: 'techpack',  label: 'Full Tech Pack' },
-      { key: 'lighting',  label: 'Lighting Patch & Fixture List' },
-      { key: 'audio',     label: 'Audio Spec Sheet' },
-      { key: 'stageplot', label: 'Stage Plot / Dimensions' },
-      { key: 'power',     label: 'Power Distribution' },
-      { key: 'catering',  label: 'Catering / Hospitality Rider' },
-      { key: 'loadinmap', label: 'Load-in Map / Directions' },
+    const DEFAULT_SECTIONS = [
+      { key: 'overview',    title: 'Venue Overview',              icon: '📍', content: '' },
+      { key: 'staging',     title: 'Stage Dimensions & Specs',    icon: '📐', content: '' },
+      { key: 'power',       title: 'Power Distribution',          icon: '⚡', content: '' },
+      { key: 'audio',       title: 'Audio System',                icon: '🔊', content: '' },
+      { key: 'lighting',    title: 'Lighting',                    icon: '💡', content: '' },
+      { key: 'backline',    title: 'Backline / House Gear',       icon: '🎸', content: '' },
+      { key: 'stagePlot',   title: 'Stage Plot & Photos',         icon: '🎥', content: '' },
+      { key: 'loadIn',      title: 'Load-in / Parking / Push',    icon: '🗺', content: '' },
+      { key: 'hospitality', title: 'Hospitality / Dressing Room', icon: '🍽', content: '' },
     ];
-    const rows = [];
-    let idCounter = 1;
-    for (const stage of ['inside', 'beach']) {
-      for (const doc of DOC_TYPES) {
-        rows.push([String(idCounter++), stage, doc.key, doc.label, '', '']);
-      }
-    }
+    const sectionsJson = JSON.stringify(DEFAULT_SECTIONS);
+    const rows = [
+      ['tp_inside', 'inside', 'stage', 'Inside Stage Tech Pack', sectionsJson, '', ''],
+      ['tp_beach',  'beach',  'stage', 'Beach Stage Tech Pack',  sectionsJson, '', ''],
+    ];
     await api.spreadsheets.values.append({
       spreadsheetId: SPREADSHEET_ID,
       range: 'TechPack',
       valueInputOption: 'RAW',
       resource: { values: rows }
     });
-    console.log(`  ✅ TechPack — seeded ${rows.length} default documents (8 per stage)`);
+    console.log(`  ✅ TechPack — seeded ${rows.length} default documents (1 per stage, ${DEFAULT_SECTIONS.length} sections each)`);
   } else {
-    console.log('  ⏭  TechPack — documents already seeded, skipping');
+    console.log('  ⏭  TechPack — documents already present, skipping');
   }
 
   console.log('\nSetup complete!\n');

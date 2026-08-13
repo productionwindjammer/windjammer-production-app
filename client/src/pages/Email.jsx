@@ -493,20 +493,35 @@ export default function Email() {
     }
   }
 
-  async function handleAttachFacilityDoc(docType, label) {
+  async function handleAttachFacilityDoc(sectionKey, label) {
     const docs = facilityDocs !== null ? facilityDocs : await loadFacilityDocs()
     const stage = selected?.stage || 'inside'
-    const doc = docs.find(d => d.stage === stage && d.docType === docType)
-    if (!doc || !doc.content) {
+    const doc = docs.find(d => d.stage === stage)
+    const stageName = stage === 'inside' ? 'Inside Stage' : 'Beach Stage'
+    // Special key: attach the full tech pack (all sections stacked)
+    if (sectionKey === '__all__') {
+      const sections = (doc?.sections || []).filter(s => (s.content || '').trim())
+      if (sections.length === 0) {
+        alert('The tech pack for this stage is empty — add content in the Tech Pack section first.')
+        return
+      }
+      const html = sections.map(s => `<h2>${s.icon || ''} ${s.title}</h2>${s.content}`).join('<hr/>')
+      const b64 = btoa(unescape(encodeURIComponent(html)))
+      setForm(v => ({
+        ...v,
+        attachments: [...v.attachments, { filename: `${stageName} — Full Tech Pack.html`, mimeType: 'text/html', data: b64 }],
+      }))
+      return
+    }
+    const section = (doc?.sections || []).find(s => s.key === sectionKey)
+    if (!section || !(section.content || '').trim()) {
       alert(`No content found for "${label}". Please add it in the Tech Pack section first.`)
       return
     }
-    const b64 = btoa(unescape(encodeURIComponent(doc.content)))
-    const stageName = stage === 'inside' ? 'Inside Stage' : 'Beach Stage'
-    const filename = `${stageName} — ${label}.html`
+    const b64 = btoa(unescape(encodeURIComponent(section.content)))
     setForm(v => ({
       ...v,
-      attachments: [...v.attachments, { filename, mimeType: 'text/html', data: b64 }],
+      attachments: [...v.attachments, { filename: `${stageName} — ${label}.html`, mimeType: 'text/html', data: b64 }],
     }))
   }
 
@@ -1245,14 +1260,16 @@ export default function Email() {
                     </div>
                     <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                       {[
-                        { key: 'overview',  label: 'Stage Overview & Specs',       icon: '🏟' },
-                        { key: 'techpack',  label: 'Full Tech Pack',                icon: '📋' },
-                        { key: 'lighting',  label: 'Lighting Patch & Fixture List', icon: '💡' },
-                        { key: 'audio',     label: 'Audio Spec Sheet',              icon: '🔊' },
-                        { key: 'stageplot', label: 'Stage Plot / Dimensions',       icon: '📐' },
-                        { key: 'power',     label: 'Power Distribution',            icon: '⚡' },
-                        { key: 'catering',  label: 'Catering / Hospitality Rider',  icon: '🍽' },
-                        { key: 'loadinmap', label: 'Load-in Map / Directions',      icon: '🗺' },
+                        { key: '__all__',     label: 'Full Tech Pack',              icon: '📋' },
+                        { key: 'overview',    label: 'Venue Overview',              icon: '📍' },
+                        { key: 'staging',     label: 'Stage Dimensions & Specs',    icon: '📐' },
+                        { key: 'power',       label: 'Power Distribution',          icon: '⚡' },
+                        { key: 'audio',       label: 'Audio System',                icon: '🔊' },
+                        { key: 'lighting',    label: 'Lighting',                    icon: '💡' },
+                        { key: 'backline',    label: 'Backline / House Gear',       icon: '🎸' },
+                        { key: 'stagePlot',   label: 'Stage Plot & Photos',         icon: '🎥' },
+                        { key: 'loadIn',      label: 'Load-in / Parking / Push',    icon: '🗺' },
+                        { key: 'hospitality', label: 'Hospitality / Dressing Room', icon: '🍽' },
                       ].map(dt => (
                         <button
                           key={dt.key}
