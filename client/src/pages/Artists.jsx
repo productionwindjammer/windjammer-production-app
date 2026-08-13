@@ -4,6 +4,7 @@ import api from '../api'
 import Modal from '../components/Modal'
 import ExportMenu from '../components/ExportMenu'
 import { useAuth } from '../context/AuthContext'
+import { isInternalStaff } from '../utils/roles'
 import {
   exportArtistsCsv, exportArtistsPrint,
   exportArtistProfileCsv, exportArtistProfilePrint,
@@ -12,7 +13,7 @@ import {
 const BLANK_ARTIST = {
   name: '', aliases: '', agency: '', agent: '',
   contactName: '', contactEmail: '', contactPhone: '',
-  notes: '',
+  notes: '', staffNotes: '',
 }
 
 const DOC_TYPES = [
@@ -74,6 +75,7 @@ function ArtistsList() {
   const navigate = useNavigate()
   const { effectiveRole } = useAuth()
   const canEdit = ['admin', 'production_manager'].includes(effectiveRole)
+  const isStaff = isInternalStaff(effectiveRole)
 
   const [artists, setArtists] = useState([])
   const [docs, setDocs]       = useState([]) // not strictly needed; left out
@@ -307,6 +309,17 @@ function ArtistsList() {
             <label>Notes
               <textarea rows={3} value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} />
             </label>
+            {isStaff && (
+              <label>
+                🔒 Staff Notes <span style={{ fontWeight: 400, color: 'rgba(255,255,255,0.5)', fontSize: 12 }}>— internal only, hidden from promoters</span>
+                <textarea
+                  rows={3}
+                  value={form.staffNotes}
+                  onChange={e => setForm(f => ({ ...f, staffNotes: e.target.value }))}
+                  placeholder="Private notes for the Windjammer team (backstage behavior, payment quirks, etc.)"
+                />
+              </label>
+            )}
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 8 }}>
               <button type="button" className="btn btn-ghost" onClick={() => setModal(false)}>Cancel</button>
               <button type="submit" className="btn btn-primary" disabled={saving}>{saving ? 'Saving…' : 'Save'}</button>
@@ -323,6 +336,7 @@ function ArtistDetail({ id }) {
   const navigate = useNavigate()
   const { effectiveRole } = useAuth()
   const canEdit = ['admin', 'production_manager'].includes(effectiveRole)
+  const isStaff = isInternalStaff(effectiveRole)
 
   const [artist, setArtist] = useState(null)
   const [docs, setDocs]     = useState([])
@@ -516,6 +530,10 @@ function ArtistDetail({ id }) {
 
       {artist.notes && (
         <div className="card" style={{ padding: 16, marginBottom: 20, whiteSpace: 'pre-wrap' }}>{artist.notes}</div>
+      )}
+
+      {isStaff && (
+        <StaffNotesCard artist={artist} canEdit={canEdit} onSaved={load} />
       )}
 
       {/* Production defaults — single source of truth for rider/needs/contact */}
@@ -740,6 +758,93 @@ function DocTable({ title, docs, canEdit, onDelete }) {
           </tbody>
         </table>
       </div>
+    </div>
+  )
+}
+
+// ── Staff Notes ───────────────────────────────────────────────────────────
+// Internal-only notes about the artist. Server strips this field from
+// responses for non-staff callers (promoter) so it's safe to render here
+// without extra guards — the parent still checks `isInternalStaff()` before
+// mounting the card as a defense-in-depth measure.
+function StaffNotesCard({ artist, canEdit, onSaved }) {
+  const [editing, setEditing] = useState(false)
+  const [value, setValue]     = useState(artist.staffNotes || '')
+  const [saving, setSaving]   = useState(false)
+
+  useEffect(() => { setValue(artist.staffNotes || '') }, [artist.id, artist.staffNotes])
+
+  async function save() {
+    setSaving(true)
+    try {
+      await api.put(`/artists/${artist.id}`, { ...artist, staffNotes: value })
+      setEditing(false)
+      await onSaved?.()
+    } catch (err) {
+      alert('Save failed: ' + (err.response?.data?.message || err.message))
+    } finally { setSaving(false) }
+  }
+
+  const hasNotes = (artist.staffNotes || '').trim().length > 0
+
+  return (
+    <div
+      className="card"
+      style={{
+        padding: 16, marginBottom: 20,
+        borderLeft: '3px solid #f59e0b',
+        background: 'rgba(245, 158, 11, 0.05)',
+      }}
+    >
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, flexWrap: 'wrap', gap: 8 }}>
+        <h3 style={{ margin: 0 }}>
+          🔒 Staff Notes
+          <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 400, color: 'rgba(255,255,255,0.5)' }}>
+            Internal only — never shown to promoters.
+          </span>
+        </h3>
+        {canEdit && !editing && (
+          <button className="btn btn-ghost btn-sm" onClick={() => setEditing(true)}>
+            {hasNotes ? '✎ Edit' : '+ Add notes'}
+          </button>
+        )}
+      </div>
+
+      {!editing ? (
+        hasNotes ? (
+          <div style={{ whiteSpace: 'pre-wrap', fontSize: 14, color: 'rgba(255,255,255,0.85)' }}>
+            {artist.staffNotes}
+          </div>
+        ) : (
+          <div style={{ fontSize: 13, color: 'rgba(255,255,255,0.5)', fontStyle: 'italic' }}>
+            No staff notes yet.
+          </div>
+        )
+      ) : (
+        <div>
+          <textarea
+            rows={5}
+            value={value}
+            onChange={e => setValue(e.target.value)}
+            placeholder="Private notes for the Windjammer team (backstage behavior, payment quirks, allergies, etc.)"
+            style={{ width: '100%' }}
+          />
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 8 }}>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={() => { setValue(artist.staffNotes || ''); setEditing(false) }}
+              disabled={saving}
+            >Cancel</button>
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              onClick={save}
+              disabled={saving}
+            >{saving ? 'Saving…' : 'Save'}</button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

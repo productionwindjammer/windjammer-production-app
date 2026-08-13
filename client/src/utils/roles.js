@@ -52,6 +52,16 @@ export function canManageAdvancing(role) {
 }
 
 /**
+ * Is this role considered internal Windjammer staff? Used to gate access to
+ * private fields like artist staff notes that should not be exposed to
+ * external partners (currently only Promoter).
+ * Keep in sync with server.js `isInternalStaffRole()`.
+ */
+export function isInternalStaff(role) {
+  return !!role && role !== ROLE.PROMOTER
+}
+
+/**
  * Human-readable label for a role, used in the header user chip and
  * anywhere else we display the role name.
  */

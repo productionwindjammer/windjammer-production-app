@@ -902,6 +902,33 @@ crudRoutes(app, '/api/vendors',         'vendors');
 crudRoutes(app, '/api/vendor-bookings', 'vendorBookings');
 crudRoutes(app, '/api/settlement',      'settlement');
 crudRoutes(app, '/api/unavailability',  'unavailability', ['admin','production_manager']);
+
+// Artists: `staffNotes` is an internal-only field. Non-staff callers (currently
+// just Promoter) never see it on GET and cannot set it on POST/PUT. Keep the
+// role check in sync with client/src/utils/roles.js `isInternalStaff()`.
+function isInternalStaffRole(role) {
+  return !!role && role !== 'promoter';
+}
+app.get('/api/artists', requireAuth, async (req, res) => {
+  try {
+    const rows = await sheets.getRows(config.googleSheets.sheets.artists);
+    const data = isInternalStaffRole(req.user?.role)
+      ? rows
+      : rows.map(({ staffNotes, ...rest }) => rest);
+    res.json({ success: true, data });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+function stripArtistStaffNotesForNonStaff(req, res, next) {
+  if (!isInternalStaffRole(req.user?.role) && req.body && typeof req.body === 'object') {
+    delete req.body.staffNotes;
+  }
+  next();
+}
+app.post('/api/artists',      requireAuth, stripArtistStaffNotesForNonStaff, (req, res, next) => next());
+app.put('/api/artists/:id',   requireAuth, stripArtistStaffNotesForNonStaff, (req, res, next) => next());
+
 crudRoutes(app, '/api/artists',         'artists',        ['admin','production_manager','stage_manager','promoter'], { afterCreate: (row) => ensureArtistFolder(row.id) });
 // Note: artist-documents writes go through the upload endpoint below (which handles Drive too).
 // We expose only GET via crudRoutes-equivalent below to avoid orphaning Drive files on direct deletes.
