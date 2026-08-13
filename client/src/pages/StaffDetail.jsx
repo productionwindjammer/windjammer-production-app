@@ -1,10 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams, Link } from 'react-router-dom'
 import api from '../api'
+import ExportMenu from '../components/ExportMenu'
 import { useAuth } from '../context/AuthContext'
 import { useSettings } from '../context/SettingsContext'
 import { formatTime } from '../utils/time'
 import { hasFinancialAccess } from '../utils/roles'
+import { openInviteMail } from '../utils/inviteMailto'
+import { exportStaffProfileCsv, exportStaffProfilePrint } from '../utils/staffExport'
 
 // Parse a YYYY-MM-DD (or ISO) date string as local noon so downstream
 // comparisons don't get bitten by UTC offsets.
@@ -144,7 +147,10 @@ export default function StaffDetail() {
     setInvitingBusy(true); setInviteMsg(null)
     try {
       const res = await api.post(`/staff/${staff.id}/invite`)
-      if (res.data?.success) setInviteMsg({ kind: 'ok', text: `Invite sent to ${staff.email}` })
+      if (res.data?.success) {
+        openInviteMail({ to: staff.email, name: staff.name, inviteUrl: res.data.inviteUrl })
+        setInviteMsg({ kind: 'ok', text: `Invite ready for ${staff.email} — your default email app should be open. Just hit Send.` })
+      }
       else setInviteMsg({ kind: 'err', text: res.data?.message || 'Could not send invite' })
     } catch (err) {
       setInviteMsg({ kind: 'err', text: err.response?.data?.message || err.message })
@@ -191,6 +197,28 @@ export default function StaffDetail() {
               {invitingBusy ? 'Sending…' : '📧 Send Invite'}
             </button>
           )}
+          <ExportMenu
+            items={[
+              {
+                key: 'print',
+                label: '🖨️ Print profile / Save as PDF',
+                onClick: () => exportStaffProfilePrint(staff, {
+                  labor: sorted,
+                  includeFinancials: canSeeFinancials,
+                  totals,
+                  timeFormat: tf,
+                }),
+              },
+              {
+                key: 'csv',
+                label: '📄 Download profile CSV',
+                onClick: () => exportStaffProfileCsv(staff, {
+                  labor: sorted,
+                  includeFinancials: canSeeFinancials,
+                }),
+              },
+            ]}
+          />
           <button className="btn btn-ghost" onClick={toggleActive}>
             {isActive ? 'Mark Inactive' : 'Mark Active'}
           </button>

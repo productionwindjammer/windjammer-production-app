@@ -1,7 +1,12 @@
 import { useEffect, useState } from 'react'
 import api from '../api'
 import Modal from '../components/Modal'
+import ExportMenu from '../components/ExportMenu'
 import { filterShowList } from '../utils/showFilters'
+import {
+  exportVendorsCsv, exportVendorsPrint,
+  exportBookingsCsv, exportBookingsPrint,
+} from '../utils/vendorsExport'
 
 const BLANK_VENDOR = {
   company: '', contactName: '', phone: '', email: '',
@@ -77,6 +82,17 @@ export default function Vendors() {
           <div className="page-subtitle">Subcontractors, rental equipment, and show bookings</div>
         </div>
         <div className="flex gap-2">
+          <ExportMenu
+            items={tab === 'bookings'
+              ? [
+                  { key: 'print', label: '🖨️ Print bookings / Save as PDF', disabled: bookings.length === 0, onClick: () => exportBookingsPrint(bookings) },
+                  { key: 'csv',   label: '📄 Download bookings CSV',        disabled: bookings.length === 0, onClick: () => exportBookingsCsv(bookings) },
+                ]
+              : [
+                  { key: 'print', label: '🖨️ Print directory / Save as PDF', disabled: vendors.length === 0, onClick: () => exportVendorsPrint(vendors) },
+                  { key: 'csv',   label: '📄 Download directory CSV',        disabled: vendors.length === 0, onClick: () => exportVendorsCsv(vendors) },
+                ]}
+          />
           <button className="btn btn-ghost" onClick={() => { setTab('vendors'); openAddVendor() }}>+ Add Vendor</button>
           <button className="btn btn-primary" onClick={() => { setTab('bookings'); openAddBooking() }}>+ Book Vendor</button>
         </div>

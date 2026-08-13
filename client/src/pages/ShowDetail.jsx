@@ -1105,6 +1105,11 @@ export default function ShowDetail() {
           artistId={artistId}
           artistName={show.artist || ''}
           canEdit={canEditDocs}
+          exportMeta={{
+            showTitle: show.artist || show.eventName || '',
+            date:      show.date || '',
+            stage:     show.stage === 'inside' ? 'Inside Stage' : show.stage === 'beach' ? 'Beach Stage' : (show.stage || ''),
+          }}
         />
       )}
 
@@ -1633,7 +1638,7 @@ export default function ShowDetail() {
 // The heavy lifting (grid rendering + real-time sync) lives in
 // <PatchListEditor>.
 // ═══════════════════════════════════════════════════════════════════════════
-function PatchTab({ showId, artistId, artistName, canEdit }) {
+function PatchTab({ showId, artistId, artistName, canEdit, exportMeta }) {
   const [loading,     setLoading]     = useState(true)
   const [patchList,   setPatchList]   = useState(null)
   const [error,       setError]       = useState('')
@@ -1830,6 +1835,7 @@ function PatchTab({ showId, artistId, artistName, canEdit }) {
         patchList={patchList}
         canEdit={canEdit}
         onLocalChange={setPatchList}
+        exportMeta={exportMeta}
       />
     </div>
   )

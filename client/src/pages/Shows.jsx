@@ -2,10 +2,12 @@ import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import api from '../api'
 import Modal from '../components/Modal'
+import ExportMenu from '../components/ExportMenu'
 import { useSettings } from '../context/SettingsContext'
 import { useAuth } from '../context/AuthContext'
 import { formatTime } from '../utils/time'
 import { hasFinancialAccess } from '../utils/roles'
+import { exportShowsCsv, exportShowsPrint } from '../utils/showsExport'
 
 const DEFAULT_PROMOTER = 'Scottie Frier'
 
@@ -209,6 +211,31 @@ export default function Shows() {
               {bulkDeleting ? 'Deleting…' : `Delete ${selectedIds.size} Selected`}
             </button>
           )}
+          <ExportMenu
+            items={[
+              {
+                key: 'print',
+                label: '🖨️ Print / Save as PDF',
+                disabled: filtered.length === 0,
+                onClick: () => exportShowsPrint(filtered, {
+                  timeFormat: tf,
+                  includeFinancials: canSeeLaborCost,
+                  laborCostByShow,
+                  filterMeta: filter,
+                }),
+              },
+              {
+                key: 'csv',
+                label: '📄 Download CSV',
+                disabled: filtered.length === 0,
+                onClick: () => exportShowsCsv(filtered, {
+                  timeFormat: tf,
+                  includeFinancials: canSeeLaborCost,
+                  laborCostByShow,
+                }),
+              },
+            ]}
+          />
           <button className="btn btn-primary" onClick={openAdd}>+ Add Show</button>
         </div>
       </div>

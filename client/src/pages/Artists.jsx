@@ -2,7 +2,12 @@ import { useEffect, useMemo, useState } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import api from '../api'
 import Modal from '../components/Modal'
+import ExportMenu from '../components/ExportMenu'
 import { useAuth } from '../context/AuthContext'
+import {
+  exportArtistsCsv, exportArtistsPrint,
+  exportArtistProfileCsv, exportArtistProfilePrint,
+} from '../utils/artistsExport'
 
 const BLANK_ARTIST = {
   name: '', aliases: '', agency: '', agent: '',
@@ -154,6 +159,22 @@ function ArtistsList() {
               {bulkDeleting ? 'Deleting…' : `Delete ${selectedIds.size} Selected`}
             </button>
           )}
+          <ExportMenu
+            items={[
+              {
+                key: 'print',
+                label: '🖨️ Print registry / Save as PDF',
+                disabled: filtered.length === 0,
+                onClick: () => exportArtistsPrint(filtered),
+              },
+              {
+                key: 'csv',
+                label: '📄 Download registry CSV',
+                disabled: filtered.length === 0,
+                onClick: () => exportArtistsCsv(filtered),
+              },
+            ]}
+          />
           {canEdit && <button className="btn btn-primary" onClick={openAdd}>+ Add Artist</button>}
         </div>
       </div>
@@ -421,10 +442,44 @@ function ArtistDetail({ id }) {
             {artistShows.length} show{artistShows.length === 1 ? '' : 's'} on record · {docs.length} document{docs.length === 1 ? '' : 's'}
           </div>
         </div>
-        {artist.driveFolderId && (
-          <a className="btn btn-ghost btn-sm" target="_blank" rel="noreferrer"
-             href={`https://drive.google.com/drive/folders/${artist.driveFolderId}`}>📁 Open Drive folder</a>
-        )}
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <ExportMenu
+            items={[
+              {
+                key: 'print',
+                label: '🖨️ Print profile / Save as PDF',
+                onClick: () => exportArtistProfilePrint(artist, {
+                  docs: docs.map(d => ({
+                    ...d,
+                    docTypeLabel: DOC_TYPE_LABEL[d.type] || d.type || '',
+                    fileName:     d.name,
+                    uploadedAt:   d.uploadedAt || d.createdAt,
+                    showDate:     d.showDate || '',
+                  })),
+                  shows: artistShows,
+                }),
+              },
+              {
+                key: 'csv',
+                label: '📄 Download profile CSV',
+                onClick: () => exportArtistProfileCsv(artist, {
+                  docs: docs.map(d => ({
+                    ...d,
+                    docTypeLabel: DOC_TYPE_LABEL[d.type] || d.type || '',
+                    fileName:     d.name,
+                    uploadedAt:   d.uploadedAt || d.createdAt,
+                    showDate:     d.showDate || '',
+                  })),
+                  shows: artistShows,
+                }),
+              },
+            ]}
+          />
+          {artist.driveFolderId && (
+            <a className="btn btn-ghost btn-sm" target="_blank" rel="noreferrer"
+               href={`https://drive.google.com/drive/folders/${artist.driveFolderId}`}>📁 Open Drive folder</a>
+          )}
+        </div>
       </div>
 
       {artist.notes && (

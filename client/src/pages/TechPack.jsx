@@ -1,6 +1,10 @@
 import { useEffect, useState } from 'react'
 import api from '../api'
 import RichEditor from '../components/RichEditor'
+import ExportMenu from '../components/ExportMenu'
+import {
+  exportTechPackDocPrint, exportTechPackDocHtml, exportTechPackStagePrint,
+} from '../utils/techpackExport'
 
 const STAGES = [
   { id: 'inside', label: 'Inside Stage', color: '#60aeff' },
@@ -81,6 +85,41 @@ export default function TechPack() {
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           {saveMsg && <span className="success-msg">{saveMsg}</span>}
           {dirty && <span style={{ color: 'var(--warning)', fontSize: '0.8rem' }}>Unsaved changes</span>}
+          <ExportMenu
+            items={[
+              {
+                key: 'print-doc',
+                label: `🖨️ Print “${docInfo?.label || 'this doc'}” / Save as PDF`,
+                onClick: () => exportTechPackDocPrint({
+                  stageLabel: stageInfo?.label || '',
+                  docLabel:   docInfo?.label   || '',
+                  html:       content,
+                  updatedAt:  currentDoc?.updatedAt,
+                }),
+              },
+              {
+                key: 'html-doc',
+                label: '📄 Download this doc as HTML',
+                onClick: () => exportTechPackDocHtml({
+                  stageLabel: stageInfo?.label || '',
+                  docLabel:   docInfo?.label   || '',
+                  html:       content,
+                }),
+              },
+              {
+                key: 'print-stage',
+                label: `📚 Print full ${stageInfo?.label || 'stage'} tech pack`,
+                onClick: () => exportTechPackStagePrint({
+                  stageLabel: stageInfo?.label || '',
+                  sections: DOC_TYPES.map(d => {
+                    const isCurrent = d.key === docType
+                    const source    = isCurrent ? content : docs.find(x => x.stage === stage && x.docType === d.key)?.content
+                    return { docLabel: d.label, html: source || '' }
+                  }),
+                }),
+              },
+            ]}
+          />
           <button className="btn btn-primary" onClick={handleSave} disabled={saving || !dirty}>
             {saving ? 'Saving…' : 'Save Document'}
           </button>

@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import api from '../api'
+import ExportMenu from './ExportMenu'
+import { exportPatchListCsv, exportPatchListPrint } from '../utils/patchListExport'
 
 /**
  * PatchListEditor — spreadsheet-style editor for a show's audio patch list.
@@ -23,6 +25,7 @@ import api from '../api'
  *   onLocalChange(next) — invoked with the next full patchList after each
  *                        applied change so the parent can keep a fresh
  *                        reference around (e.g. for print/export).
+ *   exportMeta — { showTitle, date, stage } used in print/CSV headers.
  */
 
 const DEFAULT_INPUT_COUNT  = 48
@@ -55,7 +58,7 @@ function normalizeChannels(raw, defaultCount) {
   return out
 }
 
-export default function PatchListEditor({ patchList, canEdit, onLocalChange }) {
+export default function PatchListEditor({ patchList, canEdit, onLocalChange, exportMeta }) {
   const [inputs,  setInputs]  = useState(() => normalizeChannels(patchList.inputs,  DEFAULT_INPUT_COUNT))
   const [outputs, setOutputs] = useState(() => normalizeChannels(patchList.outputs, DEFAULT_OUTPUT_COUNT))
   const [inputCols,  setInputCols]  = useState(() => parseJsonArray(patchList.inputPatchPoints))
@@ -286,6 +289,15 @@ export default function PatchListEditor({ patchList, canEdit, onLocalChange }) {
   }
 
   // ── Render ────────────────────────────────────────────────────────────────
+  const exportSnapshot = () => ({
+    name,
+    inputs,
+    outputs,
+    inputCols,
+    outputCols,
+    meta: exportMeta || {},
+  })
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
       {/* Header: name + live status + save state */}
@@ -306,6 +318,13 @@ export default function PatchListEditor({ patchList, canEdit, onLocalChange }) {
 
         <LiveBadge connected={connected} presence={presence} />
         <SaveBadge state={saveState} />
+
+        <ExportMenu
+          items={[
+            { key: 'print', label: '🖨️ Print / Save as PDF', onClick: () => exportPatchListPrint(exportSnapshot()) },
+            { key: 'csv',   label: '📄 Download CSV',         onClick: () => exportPatchListCsv(exportSnapshot()) },
+          ]}
+        />
 
         {lastEditor?.by && (
           <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.5)' }}>

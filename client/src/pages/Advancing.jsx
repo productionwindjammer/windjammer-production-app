@@ -418,9 +418,13 @@ export default function Advancing() {
     setNotesSending(true)
     try {
       const html = generateNotesHtml(notesRecord, notesData)
+      const show      = shows.find(s => s.id === notesRecord.showId)
+      const showDate  = show?.date || ''
+      const headliner = show?.artist || show?.eventName || notesRecord.artistName || ''
+      const subject   = ['Production Brief', showDate, headliner].filter(Boolean).join(' — ')
       await api.post('/production-notes/send', {
         to: notesTo, cc: notesCc || undefined,
-        subject: `Production Brief — ${notesRecord.showName || getShowLabel(notesRecord)}`,
+        subject,
         html,
       })
       setNotesSent(true)

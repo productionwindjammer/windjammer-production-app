@@ -1,7 +1,12 @@
 import { useEffect, useState } from 'react'
 import api from '../api'
 import Modal from '../components/Modal'
+import ExportMenu from '../components/ExportMenu'
 import { filterShowList } from '../utils/showFilters'
+import {
+  exportSettlementListCsv, exportSettlementListPrint,
+  exportSettlementStatementCsv, exportSettlementStatementPrint,
+} from '../utils/settlementExport'
 
 const BLANK = {
   showId: '', showName: '', stage: 'inside',
@@ -78,7 +83,25 @@ export default function Settlement() {
           <div className="page-title">Settlement</div>
           <div className="page-subtitle">Show accounting, artist payments, and cost tracking</div>
         </div>
-        <button className="btn btn-primary" onClick={openAdd}>+ New Settlement</button>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <ExportMenu
+            items={[
+              {
+                key: 'print',
+                label: '🖨️ Print summary / Save as PDF',
+                disabled: records.length === 0,
+                onClick: () => exportSettlementListPrint(records),
+              },
+              {
+                key: 'csv',
+                label: '📄 Download summary CSV',
+                disabled: records.length === 0,
+                onClick: () => exportSettlementListCsv(records),
+              },
+            ]}
+          />
+          <button className="btn btn-primary" onClick={openAdd}>+ New Settlement</button>
+        </div>
       </div>
 
       <div className="card">
@@ -118,6 +141,14 @@ export default function Settlement() {
                     <td><span className={`badge badge-${r.status || 'pending'}`}>{r.status || 'pending'}</span></td>
                     <td>
                       <div className="actions-cell">
+                        <ExportMenu
+                          label="⬇"
+                          title={`Export settlement for ${r.showName || 'this show'}`}
+                          items={[
+                            { key: 'print', label: '🖨️ Print statement / Save as PDF', onClick: () => exportSettlementStatementPrint(r) },
+                            { key: 'csv',   label: '📄 Download statement CSV',         onClick: () => exportSettlementStatementCsv(r) },
+                          ]}
+                        />
                         <button className="btn btn-ghost btn-sm" onClick={() => openEdit(r)}>Edit</button>
                         <button className="btn btn-danger btn-sm" onClick={() => handleDelete(r.id)}>Del</button>
                       </div>

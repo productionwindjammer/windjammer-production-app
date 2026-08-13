@@ -3,6 +3,7 @@ import api from '../api'
 import Modal from '../components/Modal'
 import GmailConnect from '../components/GmailConnect'
 import { useAuth } from '../context/AuthContext'
+import { openInviteMail } from '../utils/inviteMailto'
 
 const BLANK = { name: '', email: '', role: 'crew', password: '', active: 'true', invite: true }
 
@@ -58,7 +59,10 @@ export default function Users() {
         const payload = { ...form }
         if (payload.invite) delete payload.password
         const res = await api.post('/users', payload)
-        if (res.data?.invited) setInvited(res.data.invited)
+        if (res.data?.invited) {
+          setInvited(res.data.invited)
+          openInviteMail({ to: res.data.invited.email, name: form.name, inviteUrl: res.data.invited.inviteUrl })
+        }
       }
       await load()
       setModal(false)
@@ -71,7 +75,8 @@ export default function Users() {
     try {
       const res = await api.post(`/users/${u.id}/invite`)
       if (res.data?.success) {
-        setInvited({ email: u.email, inviteUrl: res.data.inviteUrl })
+        setInvited({ email: u.email, name: u.name, inviteUrl: res.data.inviteUrl })
+        openInviteMail({ to: u.email, name: u.name, inviteUrl: res.data.inviteUrl })
       } else {
         alert(res.data?.message || 'Could not send invite.')
       }
@@ -122,14 +127,17 @@ export default function Users() {
       {invited && (
         <div className="card" style={{ background: 'rgba(16,185,129,0.1)', border: '1px solid rgba(16,185,129,0.35)', color: '#86efac', padding: 14, marginBottom: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
           <div style={{ flex: 1, minWidth: 280 }}>
-            ✉️ <strong>Invite sent</strong> to <code>{invited.email}</code>. They'll set their own password and complete their profile.
+            ✉️ <strong>Invite ready</strong> for <code>{invited.email}</code>. Your default email app should have opened with the message pre-filled — just hit Send.
             {invited.inviteUrl && (
               <div style={{ marginTop: 6, fontSize: 12 }}>
-                Direct link (in case email didn't arrive): <code style={{ background: 'rgba(0,0,0,0.3)', padding: '2px 6px', borderRadius: 4, userSelect: 'all', wordBreak: 'break-all' }}>{invited.inviteUrl}</code>
+                Direct link (in case you need to paste it manually): <code style={{ background: 'rgba(0,0,0,0.3)', padding: '2px 6px', borderRadius: 4, userSelect: 'all', wordBreak: 'break-all' }}>{invited.inviteUrl}</code>
               </div>
             )}
           </div>
           <div style={{ display: 'flex', gap: 6 }}>
+            {invited.inviteUrl && (
+              <button className="btn btn-ghost btn-sm" onClick={() => openInviteMail({ to: invited.email, name: invited.name, inviteUrl: invited.inviteUrl })}>Open Email</button>
+            )}
             {invited.inviteUrl && (
               <button className="btn btn-ghost btn-sm" onClick={() => { navigator.clipboard?.writeText(invited.inviteUrl) }}>Copy Link</button>
             )}
@@ -300,7 +308,7 @@ export default function Users() {
               )}
               {!editing && f.invite && (
                 <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.55)', marginTop: 4, padding: 10, background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.25)', borderRadius: 6 }}>
-                  An email with a signed onboarding link will be sent to <strong>{f.email || 'this address'}</strong>. The link is valid for 7 days. If no house Gmail mailbox is connected, you'll get a direct link to copy after saving.
+                  Your default email app will open with a message to <strong>{f.email || 'this address'}</strong> pre-filled with a signed onboarding link. Just review and hit Send. The link is valid for 7 days.
                 </div>
               )}
             </div>

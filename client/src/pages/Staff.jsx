@@ -2,7 +2,11 @@ import { useEffect, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import api from '../api'
 import Modal from '../components/Modal'
+import ExportMenu from '../components/ExportMenu'
 import { useAuth } from '../context/AuthContext'
+import { openInviteMail } from '../utils/inviteMailto'
+import { hasFinancialAccess } from '../utils/roles'
+import { exportStaffRosterCsv, exportStaffRosterPrint } from '../utils/staffExport'
 
 const BLANK = {
   name: '', role: '', email: '', phone: '',
@@ -27,7 +31,8 @@ const ONBOARDING = [
 ]
 
 export default function Staff() {
-  const { user: authUser } = useAuth()
+  const { user: authUser, effectiveRole } = useAuth()
+  const canSeeFinancials = hasFinancialAccess(effectiveRole || authUser?.role || '')
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const [staff, setStaff]     = useState([])
@@ -83,7 +88,10 @@ export default function Staff() {
       if (editing) await api.put(`/staff/${editing.id}`, form)
       else {
         const res = await api.post('/staff', form)
-        if (res.data.invited) setAccountCreated(res.data.invited)
+        if (res.data.invited) {
+          setAccountCreated({ ...res.data.invited, name: form.name })
+          openInviteMail({ to: res.data.invited.email, name: form.name, inviteUrl: res.data.invited.inviteUrl })
+        }
       }
       await load()
       setModal(false)
@@ -100,7 +108,8 @@ export default function Staff() {
     try {
       const res = await api.post(`/staff/${s.id}/invite`)
       if (res.data.success) {
-        setAccountCreated({ email: s.email, inviteUrl: res.data.inviteUrl })
+        setAccountCreated({ email: s.email, name: s.name, inviteUrl: res.data.inviteUrl })
+        openInviteMail({ to: s.email, name: s.name, inviteUrl: res.data.inviteUrl })
       } else {
         alert(res.data.message || 'Could not send invite.')
       }
@@ -128,20 +137,46 @@ export default function Staff() {
           <div className="page-title">Staff</div>
           <div className="page-subtitle">Team roster, onboarding, and training readiness</div>
         </div>
-        <button className="btn btn-primary" onClick={openAdd}>+ Add Staff</button>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <ExportMenu
+            items={[
+              {
+                key: 'print',
+                label: '🖨️ Print roster / Save as PDF',
+                disabled: filtered.length === 0,
+                onClick: () => exportStaffRosterPrint(filtered, {
+                  includeFinancials: canSeeFinancials,
+                  filterMeta: filter,
+                }),
+              },
+              {
+                key: 'csv',
+                label: '📄 Download roster CSV',
+                disabled: filtered.length === 0,
+                onClick: () => exportStaffRosterCsv(filtered, {
+                  includeFinancials: canSeeFinancials,
+                }),
+              },
+            ]}
+          />
+          <button className="btn btn-primary" onClick={openAdd}>+ Add Staff</button>
+        </div>
       </div>
 
       {accountCreated && (
         <div className="card" style={{ background: 'rgba(16,185,129,0.1)', border: '1px solid rgba(16,185,129,0.35)', color: '#86efac', padding: 14, marginBottom: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
           <div style={{ flex: 1, minWidth: 280 }}>
-            ✉️ <strong>Invite sent</strong> to <code>{accountCreated.email}</code>. They'll set their own password and complete their profile.
+            ✉️ <strong>Invite ready</strong> for <code>{accountCreated.email}</code>. Your default email app should have opened with the message pre-filled — just hit Send.
             {accountCreated.inviteUrl && (
               <div style={{ marginTop: 6, fontSize: 12 }}>
-                Direct link (in case email didn't arrive): <code style={{ background: 'rgba(0,0,0,0.3)', padding: '2px 6px', borderRadius: 4, userSelect: 'all', wordBreak: 'break-all' }}>{accountCreated.inviteUrl}</code>
+                Direct link (in case you need to paste it manually): <code style={{ background: 'rgba(0,0,0,0.3)', padding: '2px 6px', borderRadius: 4, userSelect: 'all', wordBreak: 'break-all' }}>{accountCreated.inviteUrl}</code>
               </div>
             )}
           </div>
           <div style={{ display: 'flex', gap: 6 }}>
+            {accountCreated.inviteUrl && (
+              <button className="btn btn-ghost btn-sm" onClick={() => openInviteMail({ to: accountCreated.email, name: accountCreated.name, inviteUrl: accountCreated.inviteUrl })}>Open Email</button>
+            )}
             {accountCreated.inviteUrl && (
               <button className="btn btn-ghost btn-sm" onClick={() => { navigator.clipboard?.writeText(accountCreated.inviteUrl); }}>Copy Link</button>
             )}

@@ -94,3 +94,14 @@ async function checkGoogleAuth() {
 }
 
 module.exports = { checkGoogleAuth };
+
+// Allow running directly from the CLI: `node scripts/check-google-auth.js`
+if (require.main === module) {
+  require('dotenv').config();
+  checkGoogleAuth()
+    .then(() => process.exit(0))
+    .catch(err => {
+      console.error('[auth-check] unexpected error:', err);
+      process.exit(1);
+    });
+}

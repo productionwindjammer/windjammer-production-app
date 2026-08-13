@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react'
 import api from '../api'
 import Modal from '../components/Modal'
+import ExportMenu from '../components/ExportMenu'
 import { filterShowList } from '../utils/showFilters'
 import { useSettings } from '../context/SettingsContext'
 import { useAuth } from '../context/AuthContext'
 import { formatTime } from '../utils/time'
 import { hasFinancialAccess } from '../utils/roles'
+import { exportLaborCsv, exportLaborPrint } from '../utils/laborExport'
 
 const BLANK = {
   showId: '', showName: '', stage: 'inside',
@@ -310,6 +312,50 @@ export default function Labor() {
           <div className="page-subtitle">Show crew, casual labor, runners, and facility / shop calls</div>
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <ExportMenu
+            items={[
+              {
+                key: 'print',
+                label: '🖨️ Print / Save as PDF',
+                disabled: filtered.length === 0,
+                onClick: () => exportLaborPrint({
+                  rows: filtered,
+                  title: 'Labor Sheet',
+                  filter: {
+                    showName: filter.show === '__facility__'
+                      ? 'Facility calls only'
+                      : (shows.find(s => s.id === filter.show)?.artist
+                          ? `${shows.find(s => s.id === filter.show).date} — ${shows.find(s => s.id === filter.show).artist || shows.find(s => s.id === filter.show).eventName}`
+                          : ''),
+                    stage: filter.stage === '__facility__' ? '' : filter.stage,
+                  },
+                  timeFormat: tf,
+                  includeFinancials: canSeeFinancials,
+                  totalCost: canSeeFinancials ? totalCost : undefined,
+                }),
+              },
+              {
+                key: 'csv',
+                label: '📄 Download CSV',
+                disabled: filtered.length === 0,
+                onClick: () => exportLaborCsv({
+                  rows: filtered,
+                  title: 'Labor Sheet',
+                  filter: {
+                    showName: filter.show === '__facility__'
+                      ? 'Facility calls only'
+                      : (shows.find(s => s.id === filter.show)?.artist
+                          ? `${shows.find(s => s.id === filter.show).date} — ${shows.find(s => s.id === filter.show).artist || shows.find(s => s.id === filter.show).eventName}`
+                          : ''),
+                    stage: filter.stage === '__facility__' ? '' : filter.stage,
+                  },
+                  timeFormat: tf,
+                  includeFinancials: canSeeFinancials,
+                  totalCost: canSeeFinancials ? totalCost : undefined,
+                }),
+              },
+            ]}
+          />
           <button className="btn btn-ghost" onClick={openCrewBuilder}>+ Build Crew (per show)</button>
           <button className="btn btn-ghost" onClick={openAddFacility}>+ Facility Call</button>
           <button className="btn btn-primary" onClick={openAdd}>+ Add Labor</button>
