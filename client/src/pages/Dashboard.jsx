@@ -661,6 +661,18 @@ function CrewDashboard({ user, shows, labor, navigate, showRequests = [], onRelo
   const myName = (user?.name || '').toLowerCase()
   const myId = user?.staffId || ''
 
+  // Running-tally earnings for the signed-in user. Comes from
+  // /api/me/pay which only reports EARNED pay (past shows) — a crew
+  // member should never see budgeted pay for a show that hasn't happened yet.
+  const [pay, setPay] = useState(null)
+  useEffect(() => {
+    let cancelled = false
+    api.get('/me/pay')
+      .then(r => { if (!cancelled) setPay(r.data?.data || null) })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [])
+
   const mine = labor
     .filter(l => (myId && l.staffId === myId) || (myName && (l.workerName || '').toLowerCase() === myName))
     .map(l => {
@@ -720,6 +732,39 @@ function CrewDashboard({ user, shows, labor, navigate, showRequests = [], onRelo
             </div>
           </div>
           <div className="next-call-role">{next.role || 'Crew'}</div>
+        </div>
+      )}
+
+      {pay && (pay.earned?.lifetime > 0 || pay.shifts?.past > 0) && (
+        <div className="stat-grid" style={{ marginBottom: 16 }}>
+          <div className="stat-card">
+            <div className="stat-label">YTD Earned</div>
+            <div className="stat-value" style={{ color: '#86efac' }}>
+              ${Number(pay.earned?.ytd || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+            </div>
+            <div className="stat-sub">since Jan 1 · past shows only</div>
+          </div>
+          <div className="stat-card">
+            <div className="stat-label">Last 30 Days</div>
+            <div className="stat-value" style={{ color: '#86efac' }}>
+              ${Number(pay.earned?.last30 || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+            </div>
+            <div className="stat-sub">recent earnings</div>
+          </div>
+          <div className="stat-card">
+            <div className="stat-label">Lifetime Earned</div>
+            <div className="stat-value" style={{ color: '#86efac' }}>
+              ${Number(pay.earned?.lifetime || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+            </div>
+            <div className="stat-sub">
+              {pay.shifts?.past || 0} shift{pay.shifts?.past === 1 ? '' : 's'} worked
+            </div>
+          </div>
+          <div className="stat-card">
+            <div className="stat-label">Upcoming Shifts</div>
+            <div className="stat-value">{pay.shifts?.upcoming || 0}</div>
+            <div className="stat-sub">pay reported after the show</div>
+          </div>
         </div>
       )}
 

@@ -1353,6 +1353,94 @@ app.get('/api/me/notification-prefs', requireAuth, async (req, res) => {
   }
 });
 
+// GET /api/me/pay — running-tally pay summary for the authenticated user.
+// Only counts EARNED pay (labor rows whose show date is in the past) so a
+// staff member never sees budgeted pay for a show that hasn't happened yet.
+// Managers with financial access use the richer StaffDetail view for forecast.
+app.get('/api/me/pay', requireAuth, async (req, res) => {
+  try {
+    const staffId = req.user?.staffId;
+    const empty = {
+      earned: { lifetime: 0, ytd: 0, last30: 0 },
+      shifts: { past: 0, upcoming: 0 },
+      nextCall: null,
+    };
+    if (!staffId) return res.json({ success: true, data: empty });
+
+    const [laborRows, showRows] = await Promise.all([
+      sheets.getRows(config.googleSheets.sheets.labor).catch(() => []),
+      sheets.getRows(config.googleSheets.sheets.shows).catch(() => []),
+    ]);
+    const showById = new Map(showRows.map(s => [String(s.id), s]));
+
+    const parseDate = d => {
+      if (!d) return null;
+      const s = String(d);
+      const dt = /^\d{4}-\d{2}-\d{2}$/.test(s) ? new Date(s + 'T12:00:00') : new Date(s);
+      return isNaN(dt.getTime()) ? null : dt;
+    };
+    const rowCost = row => {
+      const rate = parseFloat(row?.rate);
+      if (!Number.isFinite(rate)) return parseFloat(row?.total || 0) || 0;
+      if ((row.payType || 'hour') === 'day') {
+        const d = parseFloat(row.days || '1');
+        return (Number.isFinite(d) ? d : 1) * rate;
+      }
+      const h = parseFloat(row.hours);
+      return (Number.isFinite(h) ? h : 0) * rate;
+    };
+
+    const now    = new Date();
+    const today  = new Date(); today.setHours(0, 0, 0, 0);
+    const yStart = new Date(now.getFullYear(), 0, 1);
+    const d30    = new Date(now.getTime() - 30 * 86400000);
+
+    let lifetime = 0, ytd = 0, last30 = 0;
+    let pastShifts = 0, upcomingShifts = 0;
+    let nextCall = null;
+    let nextDt   = null;
+
+    for (const row of laborRows) {
+      if (String(row.staffId) !== String(staffId)) continue;
+      const show    = row.showId ? showById.get(String(row.showId)) : null;
+      const dateStr = show?.date || (row.createdAt ? String(row.createdAt).slice(0, 10) : '');
+      const dt      = parseDate(dateStr);
+      // Facility rows (no show) with no date fall through as "past" so their
+      // pay is included in the running tally rather than getting stuck in limbo.
+      const isPast  = !dt || dt < today;
+      if (isPast) {
+        const c = rowCost(row);
+        lifetime += c;
+        if (dt && dt >= yStart) ytd    += c;
+        if (dt && dt >= d30)    last30 += c;
+        pastShifts++;
+      } else {
+        upcomingShifts++;
+        if (!nextDt || dt < nextDt) {
+          nextDt   = dt;
+          nextCall = {
+            date:     dateStr,
+            showName: show?.artist || show?.eventName || row.showName || '',
+            role:     row.role || '',
+            callTime: row.callTime || '',
+          };
+        }
+      }
+    }
+
+    res.json({
+      success: true,
+      data: {
+        earned:   { lifetime, ytd, last30 },
+        shifts:   { past: pastShifts, upcoming: upcomingShifts },
+        nextCall,
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 // ── Tech Pack ─────────────────────────────────────────────────────────────────
 // One long-form document per stage. The sheet stores a single row per stage
 // with a JSON `sections` blob (array of { key, title, icon, content }).

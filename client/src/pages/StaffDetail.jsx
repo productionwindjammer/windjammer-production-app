@@ -114,20 +114,52 @@ export default function StaffDetail() {
   const upcoming = useMemo(() => sorted.filter(r => r._date && r._date >= today).reverse(), [sorted, today])
   const past     = useMemo(() => sorted.filter(r => !r._date || r._date < today), [sorted, today])
 
-  // Cost totals for the Pay tab
+  // Cost totals for the Pay tab.
+  //
+  // Split into "earned" (shows that have already happened) and "forecast"
+  // (upcoming shows with pay already budgeted). Staff members never see the
+  // forecast — the running tally on their own dashboard is earned-only — but
+  // production/venue managers see both here so they can plan cash-out.
   const totals = useMemo(() => {
     const now  = new Date()
     const yStart = new Date(now.getFullYear(), 0, 1)
     const d30    = new Date(now.getTime() - 30 * 86400000)
-    let lifetime = 0, ytd = 0, last30 = 0, shiftCount = 0
+    const startOfDay = new Date(); startOfDay.setHours(0, 0, 0, 0)
+
+    let earnedLifetime = 0, earnedYtd = 0, earnedLast30 = 0, earnedShifts = 0
+    let forecastYtd = 0, forecastLifetime = 0, forecastShifts = 0
+
     for (const r of enriched) {
       const c = r._cost || 0
-      lifetime += c
-      if (r._date && r._date >= yStart) ytd    += c
-      if (r._date && r._date >= d30)    last30 += c
-      if (c > 0 || r._date) shiftCount++
+      // Facility rows without a date are treated as already-earned so they
+      // aren't stuck in limbo.
+      const isPast = !r._date || r._date < startOfDay
+      if (isPast) {
+        earnedLifetime += c
+        if (r._date && r._date >= yStart) earnedYtd    += c
+        if (r._date && r._date >= d30)    earnedLast30 += c
+        if (c > 0 || r._date) earnedShifts++
+      } else {
+        forecastLifetime += c
+        if (r._date && r._date >= yStart) forecastYtd += c
+        forecastShifts++
+      }
     }
-    return { lifetime, ytd, last30, shiftCount, avg: shiftCount ? lifetime / shiftCount : 0 }
+
+    return {
+      // Earned (running tally — safe to show a staff member).
+      lifetime: earnedLifetime,
+      ytd:      earnedYtd,
+      last30:   earnedLast30,
+      shiftCount: earnedShifts,
+      avg: earnedShifts ? earnedLifetime / earnedShifts : 0,
+      // Forecast (upcoming shows — managers only).
+      forecastYtd,
+      forecastLifetime,
+      forecastShifts,
+      // Combined YTD for a single "expected total for the year" line.
+      combinedYtd: earnedYtd + forecastYtd,
+    }
   }, [enriched])
 
   const rates = staff ? parseRates(staff.rates) : []
@@ -297,14 +329,18 @@ export default function StaffDetail() {
         {canSeeFinancials && (
           <>
             <div className="stat-card">
-              <div className="stat-label">YTD Pay</div>
+              <div className="stat-label">YTD Earned</div>
               <div className="stat-value" style={{ color: '#86efac' }}>${totals.ytd.toFixed(0)}</div>
-              <div className="stat-sub">since Jan 1</div>
+              <div className="stat-sub">past shows since Jan 1</div>
             </div>
             <div className="stat-card">
-              <div className="stat-label">Last 30 Days</div>
-              <div className="stat-value" style={{ color: '#86efac' }}>${totals.last30.toFixed(0)}</div>
-              <div className="stat-sub">avg ${totals.avg.toFixed(0)} / shift</div>
+              <div className="stat-label">YTD Forecast</div>
+              <div className="stat-value" style={{ color: '#fbbf24' }}>${totals.forecastYtd.toFixed(0)}</div>
+              <div className="stat-sub">
+                {totals.forecastShifts
+                  ? `${totals.forecastShifts} upcoming shift${totals.forecastShifts === 1 ? '' : 's'}`
+                  : 'no upcoming shifts'}
+              </div>
             </div>
           </>
         )}
@@ -385,11 +421,30 @@ export default function StaffDetail() {
       {/* ── PAY TAB ─────────────────────────────────────────────── */}
       {tab === 'pay' && canSeeFinancials && (
         <div className="card" style={{ padding: 24 }}>
+          <div style={{
+            fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.07em',
+            color: 'var(--text-muted)', fontWeight: 600, marginBottom: 10,
+          }}>Earned (past shows)</div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 18, marginBottom: 22 }}>
-            <PayStat label="Lifetime Earnings"   value={totals.lifetime} />
-            <PayStat label="Year to Date"        value={totals.ytd} />
-            <PayStat label="Last 30 Days"        value={totals.last30} />
-            <PayStat label="Avg per Shift"       value={totals.avg} />
+            <PayStat label="Lifetime Earned"   value={totals.lifetime} />
+            <PayStat label="YTD Earned"        value={totals.ytd} />
+            <PayStat label="Last 30 Days"      value={totals.last30} />
+            <PayStat label="Avg per Shift"     value={totals.avg} />
+          </div>
+
+          <div style={{
+            fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.07em',
+            color: 'var(--text-muted)', fontWeight: 600, marginBottom: 10,
+          }}>Forecast (upcoming shows) · manager-only</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 18, marginBottom: 22 }}>
+            <PayStat label="YTD Forecast" value={totals.forecastYtd} tone="forecast" />
+            <PayStat label="Upcoming Budget" value={totals.forecastLifetime} tone="forecast" />
+            <PayStat label="Projected YTD Total" value={totals.combinedYtd} tone="forecast" />
+            <div className="stat-card">
+              <div className="stat-label">Upcoming Shifts</div>
+              <div className="stat-value" style={{ color: '#fbbf24' }}>{totals.forecastShifts}</div>
+              <div className="stat-sub">not yet paid</div>
+            </div>
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 18 }}>
@@ -623,13 +678,14 @@ function InfoRow({ k, v }) {
   )
 }
 
-function PayStat({ label, value }) {
+function PayStat({ label, value, tone }) {
+  const color = tone === 'forecast' ? '#fbbf24' : '#86efac'
   return (
     <div style={{ padding: '14px 16px', border: '1px solid var(--border)', borderRadius: 10, background: 'rgba(255,255,255,0.02)' }}>
       <div style={{ fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text-muted)', fontWeight: 600 }}>
         {label}
       </div>
-      <div style={{ fontSize: '1.5rem', fontWeight: 700, color: '#86efac', marginTop: 4 }}>
+      <div style={{ fontSize: '1.5rem', fontWeight: 700, color, marginTop: 4 }}>
         ${Number(value || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}
       </div>
     </div>
