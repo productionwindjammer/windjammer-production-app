@@ -3403,7 +3403,7 @@ async function runAutoSync() {
 }
 
 // Kick off the first run shortly after startup, then every 15 minutes.
-// Email integration temporarily disabled — re-enable these two lines to restore auto-sync.
+// Auto-sync intentionally disabled — connect accounts + sync manually from the Email page.
 // setTimeout(runAutoSync, 30 * 1000);
 // setInterval(runAutoSync, 15 * 60 * 1000);
 

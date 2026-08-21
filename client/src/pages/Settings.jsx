@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import api from '../api'
 import { useAuth } from '../context/AuthContext'
 import { useSettings } from '../context/SettingsContext'
+import GmailConnect from '../components/GmailConnect'
 import VenueDefaultsCard from '../components/VenueDefaultsCard'
 import {
   isPushSupported,
@@ -128,6 +129,16 @@ export default function Settings() {
         </div>
       </div>
 
+
+      {/* ── Connected accounts ──────────────────────────────────────────── */}
+      <div className="card">
+        <div className="card-header"><div className="card-title">Connected accounts</div></div>
+        <div style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 12 }}>
+          Link your Gmail so advancing messages sent to you get pulled into shows automatically. Only you can see
+          your messages unless an admin promotes your account to the shared "house" mailbox.
+        </div>
+        <GmailConnect />
+      </div>
 
       {/* ── Profile ────────────────────────────────────────────────────── */}
       <div className="card">

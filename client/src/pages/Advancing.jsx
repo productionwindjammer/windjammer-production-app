@@ -877,6 +877,7 @@ export default function Advancing() {
             <>
               <button className="btn btn-ghost" onClick={() => { setViewRecord(null); }}>Close</button>
               <button className="btn btn-ghost" onClick={() => { const r = viewRecord; setViewRecord(null); openEdit(r); }}>Edit</button>
+              <button className="btn btn-ghost" onClick={() => { const r = viewRecord; setViewRecord(null); navigate(`/email?showId=${r.showId}`); }}>✉️ Email Thread</button>
               <button className="btn btn-primary" onClick={() => { const r = viewRecord; setViewRecord(null); openNotes(r); }}>📋 Production Brief</button>
             </>
           }
