@@ -98,8 +98,11 @@ const SHEETS = [
   },
   {
     name: 'TechPack',
-    headers: ['id', 'stage', 'docType', 'title', 'sections', 'content', 'updatedAt'],
-    note: 'One row per stage with docType="stage" and sections (JSON). Legacy per-docType rows still supported for backwards read-compat.'
+    headers: [
+      'id', 'stage', 'docType', 'title', 'sections', 'content', 'updatedAt',
+      'pdfFileId', 'pdfFilename', 'pdfMimeType', 'pdfUrl', 'pdfUpdatedAt',
+    ],
+    note: 'One row per stage with docType="stage" and sections (JSON). pdf* fields point at the working PDF stored in Drive.'
   },
   {
     name: 'PatchLists',

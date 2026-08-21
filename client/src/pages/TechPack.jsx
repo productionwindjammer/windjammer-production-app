@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import api from '../api'
 import RichEditor from '../components/RichEditor'
 import ExportMenu from '../components/ExportMenu'
+import { useAuth } from '../context/AuthContext'
 import {
   exportTechPackStagePrint,
   exportTechPackStageHtml,
@@ -27,6 +28,8 @@ const DEFAULT_SECTIONS = [
 ]
 
 export default function TechPack() {
+  const { effectiveRole } = useAuth()
+  const canEdit = ['admin', 'production_manager', 'stage_manager'].includes(effectiveRole)
   const [docs, setDocs]       = useState([])       // one per stage: { stage, sections, updatedAt }
   const [loading, setLoading] = useState(true)
   const [stage, setStage]     = useState('inside')
@@ -34,6 +37,8 @@ export default function TechPack() {
   const [dirty, setDirty]     = useState(false)
   const [saving, setSaving]   = useState(false)
   const [saveMsg, setSaveMsg] = useState('')
+  const [pdfBusy, setPdfBusy] = useState(false)
+  const pdfInputRef = useRef(null)
   const scrollRef = useRef(null)
 
   useEffect(() => { load() }, [])
@@ -85,6 +90,44 @@ export default function TechPack() {
     } catch (err) {
       alert('Save failed: ' + (err.response?.data?.message || err.message))
     } finally { setSaving(false) }
+  }
+
+  async function handlePdfUpload(e) {
+    const file = e.target.files?.[0]
+    if (file) e.target.value = ''
+    if (!file) return
+    if (file.size > 25 * 1024 * 1024) {
+      alert('PDF is larger than 25 MB — please compress or split it before uploading.')
+      return
+    }
+    setPdfBusy(true)
+    try {
+      const data = await new Promise((resolve, reject) => {
+        const r = new FileReader()
+        r.onload = () => resolve(String(r.result).split(',')[1])
+        r.onerror = reject
+        r.readAsDataURL(file)
+      })
+      await api.post(`/techpack/${stage}/pdf`, {
+        filename: file.name,
+        mimeType: file.type || 'application/pdf',
+        data,
+      })
+      await load()
+    } catch (err) {
+      alert('PDF upload failed: ' + (err.response?.data?.message || err.message))
+    } finally { setPdfBusy(false) }
+  }
+
+  async function handlePdfRemove() {
+    if (!confirm('Remove the current tech pack PDF? The file will be moved to Drive trash.')) return
+    setPdfBusy(true)
+    try {
+      await api.delete(`/techpack/${stage}/pdf`)
+      await load()
+    } catch (err) {
+      alert('Remove failed: ' + (err.response?.data?.message || err.message))
+    } finally { setPdfBusy(false) }
   }
 
   const filledCount = useMemo(
@@ -218,6 +261,69 @@ export default function TechPack() {
                   : 'Not yet saved'}
               </div>
             </div>
+          </div>
+
+          {/* Current tech pack PDF — the working document sent to tours/promoters. */}
+          <div style={{
+            padding: '12px 20px',
+            borderBottom: '1px solid var(--border)',
+            display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
+            background: currentDoc?.pdfFileId ? 'rgba(74,222,128,0.06)' : 'rgba(255,255,255,0.02)',
+          }}>
+            <div style={{ fontSize: '1.4rem' }}>📄</div>
+            <div style={{ flex: 1, minWidth: 200 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-muted)' }}>
+                Current PDF
+              </div>
+              {currentDoc?.pdfFileId ? (
+                <div style={{ marginTop: 2 }}>
+                  <a
+                    href={currentDoc.pdfUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{ fontWeight: 600, wordBreak: 'break-all' }}
+                  >
+                    {currentDoc.pdfFilename || 'View PDF'}
+                  </a>
+                  {currentDoc.pdfUpdatedAt && (
+                    <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
+                      Uploaded {new Date(currentDoc.pdfUpdatedAt).toLocaleString()}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div style={{ marginTop: 2, fontSize: 13, color: 'var(--text-muted)' }}>
+                  No PDF uploaded yet. Upload the current working tech pack PDF so it can be auto-attached to advance emails.
+                </div>
+              )}
+            </div>
+            {canEdit && (
+              <>
+                <input
+                  ref={pdfInputRef}
+                  type="file"
+                  accept="application/pdf"
+                  style={{ display: 'none' }}
+                  onChange={handlePdfUpload}
+                />
+                <button
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => pdfInputRef.current?.click()}
+                  disabled={pdfBusy}
+                >
+                  {pdfBusy ? 'Working…' : currentDoc?.pdfFileId ? '↻ Replace' : '⬆ Upload PDF'}
+                </button>
+                {currentDoc?.pdfFileId && (
+                  <button
+                    className="btn btn-danger btn-sm"
+                    onClick={handlePdfRemove}
+                    disabled={pdfBusy}
+                  >
+                    Remove
+                  </button>
+                )}
+              </>
+            )}
           </div>
 
           {loading ? (

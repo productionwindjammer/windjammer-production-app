@@ -65,6 +65,7 @@ function parseAttachments(str) {
 }
 function attachmentLabel(spec) {
   if (spec.label) return spec.label
+  if (spec.type === 'techpack-pdf')     return `Tech pack PDF (${spec.stage || 'auto'})`
   if (spec.type === 'techpack-full')    return `Full tech pack (${spec.stage || 'auto'})`
   if (spec.type === 'techpack-section') {
     const s = TECHPACK_SECTIONS.find(x => x.key === spec.section)
@@ -327,13 +328,15 @@ export default function EmailTemplates() {
 }
 
 function AttachmentPicker({ onCancel, onPick }) {
-  const [type, setType]       = useState('techpack-full')
+  const [type, setType]       = useState('techpack-pdf')
   const [stage, setStage]     = useState('auto')
   const [section, setSection] = useState(TECHPACK_SECTIONS[0].key)
   const [docType, setDocType] = useState(ARTIST_DOC_TYPES[0].value)
 
   function submit() {
-    if (type === 'techpack-full') {
+    if (type === 'techpack-pdf') {
+      onPick({ type: 'techpack-pdf', stage })
+    } else if (type === 'techpack-full') {
       onPick({ type: 'techpack-full', stage })
     } else if (type === 'techpack-section') {
       onPick({ type: 'techpack-section', stage, section })
@@ -357,12 +360,13 @@ function AttachmentPicker({ onCancel, onPick }) {
         <div className="form-group">
           <label>Type</label>
           <select value={type} onChange={e => setType(e.target.value)}>
-            <option value="techpack-full">Full tech pack (single HTML file)</option>
-            <option value="techpack-section">One tech pack section</option>
+            <option value="techpack-pdf">Current tech pack PDF (uploaded on Tech Pack page)</option>
+            <option value="techpack-full">Full tech pack (single generated HTML file)</option>
+            <option value="techpack-section">One tech pack section (HTML)</option>
             <option value="artist-doc">Artist document (rider, plot, etc.)</option>
           </select>
         </div>
-        {(type === 'techpack-full' || type === 'techpack-section') && (
+        {(type === 'techpack-pdf' || type === 'techpack-full' || type === 'techpack-section') && (
           <div className="form-group">
             <label>Stage</label>
             <select value={stage} onChange={e => setStage(e.target.value)}>
@@ -387,6 +391,11 @@ function AttachmentPicker({ onCancel, onPick }) {
             <div className="text-muted" style={{ fontSize: 12, marginTop: 4 }}>
               Pulls the most recently uploaded document of this category from the show's artist. Falls back silently if none exists.
             </div>
+          </div>
+        )}
+        {type === 'techpack-pdf' && (
+          <div className="text-muted" style={{ fontSize: 12 }}>
+            Attaches the working PDF uploaded on the Tech Pack page for the selected stage. Falls back silently if no PDF has been uploaded.
           </div>
         )}
         {(type === 'techpack-full' || type === 'techpack-section') && (

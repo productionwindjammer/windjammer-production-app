@@ -984,7 +984,7 @@ const EMAIL_TEMPLATE_DEFAULTS = [
 <p>Happy to jump on a call if easier. Looking forward to a great show.</p>
 <p>Best,<br/>{{sender.name}}<br/>The Windjammer</p>`,
     attachments: [
-      { type: 'techpack-full', stage: 'auto', label: 'Full tech pack for the show\'s stage' },
+      { type: 'techpack-pdf', stage: 'auto', label: 'Current tech pack PDF for the show\'s stage' },
     ],
   },
   {
@@ -998,7 +998,7 @@ const EMAIL_TEMPLATE_DEFAULTS = [
 <p>Attached is our current tech pack for the {{stage_label}}. When you have a chance, please send over the tour's most recent rider, input list, and stage plot and we'll get everything lined up on our end.</p>
 <p>Talk soon,<br/>{{sender.name}}<br/>The Windjammer</p>`,
     attachments: [
-      { type: 'techpack-full', stage: 'auto', label: 'Full tech pack for the show\'s stage' },
+      { type: 'techpack-pdf', stage: 'auto', label: 'Current tech pack PDF for the show\'s stage' },
     ],
   },
 ];
@@ -1131,6 +1131,24 @@ async function resolveAttachmentSpec(spec, show) {
       mimeType: 'text/html',
       data: Buffer.from(wrapped, 'utf8').toString('base64'),
     };
+  }
+  if (spec.type === 'techpack-pdf') {
+    try {
+      const stage = spec.stage === 'auto' || !spec.stage ? (show.stage || 'inside') : spec.stage;
+      const rows = await sheets.getRows(config.googleSheets.sheets.techpack).catch(() => []);
+      const doc  = rows.find(d => d.stage === stage && d.docType === 'stage');
+      if (!doc || !doc.pdfFileId) return null;
+      const drive = await sheets.getDriveClient();
+      const bin = await drive.files.get({ fileId: doc.pdfFileId, alt: 'media' }, { responseType: 'arraybuffer' });
+      return {
+        filename: doc.pdfFilename || 'tech-pack.pdf',
+        mimeType: doc.pdfMimeType || 'application/pdf',
+        data: Buffer.from(bin.data).toString('base64'),
+      };
+    } catch (err) {
+      console.warn('[resolveAttachmentSpec techpack-pdf]', err.message);
+      return null;
+    }
   }
   if (spec.type === 'drive-file' && spec.fileId) {
     try {
@@ -1812,7 +1830,14 @@ app.get('/api/techpack', requireAuth, async (req, res) => {
       if (modern) {
         const sections = techpackParseSections(modern.sections)
           || TECHPACK_DEFAULT_SECTIONS.map(s => ({ ...s, content: '' }));
-        return { id: modern.id, stage, sections, updatedAt: modern.updatedAt || '' };
+        return {
+          id: modern.id, stage, sections, updatedAt: modern.updatedAt || '',
+          pdfFileId:      modern.pdfFileId      || '',
+          pdfFilename:    modern.pdfFilename    || '',
+          pdfMimeType:    modern.pdfMimeType    || '',
+          pdfUrl:         modern.pdfUrl         || '',
+          pdfUpdatedAt:   modern.pdfUpdatedAt   || '',
+        };
       }
       const sections = techpackBuildFromLegacy(stage, stageRows);
       const latest = stageRows
@@ -1859,6 +1884,92 @@ app.put('/api/techpack/:stage', requireAuth, requireRole('admin', 'production_ma
     res.json({ success: true });
   } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 });
+
+// Upload/replace the current PDF for a stage's tech pack. Uploads to Drive,
+// makes it link-shareable, and stores fileId/url/name/type on the TechPack row.
+app.post('/api/techpack/:stage/pdf',
+  requireAuth, requireRole('admin', 'production_manager', 'stage_manager'),
+  async (req, res) => {
+    try {
+      const stage = req.params.stage;
+      if (!TECHPACK_STAGES.includes(stage))
+        return res.status(400).json({ success: false, message: 'Unknown stage' });
+      const { filename, mimeType, data } = req.body || {};
+      if (!filename || !mimeType || !data)
+        return res.status(400).json({ success: false, message: 'filename, mimeType, data required' });
+
+      const drive = await sheets.getDriveClient();
+      const buffer = Buffer.from(data, 'base64');
+      const readable = Readable.from(buffer);
+      const uploaded = await drive.files.create({
+        requestBody: { name: filename, mimeType },
+        media: { mimeType, body: readable },
+        fields: 'id,webViewLink',
+      });
+      await drive.permissions.create({
+        fileId: uploaded.data.id,
+        requestBody: { role: 'reader', type: 'anyone' },
+      });
+
+      const rows = await sheets.getRows(config.googleSheets.sheets.techpack);
+      const modern = rows.find(r => r.stage === stage && r.docType === 'stage');
+      const patch = {
+        pdfFileId:     uploaded.data.id,
+        pdfFilename:   filename,
+        pdfMimeType:   mimeType,
+        pdfUrl:        uploaded.data.webViewLink || `https://drive.google.com/file/d/${uploaded.data.id}/view`,
+        pdfUpdatedAt:  new Date().toISOString(),
+      };
+      if (modern) {
+        // If there was a previous PDF, trash it so Drive doesn't accumulate junk.
+        if (modern.pdfFileId && modern.pdfFileId !== uploaded.data.id) {
+          drive.files.update({ fileId: modern.pdfFileId, requestBody: { trashed: true } })
+            .catch(err => console.warn('[techpack pdf] could not trash old file:', err.message));
+        }
+        await sheets.updateRowById(config.googleSheets.sheets.techpack, modern.id, patch);
+      } else {
+        await sheets.appendRow(config.googleSheets.sheets.techpack, {
+          id: 'tp_' + Date.now(),
+          stage, docType: 'stage',
+          title: stage === 'beach' ? 'Beach Stage Tech Pack' : 'Inside Stage Tech Pack',
+          sections: JSON.stringify(TECHPACK_DEFAULT_SECTIONS.map(s => ({ ...s, content: '' }))),
+          updatedAt: new Date().toISOString(),
+          ...patch,
+        });
+      }
+      res.json({ success: true, ...patch });
+    } catch (err) {
+      console.error('[techpack pdf upload]', err.message);
+      res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
+
+app.delete('/api/techpack/:stage/pdf',
+  requireAuth, requireRole('admin', 'production_manager', 'stage_manager'),
+  async (req, res) => {
+    try {
+      const stage = req.params.stage;
+      if (!TECHPACK_STAGES.includes(stage))
+        return res.status(400).json({ success: false, message: 'Unknown stage' });
+      const rows = await sheets.getRows(config.googleSheets.sheets.techpack);
+      const modern = rows.find(r => r.stage === stage && r.docType === 'stage');
+      if (!modern) return res.json({ success: true });
+      if (modern.pdfFileId) {
+        try {
+          const drive = await sheets.getDriveClient();
+          await drive.files.update({ fileId: modern.pdfFileId, requestBody: { trashed: true } });
+        } catch (err) { console.warn('[techpack pdf delete] Drive trash failed:', err.message); }
+      }
+      await sheets.updateRowById(config.googleSheets.sheets.techpack, modern.id, {
+        pdfFileId: '', pdfFilename: '', pdfMimeType: '', pdfUrl: '', pdfUpdatedAt: '',
+      });
+      res.json({ success: true });
+    } catch (err) {
+      res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
 
 // ── Patch Lists ───────────────────────────────────────────────────────────────
 // A patch list is a per-show (or per-artist-as-template) I/O document for the
