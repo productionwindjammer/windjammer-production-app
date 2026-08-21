@@ -1147,6 +1147,30 @@ async function resolveAttachmentSpec(spec, show) {
       return null;
     }
   }
+  if (spec.type === 'artist-doc' && spec.docType) {
+    try {
+      const artists = await sheets.getRows(config.googleSheets.sheets.artists).catch(() => []);
+      const nameKey = String(show.artist || '').toLowerCase().trim();
+      const artist  = artists.find(a => String(a.name || '').toLowerCase().trim() === nameKey);
+      if (!artist) return null;
+      const docs = await sheets.getRows(config.googleSheets.sheets.artistDocuments).catch(() => []);
+      const matches = docs
+        .filter(d => d.artistId === artist.id && d.type === spec.docType && d.driveFileId)
+        .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+      const doc = matches[0];
+      if (!doc) return null;
+      const drive = await sheets.getDriveClient();
+      const bin = await drive.files.get({ fileId: doc.driveFileId, alt: 'media' }, { responseType: 'arraybuffer' });
+      return {
+        filename: doc.name || `${spec.docType}.bin`,
+        mimeType: doc.mimeType || 'application/octet-stream',
+        data: Buffer.from(bin.data).toString('base64'),
+      };
+    } catch (err) {
+      console.warn('[resolveAttachmentSpec artist-doc]', err.message);
+      return null;
+    }
+  }
   return null;
 }
 

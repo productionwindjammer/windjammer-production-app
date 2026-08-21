@@ -22,6 +22,18 @@ const TECHPACK_SECTIONS = [
   { key: 'hospitality', label: 'Hospitality / Dressing Room' },
 ]
 
+// Artist document categories — must match the DOC_TYPES list on Artists.jsx.
+const ARTIST_DOC_TYPES = [
+  { value: 'rider',       label: 'Tech Rider' },
+  { value: 'hospitality', label: 'Hospitality Rider' },
+  { value: 'stagePlot',   label: 'Stage Plot' },
+  { value: 'inputList',   label: 'Input List' },
+  { value: 'consoleFile', label: 'Console File / Scene' },
+  { value: 'contract',    label: 'Contract' },
+  { value: 'w9',          label: 'W-9' },
+  { value: 'other',       label: 'Other' },
+]
+
 const STAGE_CHOICES = [
   { value: 'auto',   label: "Match show's stage" },
   { value: 'inside', label: 'Inside Stage' },
@@ -57,6 +69,10 @@ function attachmentLabel(spec) {
   if (spec.type === 'techpack-section') {
     const s = TECHPACK_SECTIONS.find(x => x.key === spec.section)
     return `Tech pack — ${s?.label || spec.section} (${spec.stage || 'auto'})`
+  }
+  if (spec.type === 'artist-doc') {
+    const d = ARTIST_DOC_TYPES.find(x => x.value === spec.docType)
+    return `Artist document — ${d?.label || spec.docType} (from show's artist)`
   }
   if (spec.type === 'drive-file') return `Drive file: ${spec.filename || spec.fileId}`
   return spec.type || 'attachment'
@@ -314,12 +330,15 @@ function AttachmentPicker({ onCancel, onPick }) {
   const [type, setType]       = useState('techpack-full')
   const [stage, setStage]     = useState('auto')
   const [section, setSection] = useState(TECHPACK_SECTIONS[0].key)
+  const [docType, setDocType] = useState(ARTIST_DOC_TYPES[0].value)
 
   function submit() {
     if (type === 'techpack-full') {
       onPick({ type: 'techpack-full', stage })
     } else if (type === 'techpack-section') {
       onPick({ type: 'techpack-section', stage, section })
+    } else if (type === 'artist-doc') {
+      onPick({ type: 'artist-doc', docType })
     }
   }
 
@@ -340,14 +359,17 @@ function AttachmentPicker({ onCancel, onPick }) {
           <select value={type} onChange={e => setType(e.target.value)}>
             <option value="techpack-full">Full tech pack (single HTML file)</option>
             <option value="techpack-section">One tech pack section</option>
+            <option value="artist-doc">Artist document (rider, plot, etc.)</option>
           </select>
         </div>
-        <div className="form-group">
-          <label>Stage</label>
-          <select value={stage} onChange={e => setStage(e.target.value)}>
-            {STAGE_CHOICES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
-          </select>
-        </div>
+        {(type === 'techpack-full' || type === 'techpack-section') && (
+          <div className="form-group">
+            <label>Stage</label>
+            <select value={stage} onChange={e => setStage(e.target.value)}>
+              {STAGE_CHOICES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+            </select>
+          </div>
+        )}
         {type === 'techpack-section' && (
           <div className="form-group">
             <label>Section</label>
@@ -356,9 +378,22 @@ function AttachmentPicker({ onCancel, onPick }) {
             </select>
           </div>
         )}
-        <div className="text-muted" style={{ fontSize: 12 }}>
-          "Match show's stage" pulls the tech pack that matches whichever stage the show is on.
-        </div>
+        {type === 'artist-doc' && (
+          <div className="form-group">
+            <label>Document category</label>
+            <select value={docType} onChange={e => setDocType(e.target.value)}>
+              {ARTIST_DOC_TYPES.map(d => <option key={d.value} value={d.value}>{d.label}</option>)}
+            </select>
+            <div className="text-muted" style={{ fontSize: 12, marginTop: 4 }}>
+              Pulls the most recently uploaded document of this category from the show's artist. Falls back silently if none exists.
+            </div>
+          </div>
+        )}
+        {(type === 'techpack-full' || type === 'techpack-section') && (
+          <div className="text-muted" style={{ fontSize: 12 }}>
+            "Match show's stage" pulls the tech pack that matches whichever stage the show is on.
+          </div>
+        )}
       </div>
     </Modal>
   )

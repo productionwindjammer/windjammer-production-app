@@ -78,15 +78,30 @@ export default function Advancing() {
   const [notesCc, setNotesCc]           = useState('')
   const [notesSent, setNotesSent]       = useState(false)
 
+  const [templates, setTemplates]           = useState([])
+  const [emailModal, setEmailModal]         = useState(false)
+  const [emailRecord, setEmailRecord]       = useState(null)
+  const [emailTplId, setEmailTplId]         = useState('')
+  const [emailTo, setEmailTo]               = useState('')
+  const [emailCc, setEmailCc]               = useState('')
+  const [emailSubject, setEmailSubject]     = useState('')
+  const [emailBody, setEmailBody]           = useState('')
+  const [emailAtts, setEmailAtts]           = useState([])
+  const [emailRendering, setEmailRendering] = useState(false)
+  const [emailSending, setEmailSending]     = useState(false)
+  const [emailSent, setEmailSent]           = useState(false)
+
   useEffect(() => {
     Promise.all([
       api.get('/advancing'),
       api.get('/shows'),
       api.get('/staff').catch(() => ({ data: { data: [] } })),
-    ]).then(([a, s, st]) => {
+      api.get('/email-templates').catch(() => ({ data: { data: [] } })),
+    ]).then(([a, s, st, t]) => {
       setRecords(a.data.data || [])
       setShows(s.data.data || [])
       setStaff(st.data.data || [])
+      setTemplates(t.data.data || [])
     }).finally(() => setLoading(false))
   }, [])
 
@@ -295,6 +310,60 @@ export default function Advancing() {
     w.document.close()
   }
 
+  // ── Send advance email (from a template) ────────────────────────────────────
+  function openEmail(r) {
+    setEmailRecord(r)
+    setEmailTplId('')
+    setEmailTo(r.advanceEmail || '')
+    setEmailCc('')
+    setEmailSubject('')
+    setEmailBody('')
+    setEmailAtts([])
+    setEmailSent(false)
+    setEmailModal(true)
+  }
+
+  async function pickTemplate(id) {
+    setEmailTplId(id)
+    if (!id || !emailRecord?.showId) return
+    setEmailRendering(true)
+    try {
+      const res = await api.post(`/email-templates/${id}/render`, { showId: emailRecord.showId })
+      const { subject, body, attachments = [], attachmentIssues = [] } = res.data.data
+      setEmailSubject(subject || '')
+      setEmailBody(body || '')
+      setEmailAtts(attachments)
+      if (attachmentIssues.length) {
+        alert('Template applied, but these attachments could not be built:\n\n' + attachmentIssues.join('\n'))
+      }
+    } catch (err) {
+      alert('Render failed: ' + (err.response?.data?.message || err.message))
+    } finally {
+      setEmailRendering(false)
+    }
+  }
+
+  async function sendAdvanceEmail() {
+    if (!emailTo || !emailSubject || !emailBody) return
+    setEmailSending(true)
+    try {
+      await api.post('/emails/send', {
+        showId:   emailRecord?.showId || '',
+        showName: emailRecord ? (emailRecord.showName || getShowName(emailRecord.showId)) : '',
+        to:       emailTo,
+        cc:       emailCc,
+        subject:  emailSubject,
+        body:     emailBody,
+        attachments: emailAtts,
+      })
+      setEmailSent(true)
+    } catch (err) {
+      alert('Send failed: ' + (err.response?.data?.message || err.message))
+    } finally {
+      setEmailSending(false)
+    }
+  }
+
   // ── Production notes ────────────────────────────────────────────────────────
   async function openNotes(r) {
     setNotesRecord(r)
@@ -305,10 +374,33 @@ export default function Advancing() {
     setNotesCc('')
     try {
       const [laborRes, schedRes] = await Promise.all([api.get('/labor'), api.get('/schedule')])
-      const labor    = (laborRes.data.data || []).filter(l => l.showId === r.showId)
-      const schedule = (schedRes.data.data || []).filter(s => s.showId === r.showId)
+      const allLabor    = laborRes.data.data || []
+      const allSchedule = schedRes.data.data || []
+      const labor    = allLabor.filter(l => l.showId === r.showId)
+      const schedule = allSchedule.filter(s => s.showId === r.showId)
       const show     = shows.find(s => s.id === r.showId) || {}
-      setNotesData({ show, labor, schedule })
+
+      // Sibling: another show on the same date on the OTHER stage. Producing
+      // notes should surface it so tours/promoters see what else is on-site.
+      let sibling = null
+      if (show?.date) {
+        const otherShow = shows.find(s =>
+          s.id !== show.id && s.date === show.date && s.stage && s.stage !== show.stage
+        )
+        if (otherShow) {
+          const siblingRecord = records.find(rec => rec.showId === otherShow.id) || {
+            showId: otherShow.id, stage: otherShow.stage,
+          }
+          sibling = {
+            record:   siblingRecord,
+            show:     otherShow,
+            labor:    allLabor.filter(l => l.showId === otherShow.id),
+            schedule: allSchedule.filter(s => s.showId === otherShow.id),
+          }
+        }
+      }
+
+      setNotesData({ show, labor, schedule, sibling })
     } finally { setLoadingNotes(false) }
   }
 
@@ -420,8 +512,62 @@ export default function Advancing() {
         </table>` : ''}
       ${record.notes ? `<h3 style="margin:0 0 8px;font-size:13px;text-transform:uppercase;letter-spacing:0.08em;color:${stageColor};border-bottom:1px solid #e5e7eb;padding-bottom:5px">Additional Notes</h3><p style="font-size:14px;margin-bottom:20px;line-height:1.6">${record.notes}</p>` : ''}
       ${botSection}
+      ${renderSiblingSection(data.sibling)}
       <div style="text-align:center;margin-top:32px;padding-top:16px;border-top:1px solid #e5e7eb;color:#bbb;font-size:11px">Windjammer Production Management · Confidential · Generated ${now}</div>
     </div>`
+  }
+
+  // If there's a same-day show on the other stage, render a compact but full
+  // secondary block so tours/promoters see who else is on-site and can coordinate.
+  function renderSiblingSection(sibling) {
+    if (!sibling) return ''
+    const { record: sRec, show: sShow, labor: sLabor, schedule: sSched } = sibling
+    const sStageName  = sRec.stage === 'inside' ? 'Inside Stage' : 'Beach Stage'
+    const sStageColor = sRec.stage === 'inside' ? '#1a4a7a' : '#1a6b4a'
+    const sLabel      = sRec.showName || sShow.artist || sShow.eventName || '—'
+    const sSchedRows = [...sSched]
+      .sort((a, b) => (a.time || '').localeCompare(b.time || ''))
+      .map(s => `<tr>
+        <td style="padding:4px 12px 4px 0;border-bottom:1px solid #eee;white-space:nowrap">${formatTime(s.time, tf) || '—'}</td>
+        <td style="padding:4px 12px 4px 0;border-bottom:1px solid #eee;font-weight:600">${s.label || s.eventType || '—'}</td>
+        <td style="padding:4px 12px 4px 0;border-bottom:1px solid #eee;color:#555">${s.responsible || ''}</td>
+        <td style="padding:4px 0;border-bottom:1px solid #eee;color:#777">${s.notes || ''}</td>
+      </tr>`).join('')
+    const sLaborRows = sLabor.map(l => `<tr>
+      <td style="padding:4px 12px 4px 0;border-bottom:1px solid #eee;font-weight:600">${l.role || '—'}</td>
+      <td style="padding:4px 12px 4px 0;border-bottom:1px solid #eee">${l.workerName || '—'}</td>
+      <td style="padding:4px 0;border-bottom:1px solid #eee">${formatTime(l.callTime, tf) || '—'}</td>
+    </tr>`).join('')
+    return `
+      <div style="margin-top:32px;padding:18px 18px 6px;background:#fafafa;border:1px solid #e5e7eb;border-radius:6px">
+        <div style="font-size:11px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;color:#999;margin-bottom:4px">Also on site — ${sStageName}</div>
+        <div style="font-size:18px;font-weight:700;color:${sStageColor};margin-bottom:2px">${sLabel}</div>
+        <div style="font-size:12px;color:#777;margin-bottom:14px">
+          ${sShow.doorsTime ? `Doors ${formatTime(sShow.doorsTime, tf)}` : ''}${sShow.doorsTime && sShow.showTime ? ' · ' : ''}${sShow.showTime ? `Show ${formatTime(sShow.showTime, tf)}` : ''}${sRec.curfew ? ` · Curfew ${sRec.curfew}` : ''}${sShow.capacity ? ` · Cap ${sShow.capacity}` : ''}
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:14px">
+          <table style="font-size:13px;border-collapse:collapse;width:100%">
+            <tr><td style="padding:2px 12px 2px 0;color:#999;width:110px">Advance Contact</td><td>${sRec.advanceContact || '—'}</td></tr>
+            <tr><td style="padding:2px 12px 2px 0;color:#999">Email</td><td>${sRec.advanceEmail || '—'}</td></tr>
+            <tr><td style="padding:2px 12px 2px 0;color:#999">Phone</td><td>${sRec.advancePhone || '—'}</td></tr>
+          </table>
+          <table style="font-size:13px;border-collapse:collapse;width:100%">
+            <tr><td style="padding:2px 12px 2px 0;color:#999;width:110px">Tour Manager</td><td>${sShow.tourManager || '—'}</td></tr>
+            <tr><td style="padding:2px 12px 2px 0;color:#999">Promoter</td><td>${sShow.promoter || '—'}</td></tr>
+            <tr><td style="padding:2px 12px 2px 0;color:#999">Sound Restrict.</td><td>${sRec.soundRestrictions || '—'}</td></tr>
+          </table>
+        </div>
+        ${sSched.length > 0 ? `
+          <div style="font-size:11px;font-weight:700;color:#999;letter-spacing:0.08em;text-transform:uppercase;margin-bottom:4px">Schedule</div>
+          <table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:12px">
+            <tbody>${sSchedRows}</tbody>
+          </table>` : ''}
+        ${sLabor.length > 0 ? `
+          <div style="font-size:11px;font-weight:700;color:#999;letter-spacing:0.08em;text-transform:uppercase;margin-bottom:4px">Labor</div>
+          <table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:12px">
+            <tbody>${sLaborRows}</tbody>
+          </table>` : ''}
+      </div>`
   }
 
   async function handleSendNotes() {
@@ -580,6 +726,7 @@ export default function Advancing() {
                         <div className="actions-cell">
                           <button className="btn btn-ghost btn-sm" onClick={() => openView(r)}>View</button>
                           <button className="btn btn-ghost btn-sm" onClick={() => openEdit(r)}>Edit</button>
+                          <button className="btn btn-ghost btn-sm" onClick={() => openEmail(r)} title="Send an advance email using a template">✉️ Send</button>
                           <button className="btn btn-danger btn-sm" onClick={() => handleDelete(r.id)}>Del</button>
                         </div>
                       </td>
@@ -858,6 +1005,89 @@ export default function Advancing() {
               <label>Notes</label>
               <textarea value={schedForm.notes} onChange={e => setSchedForm(v => ({ ...v, notes: e.target.value }))} />
             </div>
+          </div>
+        </Modal>
+      )}
+
+      {emailModal && emailRecord && (
+        <Modal
+          title={`Send Advance Email — ${emailRecord.showName || getShowName(emailRecord.showId)}`}
+          onClose={() => { setEmailModal(false); setEmailRecord(null); }}
+          size="modal-lg"
+          footer={
+            <>
+              <button className="btn btn-ghost" onClick={() => { setEmailModal(false); setEmailRecord(null); }}>Close</button>
+              <button
+                className="btn btn-primary"
+                onClick={sendAdvanceEmail}
+                disabled={emailSending || emailSent || !emailTo || !emailSubject || !emailBody}
+              >
+                {emailSent ? '✅ Sent!' : emailSending ? 'Sending…' : '✉️ Send'}
+              </button>
+            </>
+          }
+        >
+          <div className="form-grid">
+            <div className="form-group">
+              <label>Template</label>
+              <select value={emailTplId} onChange={e => pickTemplate(e.target.value)} disabled={emailRendering}>
+                <option value="">
+                  {templates.length === 0 ? '— No templates available —' : '— Pick a template —'}
+                </option>
+                {templates.map(t => (
+                  <option key={t.id} value={t.id}>{t.name}{t.description ? ` — ${t.description}` : ''}</option>
+                ))}
+              </select>
+              {emailRendering && <div className="text-muted" style={{ fontSize: 12, marginTop: 4 }}>Rendering template…</div>}
+            </div>
+
+            <div className="form-row">
+              <div className="form-group">
+                <label>To</label>
+                <input value={emailTo} onChange={e => setEmailTo(e.target.value)} placeholder="recipient@email.com" />
+              </div>
+              <div className="form-group">
+                <label>Cc</label>
+                <input value={emailCc} onChange={e => setEmailCc(e.target.value)} placeholder="cc@email.com" />
+              </div>
+            </div>
+
+            <div className="form-group">
+              <label>Subject</label>
+              <input value={emailSubject} onChange={e => setEmailSubject(e.target.value)} />
+            </div>
+
+            <div className="form-group">
+              <label>Message (HTML)</label>
+              <textarea
+                value={emailBody}
+                onChange={e => setEmailBody(e.target.value)}
+                rows={12}
+                style={{ fontFamily: 'inherit', resize: 'vertical' }}
+              />
+            </div>
+
+            {emailAtts.length > 0 && (
+              <div className="form-group">
+                <label>Attachments (auto-generated from template)</label>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                  {emailAtts.map((a, i) => (
+                    <span key={i} style={{
+                      fontSize: 12, padding: '3px 10px', borderRadius: 5,
+                      background: 'rgba(255,255,255,0.08)',
+                      display: 'flex', alignItems: 'center', gap: 5,
+                    }}>
+                      📎 {a.filename}
+                      <button
+                        type="button"
+                        style={{ background: 'none', border: 'none', color: 'rgba(255,255,255,0.45)', cursor: 'pointer', padding: 0, fontSize: 15, lineHeight: 1 }}
+                        onClick={() => setEmailAtts(list => list.filter((_, j) => j !== i))}
+                      >×</button>
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         </Modal>
       )}
