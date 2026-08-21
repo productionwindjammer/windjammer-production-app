@@ -110,6 +110,15 @@ const SHEETS = [
       'isTemplate', 'createdBy', 'createdAt', 'updatedAt'
     ],
     note: 'inputs/outputs/patch-points stored as JSON blobs'
+  },
+  {
+    name: 'EmailTemplates',
+    headers: [
+      'id', 'name', 'description', 'category',
+      'subject', 'body', 'attachments',
+      'createdBy', 'createdAt', 'updatedAt'
+    ],
+    note: 'body is HTML with {{placeholders}}; attachments is a JSON array of attachment recipes',
   }
 ];
 

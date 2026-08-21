@@ -29,6 +29,7 @@ module.exports = {
       appSettings:        'AppSettings',
       patchLists:         'PatchLists',
       showRequests:       'ShowRequests',
+      emailTemplates:     'EmailTemplates',
     }
   }
 };

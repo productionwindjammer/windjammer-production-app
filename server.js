@@ -948,6 +948,243 @@ crudRoutes(app, '/api/vendor-bookings', 'vendorBookings');
 crudRoutes(app, '/api/settlement',      'settlement');
 crudRoutes(app, '/api/unavailability',  'unavailability', ['admin','production_manager']);
 
+// ── Email Templates ──────────────────────────────────────────────────────────
+// Reusable email templates with {{merge-tag}} placeholders and auto-resolving
+// attachment recipes (e.g. "attach the venue tech pack for this show's stage").
+// Rendered against a show + advance record at send time.
+
+const EMAIL_TEMPLATE_DEFAULTS = [
+  {
+    name: 'Advance — Ask promoter for tour contact',
+    description: 'When we don\'t yet have a tour advance contact, ping the promoter for one.',
+    category: 'advance',
+    subject: 'Advance contact for {{artist}} — {{date}} @ The Windjammer',
+    body:
+`<p>Hey {{promoter}},</p>
+<p>Reaching out to start the advance for <strong>{{artist}}</strong> on <strong>{{date_long}}</strong> at The Windjammer ({{stage_label}}).</p>
+<p>Could you point me to the tour's advance contact — name, email, phone — or forward this along to them? Happy to take it from there.</p>
+<p>Thanks,<br/>{{sender.name}}<br/>The Windjammer</p>`,
+    attachments: [],
+  },
+  {
+    name: 'Advance — Initiate with tour',
+    description: 'Kick off the advance with the known tour contact; attaches the full stage tech pack.',
+    category: 'advance',
+    subject: 'Advance — {{artist}} at The Windjammer, {{date_long}}',
+    body:
+`<p>Hi {{advanceContact}},</p>
+<p>Reaching out to start the advance for <strong>{{artist}}</strong> at The Windjammer on <strong>{{date_long}}</strong> ({{stage_label}}, doors {{doors}}, show {{showTime}}).</p>
+<p>Attached is our venue tech pack for the {{stage_label}}. When you have a moment, please send over:</p>
+<ul>
+  <li>Current technical and hospitality riders</li>
+  <li>Input list and stage plot</li>
+  <li>Preferred set times / any curfew notes</li>
+  <li>Load-in / parking / bus and trailer needs</li>
+</ul>
+<p>Happy to jump on a call if easier. Looking forward to a great show.</p>
+<p>Best,<br/>{{sender.name}}<br/>The Windjammer</p>`,
+    attachments: [
+      { type: 'techpack-full', stage: 'auto', label: 'Full tech pack for the show\'s stage' },
+    ],
+  },
+  {
+    name: 'Advance — Reply to inbound tour',
+    description: 'Warm reply when a tour reaches out first to start advancing.',
+    category: 'advance',
+    subject: 'Re: Advance — {{artist}} @ The Windjammer {{date}}',
+    body:
+`<p>Hi {{advanceContact}},</p>
+<p>Thanks for reaching out — happy to lock this in. Confirming <strong>{{artist}}</strong> at The Windjammer on <strong>{{date_long}}</strong> ({{stage_label}}).</p>
+<p>Attached is our current tech pack for the {{stage_label}}. When you have a chance, please send over the tour's most recent rider, input list, and stage plot and we'll get everything lined up on our end.</p>
+<p>Talk soon,<br/>{{sender.name}}<br/>The Windjammer</p>`,
+    attachments: [
+      { type: 'techpack-full', stage: 'auto', label: 'Full tech pack for the show\'s stage' },
+    ],
+  },
+];
+
+let _emailTemplatesSeeded = false;
+async function seedDefaultEmailTemplatesIfEmpty() {
+  if (_emailTemplatesSeeded) return 0;
+  try {
+    const rows = await sheets.getRows(config.googleSheets.sheets.emailTemplates);
+    if (rows.length > 0) { _emailTemplatesSeeded = true; return 0; }
+    const now = new Date().toISOString();
+    let n = 0;
+    for (const d of EMAIL_TEMPLATE_DEFAULTS) {
+      await sheets.appendRow(config.googleSheets.sheets.emailTemplates, {
+        id: `tpl_${Date.now()}_${++n}`,
+        name: d.name, description: d.description, category: d.category,
+        subject: d.subject, body: d.body,
+        attachments: JSON.stringify(d.attachments || []),
+        createdBy: 'system', createdAt: now, updatedAt: now,
+      });
+    }
+    _emailTemplatesSeeded = true;
+    return n;
+  } catch (err) {
+    console.warn('[email-templates seed] skipped:', err.message);
+    return 0;
+  }
+}
+
+// Custom GET runs before crudRoutes so we can lazy-seed defaults on first read.
+app.get('/api/email-templates', requireAuth, async (req, res) => {
+  try {
+    await seedDefaultEmailTemplatesIfEmpty();
+    const rows = await sheets.getRows(config.googleSheets.sheets.emailTemplates);
+    res.json({ success: true, data: rows });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+crudRoutes(app, '/api/email-templates', 'emailTemplates', ['admin','production_manager']);
+
+// Format a YYYY-MM-DD as e.g. "Tuesday, October 14, 2026".
+function formatLongDate(ymd) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(ymd || ''));
+  if (!m) return String(ymd || '');
+  return new Date(+m[1], +m[2] - 1, +m[3]).toLocaleDateString('en-US', {
+    weekday: 'long', month: 'long', day: 'numeric', year: 'numeric',
+  });
+}
+function escapeHtmlSafe(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c =>
+    ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+}
+
+// Build the merge-tag map for a template rendered against a show + advance.
+async function buildTemplateVars(showId, user) {
+  const shows = await sheets.getRows(config.googleSheets.sheets.shows);
+  const show  = shows.find(s => String(s.id) === String(showId)) || {};
+  const advances = await sheets.getRows(config.googleSheets.sheets.advancing).catch(() => []);
+  const advance  = advances.find(a => String(a.showId) === String(showId)) || {};
+  const artists  = await sheets.getRows(config.googleSheets.sheets.artists).catch(() => []);
+  const nameKey  = String(show.artist || '').toLowerCase().trim();
+  const artist   = artists.find(a => String(a.name || '').toLowerCase().trim() === nameKey) || {};
+
+  const stageLabel = show.stage === 'beach' ? 'Beach Stage' : 'Inside Stage';
+  return {
+    show, advance, artist,
+    vars: {
+      'artist':         show.artist || show.eventName || '',
+      'eventName':      show.eventName || show.artist || '',
+      'date':           show.date || '',
+      'date_long':      formatLongDate(show.date),
+      'stage':          show.stage || '',
+      'stage_label':    stageLabel,
+      'doors':          show.doorsTime || '',
+      'showTime':       show.showTime  || '',
+      'curfew':         advance.curfew || '',
+      'capacity':       show.capacity  || '',
+      'promoter':       show.promoter  || '',
+      'tourManager':    show.tourManager || '',
+      'advanceContact': advance.advanceContact || artist.advanceContact || 'there',
+      'advanceEmail':   advance.advanceEmail   || artist.advanceEmail   || '',
+      'advancePhone':   advance.advancePhone   || artist.advancePhone   || '',
+      'venue':          'The Windjammer',
+      'sender.name':    user?.name  || '',
+      'sender.email':   user?.email || '',
+    },
+  };
+}
+function fillTemplate(str, vars) {
+  return String(str || '').replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_, key) => {
+    const v = vars[key];
+    return v === undefined || v === null ? `{{${key}}}` : String(v);
+  });
+}
+
+// Resolve one attachment recipe into a real { filename, mimeType, data } payload.
+async function resolveAttachmentSpec(spec, show) {
+  if (!spec || !spec.type) return null;
+  if (spec.type === 'techpack-section' || spec.type === 'techpack-full') {
+    const stage = spec.stage === 'auto' || !spec.stage ? (show.stage || 'inside') : spec.stage;
+    const rows = await sheets.getRows(config.googleSheets.sheets.techpack).catch(() => []);
+    const doc  = rows.find(d => d.stage === stage);
+    if (!doc) return null;
+    let sections = [];
+    try { sections = typeof doc.sections === 'string' ? JSON.parse(doc.sections || '[]') : (doc.sections || []); }
+    catch { sections = []; }
+    const stageLabel = stage === 'beach' ? 'Beach Stage' : 'Inside Stage';
+    let inner, filename;
+    if (spec.type === 'techpack-full') {
+      const parts = sections
+        .filter(s => (s.content || '').trim())
+        .map(s => `<h2>${escapeHtmlSafe((s.icon || '') + ' ' + s.title)}</h2>${s.content}`);
+      if (parts.length === 0) return null;
+      inner = parts.join('<hr/>');
+      filename = `${stageLabel} — Full Tech Pack.html`;
+    } else {
+      const section = sections.find(s => s.key === spec.section);
+      if (!section || !(section.content || '').trim()) return null;
+      inner = `<h1>${escapeHtmlSafe((section.icon || '') + ' ' + section.title)}</h1>${section.content}`;
+      filename = `${stageLabel} — ${section.title}.html`;
+    }
+    const wrapped =
+`<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtmlSafe(filename)}</title>
+<style>body{font-family:Arial,Helvetica,sans-serif;max-width:8.5in;margin:0.5in auto;color:#111}h1,h2{border-bottom:1px solid #ccc;padding-bottom:6px}img{max-width:100%;height:auto}</style>
+</head><body>${inner}</body></html>`;
+    return {
+      filename,
+      mimeType: 'text/html',
+      data: Buffer.from(wrapped, 'utf8').toString('base64'),
+    };
+  }
+  if (spec.type === 'drive-file' && spec.fileId) {
+    try {
+      const drive = await sheets.getDriveClient();
+      const meta  = await drive.files.get({ fileId: spec.fileId, fields: 'name,mimeType' });
+      const bin   = await drive.files.get({ fileId: spec.fileId, alt: 'media' }, { responseType: 'arraybuffer' });
+      return {
+        filename: spec.filename || meta.data.name || 'attachment',
+        mimeType: spec.mimeType || meta.data.mimeType || 'application/octet-stream',
+        data: Buffer.from(bin.data).toString('base64'),
+      };
+    } catch (err) {
+      console.warn('[resolveAttachmentSpec drive-file]', err.message);
+      return null;
+    }
+  }
+  return null;
+}
+
+// Render a template against a show — returns { subject, body, attachments, previewOnly? }.
+app.post('/api/email-templates/:id/render', requireAuth, async (req, res) => {
+  try {
+    const rows = await sheets.getRows(config.googleSheets.sheets.emailTemplates);
+    const tpl  = rows.find(t => String(t.id) === String(req.params.id));
+    if (!tpl) return res.status(404).json({ success: false, message: 'Template not found' });
+
+    const { showId } = req.body || {};
+    if (!showId) return res.status(400).json({ success: false, message: 'showId is required' });
+
+    const { vars, show } = await buildTemplateVars(showId, req.user);
+    const subject = fillTemplate(tpl.subject, vars);
+    const body    = fillTemplate(tpl.body,    vars);
+
+    let specs = [];
+    try { specs = typeof tpl.attachments === 'string' ? JSON.parse(tpl.attachments || '[]') : (tpl.attachments || []); }
+    catch { specs = []; }
+
+    const skipAttachments = req.body?.skipAttachments === true;
+    const attachments = [];
+    const attachmentIssues = [];
+    if (!skipAttachments) {
+      for (const spec of specs) {
+        const att = await resolveAttachmentSpec(spec, show);
+        if (att) attachments.push(att);
+        else attachmentIssues.push(spec.label || spec.type);
+      }
+    }
+    res.json({ success: true, data: { subject, body, attachments, attachmentIssues } });
+  } catch (err) {
+    console.error('[email-templates render]', err.message);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 // Artists: `staffNotes` is an internal-only field. Non-staff callers (currently
 // just Promoter) never see it on GET and cannot set it on POST/PUT. Keep the
 // role check in sync with client/src/utils/roles.js `isInternalStaff()`.

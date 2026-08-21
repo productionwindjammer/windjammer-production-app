@@ -56,6 +56,10 @@ export default function Email() {
   const [suggestFetchBody, setSuggestFetchBody] = useState(false)
   const [suggestMeta, setSuggestMeta]         = useState(null)  // { total, suggestionCount, bodyEnriched }
 
+  // ── Email templates (advance automation) ────────────────────────────────
+  const [templates, setTemplates] = useState([])
+  const [applyingTpl, setApplyingTpl] = useState(false)
+
   function toggleSelected(id) {
     setSelectedIds(prev => {
       const next = new Set(prev)
@@ -170,6 +174,13 @@ export default function Email() {
     }).finally(() => setLoading(false))
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Load email templates once — used by the compose "Use template" picker.
+  useEffect(() => {
+    api.get('/email-templates')
+      .then(res => setTemplates(res.data.data || []))
+      .catch(() => setTemplates([]))
+  }, [])
+
   // ── Load emails when selection changes ──────────────────────────────────────
   useEffect(() => {
     if (!selected) { setEmails([]); return }
@@ -204,6 +215,19 @@ export default function Email() {
 
   function getAttachments(email) {
     try { return JSON.parse(email.attachmentMeta || '[]') } catch { return [] }
+  }
+
+  // Best-effort HTML → plain text, used when a rendered template HTML body
+  // gets dropped into the compose <textarea>. Not perfect; users edit before send.
+  function htmlToPlain(html) {
+    if (!html) return ''
+    const el = document.createElement('div')
+    el.innerHTML = String(html)
+      .replace(/<\/(p|div|h[1-6]|li|tr)>/gi, '$&\n')
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<hr\s*\/?>/gi, '\n---\n')
+      .replace(/<li[^>]*>/gi, '• ')
+    return (el.textContent || el.innerText || '').replace(/\n{3,}/g, '\n\n').trim()
   }
 
   // ── Expand email and fetch full body ────────────────────────────────────────
@@ -411,6 +435,39 @@ export default function Email() {
       attachments: [],
     })
     setComposeOpen(true)
+  }
+
+  // Render a template against the currently selected show and merge the result
+  // into the compose form. Attachments from the template append to any files
+  // the user already added.
+  async function applyTemplate(templateId) {
+    if (!templateId) return
+    if (!selected?.showId) {
+      alert('Pick a show on the left before using a template — templates fill in show-specific details.')
+      return
+    }
+    setApplyingTpl(true)
+    try {
+      const res = await api.post(`/email-templates/${templateId}/render`, { showId: selected.showId })
+      const { subject, body, attachments = [], attachmentIssues = [] } = res.data.data
+      // Convert HTML body to something the plain-text <textarea> can display —
+      // handleSend already wraps line breaks in <br>, so we strip block tags
+      // into newlines. Users can still edit before sending.
+      const bodyText = htmlToPlain(body)
+      setForm(v => ({
+        ...v,
+        subject: subject || v.subject,
+        body: bodyText || v.body,
+        attachments: [...v.attachments, ...attachments],
+      }))
+      if (attachmentIssues.length) {
+        alert('Template applied, but these attachments could not be built:\n\n' + attachmentIssues.join('\n'))
+      }
+    } catch (err) {
+      alert('Template failed: ' + (err.response?.data?.message || err.message))
+    } finally {
+      setApplyingTpl(false)
+    }
   }
 
   // ── Attach files to compose ─────────────────────────────────────────────────
@@ -1212,6 +1269,35 @@ export default function Email() {
 
             <div className="modal-body" style={{ flex: 1, overflowY: 'auto' }}>
               <div className="form-grid">
+                {templates.length > 0 && (
+                  <div className="form-group" style={{
+                    display: 'flex', alignItems: 'center', gap: 8,
+                    padding: 8, background: 'rgba(59,130,246,0.08)',
+                    border: '1px solid rgba(59,130,246,0.25)', borderRadius: 6,
+                  }}>
+                    <label style={{ margin: 0, fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' }}>
+                      Use template:
+                    </label>
+                    <select
+                      defaultValue=""
+                      disabled={applyingTpl || !selected?.showId}
+                      onChange={e => {
+                        const id = e.target.value
+                        e.target.value = ''
+                        if (id) applyTemplate(id)
+                      }}
+                      style={{ flex: 1 }}
+                    >
+                      <option value="">
+                        {selected?.showId ? '— Pick a template —' : '— Pick a show first —'}
+                      </option>
+                      {templates.map(t => (
+                        <option key={t.id} value={t.id}>{t.name}</option>
+                      ))}
+                    </select>
+                    {applyingTpl && <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.5)' }}>Applying…</span>}
+                  </div>
+                )}
                 <div className="form-row">
                   <div className="form-group">
                     <label>To</label>

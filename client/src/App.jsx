@@ -19,6 +19,8 @@ import Users from './pages/Users'
 import Settings from './pages/Settings'
 import Calendar from './pages/Calendar'
 import Artists from './pages/Artists'
+import Email from './pages/Email'
+import EmailTemplates from './pages/EmailTemplates'
 import { SettingsProvider } from './context/SettingsContext'
 import { SplitProvider } from './context/SplitContext'
 import { VenueProvider } from './context/VenueContext'
@@ -50,6 +52,8 @@ export default function App() {
             <Route path="/staff/:id"   element={<StaffDetail />} />
             <Route path="/users"       element={<Users />} />
             <Route path="/tech-pack"   element={<TechPack />} />
+            <Route path="/email"       element={<Email />} />
+            <Route path="/email-templates" element={<EmailTemplates />} />
             <Route path="/settings"    element={<Settings />} />
           </Route>
           <Route path="*" element={<Navigate to="/dashboard" replace />} />

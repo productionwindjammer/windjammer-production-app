@@ -14,6 +14,8 @@ export const NAV_ITEMS = [
   { label: 'Staff',        path: '/staff',         icon: '👥', roles: ['admin', 'production_manager'] },
   { label: 'Users',        path: '/users',         icon: '🔐', roles: ['admin'] },
   { label: 'Tech Pack',    path: '/tech-pack',     icon: '📁', roles: ['admin', 'production_manager', 'stage_manager', 'venue_management', 'crew', 'staff', 'tech'] },
+  { label: 'Email',        path: '/email',         icon: '✉️', roles: ['admin', 'production_manager', 'stage_manager'] },
+  { label: 'Email Templates', path: '/email-templates', icon: '📝', sub: true, roles: ['admin', 'production_manager'] },
   { label: 'Settings',     path: '/settings',      icon: '⚙️' },
 ]
 
