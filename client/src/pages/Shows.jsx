@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import api from '../api'
+import api, { createShowWithDupCheck } from '../api'
 import Modal from '../components/Modal'
 import ExportMenu from '../components/ExportMenu'
+import ArtistCombobox, { invalidateArtistCache } from '../components/ArtistCombobox'
 import { useSettings } from '../context/SettingsContext'
 import { useAuth } from '../context/AuthContext'
 import { formatTime } from '../utils/time'
@@ -83,20 +84,23 @@ export default function Shows() {
       } else {
         // Primary night first, then any additional nights sharing artist/stage/etc.
         // Each extra night can override the support list (empty = inherit primary).
-        await api.post('/shows', payload)
+        const primaryRes = await createShowWithDupCheck(payload)
+        if (primaryRes === null) { setSaving(false); return }
         const seen = new Set([payload.date])
         for (const extra of additionalDates) {
           const d = String(extra.date || '').trim()
           if (!d || seen.has(d)) continue
           seen.add(d)
           const nightSupport = String(extra.support || '').trim()
-          await api.post('/shows', {
+          await createShowWithDupCheck({
             ...payload,
             date: d,
             support: nightSupport || primarySupport,
           })
         }
       }
+      // Server auto-registers any new artist names; refresh next picker load.
+      invalidateArtistCache()
       await load()
       setModal(false)
     } finally { setSaving(false) }
@@ -434,18 +438,20 @@ export default function Shows() {
             <div className="form-row">
               <div className="form-group">
                 <label>Headlining Artist</label>
-                <input value={f.artist} onChange={set('artist')} placeholder="Headliner name" />
+                <ArtistCombobox
+                  value={f.artist}
+                  onChange={v => setForm(prev => ({ ...prev, artist: v }))}
+                  placeholder="Headliner name"
+                />
                 {supportActs.map((name, i) => (
                   <div key={i} style={{ display:'flex', gap:6, marginTop:6 }}>
-                    <input
-                      value={name}
-                      onChange={e => {
-                        const v = e.target.value
-                        setSupportActs(arr => arr.map((x, j) => (j === i ? v : x)))
-                      }}
-                      placeholder={`Support act ${i + 1}`}
-                      style={{ flex: 1 }}
-                    />
+                    <div style={{ flex: 1 }}>
+                      <ArtistCombobox
+                        value={name}
+                        onChange={v => setSupportActs(arr => arr.map((x, j) => (j === i ? v : x)))}
+                        placeholder={`Support act ${i + 1}`}
+                      />
+                    </div>
                     <button
                       type="button"
                       className="btn btn-ghost btn-sm"

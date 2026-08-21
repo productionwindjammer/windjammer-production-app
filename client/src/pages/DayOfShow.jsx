@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import api from '../api'
 import Modal from '../components/Modal'
 import { filterShowList } from '../utils/showFilters'
@@ -9,6 +9,36 @@ const BLANK = {
   showId: '', showName: '', stage: 'inside', date: '',
   eventType: 'time', label: '', time: '', duration: '',
   responsible: '', notes: ''
+}
+
+const STAGES = [
+  { key: 'inside', label: 'Inside Stage' },
+  { key: 'beach',  label: 'Beach Stage'  },
+]
+
+function todayYmd() {
+  const d = new Date()
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const dd = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${dd}`
+}
+function shiftYmd(ymd, days) {
+  if (!/^\d{4}-\d{2}-\d{2}/.test(ymd)) return ymd
+  const [y, m, d] = ymd.slice(0, 10).split('-').map(Number)
+  const dt = new Date(y, m - 1, d)
+  dt.setDate(dt.getDate() + days)
+  const yy = dt.getFullYear()
+  const mm = String(dt.getMonth() + 1).padStart(2, '0')
+  const dd = String(dt.getDate()).padStart(2, '0')
+  return `${yy}-${mm}-${dd}`
+}
+function prettyDateLong(ymd) {
+  if (!/^\d{4}-\d{2}-\d{2}/.test(ymd)) return ymd || ''
+  const [y, m, d] = ymd.slice(0, 10).split('-').map(Number)
+  return new Date(y, m - 1, d).toLocaleDateString('en-US', {
+    weekday: 'long', month: 'long', day: 'numeric', year: 'numeric',
+  })
 }
 
 export default function DayOfShow() {
@@ -24,6 +54,8 @@ export default function DayOfShow() {
   const [saving, setSaving]   = useState(false)
   const [selectedShow, setSelectedShow] = useState('')
   const [showPastShows, setShowPastShows] = useState(false)
+  const [viewMode, setViewMode] = useState('show') // 'show' | 'day'
+  const [dayDate, setDayDate]   = useState(todayYmd())
 
   useEffect(() => {
     Promise.all([
@@ -66,7 +98,11 @@ export default function DayOfShow() {
     return () => { cancelled = true }
   }, [selectedShow, items, loading])
 
-  function openAdd() { setEditing(null); setForm(BLANK); setModal(true) }
+  function openAdd(preset = {}) {
+    setEditing(null)
+    setForm({ ...BLANK, ...preset })
+    setModal(true)
+  }
   function openEdit(r) { setEditing(r); setForm({ ...BLANK, ...r }); setModal(true) }
 
   async function handleSave() {
@@ -89,16 +125,55 @@ export default function DayOfShow() {
   const f = form
 
   const upcomingShows = filterShowList(shows, { showPast: showPastShows })
-  const filtered = items
+
+  // Resolve an item's effective date: prefer explicit date, fall back to its show's date.
+  const showsById = useMemo(() => {
+    const m = new Map()
+    for (const s of shows) m.set(String(s.id), s)
+    return m
+  }, [shows])
+  function itemDate(it) {
+    return it.date || showsById.get(String(it.showId))?.date || ''
+  }
+
+  // "By Show" filter (existing behavior)
+  const filteredByShow = items
     .filter(i => !selectedShow || i.showId === selectedShow)
     .sort((a, b) => (a.time || '').localeCompare(b.time || ''))
+
+  // "By Day" filter — every item on the selected date, regardless of show.
+  const dayItems = useMemo(() => {
+    return items
+      .filter(i => itemDate(i) === dayDate)
+      .sort((a, b) => (a.time || '').localeCompare(b.time || ''))
+  }, [items, dayDate, showsById])
+  const dayItemsByStage = useMemo(() => {
+    const map = new Map(STAGES.map(s => [s.key, []]))
+    for (const it of dayItems) {
+      const key = it.stage || 'inside'
+      if (!map.has(key)) map.set(key, [])
+      map.get(key).push(it)
+    }
+    return map
+  }, [dayItems])
+  const showsForDay = useMemo(() => shows.filter(s => s.date === dayDate), [shows, dayDate])
+  const showsForDayByStage = useMemo(() => {
+    const map = new Map(STAGES.map(s => [s.key, []]))
+    for (const s of showsForDay) {
+      const key = s.stage || 'inside'
+      if (!map.has(key)) map.set(key, [])
+      map.get(key).push(s)
+    }
+    return map
+  }, [showsForDay])
 
   const currentAdvance = selectedShow ? advances.find(a => a.showId === selectedShow) : null
 
   function handlePrint() {
+    if (viewMode === 'day') return printDaySheetForDay()
     // Group filtered items by show so "All Shows" prints one page per show.
     const groups = new Map()
-    for (const it of filtered) {
+    for (const it of filteredByShow) {
       const sid = it.showId || '_'
       if (!groups.has(sid)) groups.set(sid, [])
       groups.get(sid).push(it)
@@ -170,7 +245,7 @@ export default function DayOfShow() {
           <div className="page-subtitle">Load-in to load-out schedule and timeline management</div>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
-          <button className="btn btn-ghost" onClick={handlePrint} disabled={filtered.length === 0}>🖨 Print Day Sheet</button>
+          <button className="btn btn-ghost" onClick={handlePrint} disabled={filteredByShow.length === 0}>🖨 Print Day Sheet</button>
           <button className="btn btn-primary" onClick={openAdd}>+ Add Item</button>
         </div>
       </div>
@@ -204,10 +279,11 @@ export default function DayOfShow() {
                 </tr>
               </thead>
               <tbody>
-                {filtered.length === 0 && (
+                {filteredByShow.length === 0 && (
                   <tr><td colSpan={7}><div className="empty-state">No schedule items found</div></td></tr>
                 )}
-                {filtered.map(item => (
+                {filteredByShow.map(item => (
+
                   <tr key={item.id}>
                     <td data-label="Time"><strong>{item.time ? formatTime(item.time, tf) : '—'}</strong></td>
                     <td data-label="Event">{item.label || '—'}</td>

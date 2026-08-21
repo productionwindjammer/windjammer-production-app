@@ -46,6 +46,7 @@ export default function Advancing() {
 
   const [records, setRecords]     = useState([])
   const [shows, setShows]         = useState([])
+  const [staff, setStaff]         = useState([])
   const [loading, setLoading]     = useState(true)
   const [modal, setModal]         = useState(false)
   const [editing, setEditing]     = useState(null)
@@ -78,16 +79,26 @@ export default function Advancing() {
   const [notesSent, setNotesSent]       = useState(false)
 
   useEffect(() => {
-    Promise.all([api.get('/advancing'), api.get('/shows')]).then(([a, s]) => {
+    Promise.all([
+      api.get('/advancing'),
+      api.get('/shows'),
+      api.get('/staff').catch(() => ({ data: { data: [] } })),
+    ]).then(([a, s, st]) => {
       setRecords(a.data.data || [])
       setShows(s.data.data || [])
+      setStaff(st.data.data || [])
     }).finally(() => setLoading(false))
   }, [])
 
   async function load() {
-    const [a, s] = await Promise.all([api.get('/advancing'), api.get('/shows')])
+    const [a, s, st] = await Promise.all([
+      api.get('/advancing'),
+      api.get('/shows'),
+      api.get('/staff').catch(() => ({ data: { data: [] } })),
+    ])
     setRecords(a.data.data || [])
     setShows(s.data.data || [])
+    setStaff(st.data.data || [])
   }
 
   function openAdd() { setEditing(null); setForm(BLANK); setModal(true) }
@@ -874,10 +885,20 @@ export default function Advancing() {
                 <div className="form-group">
                   <label>To</label>
                   <input value={notesTo} onChange={e => setNotesTo(e.target.value)} placeholder="email@venue.com, …" />
+                  <StaffEmailPicker
+                    staff={staff}
+                    currentValue={notesTo}
+                    onPick={email => setNotesTo(v => appendEmail(v, email))}
+                  />
                 </div>
                 <div className="form-group">
                   <label>Cc</label>
                   <input value={notesCc} onChange={e => setNotesCc(e.target.value)} placeholder="optional" />
+                  <StaffEmailPicker
+                    staff={staff}
+                    currentValue={notesCc}
+                    onPick={email => setNotesCc(v => appendEmail(v, email))}
+                  />
                 </div>
               </div>
               <iframe
@@ -890,6 +911,52 @@ export default function Advancing() {
         </Modal>
       )}
     </div>
+  )
+}
+
+// Append an email to a comma-separated field, deduping case-insensitively.
+function appendEmail(current, email) {
+  const clean = String(email || '').trim()
+  if (!clean) return current
+  const list = String(current || '')
+    .split(/[,;]/)
+    .map(s => s.trim())
+    .filter(Boolean)
+  if (list.some(e => e.toLowerCase() === clean.toLowerCase())) return current
+  return list.concat(clean).join(', ')
+}
+
+// Compact dropdown that lists staff with emails and appends the chosen one to
+// the associated input. Already-added entries are marked with a checkmark.
+function StaffEmailPicker({ staff, currentValue, onPick }) {
+  const withEmail = (staff || []).filter(s => s.email && String(s.email).includes('@'))
+  if (withEmail.length === 0) return null
+  const already = new Set(
+    String(currentValue || '')
+      .split(/[,;]/)
+      .map(s => s.trim().toLowerCase())
+      .filter(Boolean)
+  )
+  return (
+    <select
+      value=""
+      onChange={e => {
+        const email = e.target.value
+        if (email) onPick(email)
+        e.target.value = ''
+      }}
+      style={{ marginTop: 6, fontSize: 13, padding: '4px 8px' }}
+    >
+      <option value="">+ Add staff member…</option>
+      {withEmail.map(s => {
+        const chosen = already.has(String(s.email).toLowerCase())
+        return (
+          <option key={s.id} value={s.email} disabled={chosen}>
+            {chosen ? '✓ ' : ''}{s.name}{s.role ? ` (${s.role})` : ''} — {s.email}
+          </option>
+        )
+      })}
+    </select>
   )
 }
 

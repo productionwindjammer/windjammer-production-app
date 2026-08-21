@@ -18,7 +18,7 @@ export function triggerLoginKickoff({ force = false } = {}) {
     }
     localStorage.setItem(KICKOFF_TS_KEY, String(Date.now()))
     api.post('/sync/login-kickoff').then(r => {
-      if (r?.data?.newEmails || r?.data?.botAdvancesProcessed)
+      if (r?.data?.newEmails || r?.data?.botAdvancesProcessed || r?.data?.scrubber?.imported)
         console.log('[kickoff]', r.data)
     }).catch(err => {
       // Reset timestamp on failure so the next visit retries.

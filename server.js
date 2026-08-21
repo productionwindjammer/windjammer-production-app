@@ -138,6 +138,23 @@ function crudRoutes(router, path, sheetKey, writeRoles = ['admin','production_ma
   router.post(path, requireAuth, requireRole(...writeRoles), async (req, res) => {
     try {
       const record = { id: Date.now().toString(), ...req.body, createdAt: new Date().toISOString() };
+      // Pre-create guard. Client can bypass by posting with ?force=1.
+      if (typeof hooks.beforeCreate === 'function' && req.query.force !== '1') {
+        try {
+          const check = await hooks.beforeCreate(record, req);
+          if (check && check.duplicate) {
+            return res.status(409).json({
+              success: false,
+              code: 'duplicate',
+              message: check.message || 'A similar record already exists.',
+              conflict: check.conflict || null,
+            });
+          }
+        } catch (err) {
+          // Fail open — don't block a legit create on a hook error.
+          console.error(`[${sheetKey} beforeCreate]`, err.message);
+        }
+      }
       await sheets.appendRow(config.googleSheets.sheets[sheetKey], record);
       let extra;
       if (typeof hooks.afterCreate === 'function') {
@@ -755,6 +772,34 @@ app.delete('/api/show-requests/:id', requireAuth, async (req, res) => {
 });
 
 crudRoutes(app, '/api/shows',           'shows',     ['admin','production_manager','stage_manager','promoter'], {
+  // Duplicate guard: reject a manual create that matches an existing show on
+  // date + artist (alias-aware via the Artist Registry). Client can retry
+  // with ?force=1 after confirming with the user.
+  beforeCreate: async (record) => {
+    if (!record?.date || !(record.artist || record.eventName)) return null;
+    const [shows, artists] = await Promise.all([
+      sheets.getRows(config.googleSheets.sheets.shows),
+      sheets.getRows(config.googleSheets.sheets.artists).catch(() => []),
+    ]);
+    const isDup = buildDuplicateChecker(shows, artists);
+    const name = record.artist || record.eventName;
+    const evForCheck = { date: record.date, artist: name, title: name, url: '' };
+    if (!isDup(evForCheck)) return null;
+    const targetKey = normalizeArtistKey(name);
+    const conflict = shows.find(s =>
+      s.date === record.date &&
+      (normalizeArtistKey(s.artist || s.eventName || '') === targetKey ||
+       (targetKey.length >= 6 && normalizeArtistKey(s.artist || s.eventName || '').includes(targetKey)) ||
+       (normalizeArtistKey(s.artist || s.eventName || '').length >= 6 && targetKey.includes(normalizeArtistKey(s.artist || s.eventName || ''))))
+    );
+    return {
+      duplicate: true,
+      message: `A show on ${record.date} for "${name}" already exists.`,
+      conflict: conflict
+        ? { id: conflict.id, date: conflict.date, artist: conflict.artist || conflict.eventName || '' }
+        : null,
+    };
+  },
   afterCreate: kickoffAdvanceForShow,
   // When an editor changes `artist` or `support`, make sure any newly-named
   // acts get an Artist Registry entry (and Drive folder) so their documents
@@ -3550,16 +3595,25 @@ app.post('/api/emails/sync-mine', requireAuth, async (req, res) => {
 
 // POST /api/sync/login-kickoff — fired by the client right after login (and
 // on app mount, gated client-side). Syncs the current user's Gmail so new
-// mail is available to browse. Designed to be called fire-and-forget.
+// mail is available to browse. For admins / production managers it also runs
+// the venue-calendar scrubber (throttled server-side to 1x/hour).
+// Designed to be called fire-and-forget.
 app.post('/api/sync/login-kickoff', requireAuth, async (req, res) => {
   const started = Date.now();
   try {
-    const sync = await syncUserMailbox(req.user.id);
+    const isProdManager = req.user.role === 'admin' || req.user.role === 'production_manager';
+    const [sync, scrub] = await Promise.all([
+      syncUserMailbox(req.user.id),
+      isProdManager
+        ? runScrubberIfDue().catch(err => ({ ran: false, reason: 'error', error: err.message }))
+        : Promise.resolve(null),
+    ]);
     res.json({
       success: true,
       gmail:   sync.ok ? 'synced' : sync.reason,
       newEmails:  sync.newEmails  || 0,
       autoLinked: sync.autoLinked || 0,
+      scrubber:   scrub,
       elapsedMs: Date.now() - started,
     });
   } catch (err) {
@@ -3569,111 +3623,367 @@ app.post('/api/sync/login-kickoff', requireAuth, async (req, res) => {
 });
 
 // ── Event scraper — fetch upcoming shows from the-windjammer.com ──────────────
+// Shared helper: fetch + parse + dedupe + duplicate-flag against Shows sheet.
+// Returns [{ title, date, time, stage, url, isDuplicate }].
+async function scrapeWindjammerEvents() {
+  const VENUE_URL = 'https://the-windjammer.com/events/';
+  const html = await fetch(VENUE_URL, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    },
+    signal: AbortSignal.timeout(15000),
+  }).then(r => r.text());
+
+  // Site uses a custom WordPress theme — events are <div class="event-content-row"> blocks.
+  //   Date:      <div class="event-content-date"><p><b> 23 </b> April, 2026</p></div>
+  //   URL/Title: <h2><a href="https://the-windjammer.com/event/SLUG">Title text</a></h2>
+  //   Time:      <ul><li>Thursday</li><li>9:30 pm</li></ul>
+  const MO = { january:'01',february:'02',march:'03',april:'04',may:'05',june:'06',
+               july:'07',august:'08',september:'09',october:'10',november:'11',december:'12' };
+  const decodeHtml = s => s
+    .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n)))
+    .replace(/&amp;/g, '&').replace(/&nbsp;/g, ' ')
+    .replace(/&ndash;/g, '–').replace(/&mdash;/g, '—')
+    .replace(/&hellip;/g, '…').replace(/&quot;/g, '"');
+
+  const events = [];
+  const seen   = new Set();
+  const rows = html.split('<div class="event-content-row">');
+  rows.shift();
+
+  for (const row of rows) {
+    const urlM = row.match(/href="(https?:\/\/the-windjammer\.com\/event\/[^"]+)"/i);
+    if (!urlM) continue;
+    const url = urlM[1].replace(/\/$/, '');
+    if (seen.has(url)) continue;
+    seen.add(url);
+
+    const h2M = row.match(/<h2[^>]*>\s*<a[^>]*>([^<]+)<\/a>/i);
+    const title = decodeHtml(h2M ? h2M[1].trim() : url.split('/event/')[1]?.replace(/-/g,' ') || '');
+    if (!title) continue;
+
+    let date = '';
+    const dateDivM = row.match(/<div[^>]*event-content-date[^>]*>([\s\S]*?)<\/div>/i);
+    if (dateDivM) {
+      const dateText = dateDivM[1]
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/&nbsp;/g, ' ')
+        .replace(/&#\d+;/g, ' ')
+        .replace(/&[a-z]+;/gi, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+      const dmy = dateText.match(/(\d{1,2})\s+([a-z]+),?\s+(\d{4})/i);
+      if (dmy) {
+        const mo = MO[dmy[2].toLowerCase()] || '01';
+        date = `${dmy[3]}-${mo}-${dmy[1].padStart(2, '0')}`;
+      }
+    }
+
+    const ulM = row.match(/<ul[^>]*>([\s\S]*?)<\/ul>/i);
+    let showTime = '';
+    if (ulM) {
+      const liM = [...ulM[1].matchAll(/<li[^>]*>([^<]+)<\/li>/gi)];
+      showTime = liM[1]?.[1]?.trim() || '';
+    }
+
+    const stage = detectStage(title);
+    events.push({ title, date, time: showTime, stage, url });
+  }
+
+  // Sort by date (earliest first). Multi-night runs stay as separate events —
+  // each URL is its own night — but we group them by a runKey derived from the
+  // cleaned artist title so the app can render "night 1 / 2 / 3" badges later.
+  events.sort((a, b) => (a.date || '9999') < (b.date || '9999') ? -1 : 1);
+
+  // Guard against the same (date, cleanTitle) appearing twice — the site
+  // occasionally lists a duplicate row for a single night.
+  const seenNight = new Set();
+  const cleaned = [];
+  for (const ev of events) {
+    const clean = cleanArtistTitle(ev.title);
+    const key = `${ev.date}|${clean.toLowerCase()}`;
+    if (seenNight.has(key)) continue;
+    seenNight.add(key);
+    const { headliner, support, artistAliases } = splitHeadlinerAndSupport(clean);
+    cleaned.push({
+      ...ev,
+      title: clean,
+      artist: headliner,
+      support,
+      artistAliases,
+      runKey: clean.toLowerCase(),
+    });
+  }
+
+  // Attach run metadata (nightIndex is 1-based within its run, ordered by date).
+  const runCounts = new Map();
+  for (const ev of cleaned) runCounts.set(ev.runKey, (runCounts.get(ev.runKey) || 0) + 1);
+  const runSeen = new Map();
+  const withRuns = cleaned.map(ev => {
+    const total = runCounts.get(ev.runKey) || 1;
+    const idx = (runSeen.get(ev.runKey) || 0) + 1;
+    runSeen.set(ev.runKey, idx);
+    return { ...ev, multiNight: total > 1, runNights: total, nightIndex: idx };
+  });
+
+  const existingShows   = await sheets.getRows(config.googleSheets.sheets.shows);
+  const existingArtists = await sheets.getRows(config.googleSheets.sheets.artists).catch(() => []);
+  const isDupOfExisting = buildDuplicateChecker(existingShows, existingArtists);
+  return withRuns.map(ev => ({ ...ev, isDuplicate: isDupOfExisting(ev) }));
+}
+
+// Normalize an artist / event name for cross-matching. Lowercases, expands "&"
+// to " and " so "Mark Bryan & Friends" matches "Mark Bryan and Friends",
+// strips punctuation, and collapses whitespace.
+function normalizeArtistKey(name) {
+  return String(name || '')
+    .toLowerCase()
+    .replace(/&/g, ' and ')
+    .replace(/[^\w\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// Build a fast duplicate detector against the current Shows sheet. Considers a
+// scraped event a duplicate of an existing show when either:
+//   (a) an existing show's notes already contain the scraped event URL, or
+//   (b) an existing show shares the same date AND its artist/eventName matches
+//       the scraped headliner — checked via the Artist Registry so any alias
+//       of the headliner also counts. Fuzzy fallback requires ≥6 shared chars
+//       to keep short prefixes from causing false positives.
+function buildDuplicateChecker(existingShows, existingArtists) {
+  // Registry-driven alias map: any normalized name (real or alias) maps to
+  // the full list of alternates for that artist row.
+  const alternates = new Map();
+  for (const a of existingArtists || []) {
+    const names = [a.name, ...String(a.aliases || '').split(',')]
+      .map(normalizeArtistKey)
+      .filter(Boolean);
+    if (names.length === 0) continue;
+    for (const n of names) alternates.set(n, names);
+  }
+
+  const showsByUrl  = new Map();
+  const showsByDate = new Map();
+  const URL_RE = /https?:\/\/the-windjammer\.com\/event\/[^\s"'>]+/i;
+  for (const s of existingShows || []) {
+    const noteUrlM = String(s.notes || '').match(URL_RE);
+    if (noteUrlM) {
+      const clean = noteUrlM[0].replace(/\/$/, '');
+      if (!showsByUrl.has(clean)) showsByUrl.set(clean, []);
+      showsByUrl.get(clean).push(s);
+    }
+    const d = s.date || '';
+    if (!d) continue;
+    if (!showsByDate.has(d)) showsByDate.set(d, []);
+    showsByDate.get(d).push({
+      key: normalizeArtistKey(s.artist || s.eventName || ''),
+    });
+  }
+
+  return function isDupOf(ev) {
+    if (ev.url && showsByUrl.has(ev.url.replace(/\/$/, ''))) return true;
+    if (!ev.date) return false;
+    const dayShows = showsByDate.get(ev.date);
+    if (!dayShows || dayShows.length === 0) return false;
+
+    const evKeys = new Set();
+    for (const raw of [ev.artist, ev.title]) {
+      const k = normalizeArtistKey(raw);
+      if (!k) continue;
+      evKeys.add(k);
+      for (const alt of alternates.get(k) || []) evKeys.add(alt);
+    }
+
+    for (const key of evKeys) {
+      if (!key) continue;
+      for (const { key: existingKey } of dayShows) {
+        if (!existingKey) continue;
+        if (existingKey === key) return true;
+        if (existingKey.length >= 6 && key.includes(existingKey)) return true;
+        if (key.length      >= 6 && existingKey.includes(key))    return true;
+      }
+    }
+    return false;
+  };
+}
+
+// Stage classifier. Reads the *title* (not the URL — some URLs are misleading,
+// e.g. an act originally booked for the Beach later relocated to Inside keeps
+// its "beach" URL slug). Order matters: "Inside Stage" wins if both terms
+// appear.
+function detectStage(title) {
+  const t = String(title || '').toLowerCase();
+  if (/inside stage/.test(t)) return 'inside';
+  if (/beach stage|on the beach|n[uü]trl/.test(t)) return 'beach';
+  return 'inside';
+}
+
+// Turn a venue event title into a clean artist name suitable for the Artist
+// Registry: strips " – on the NÜTRL Beach Stage", " – Saturday", " – Night 2",
+// "(Friday)", etc. Leaves the core artist billing intact ("Artist w/ Support").
+// Order matters — the outermost trailing tokens (day / night qualifiers) must
+// be removed first so the stage-suffix strip can match at the end anchor.
+function cleanArtistTitle(t) {
+  return String(t || '')
+    // Trailing admission-policy suffix ("– 21Up or with their parent", etc.).
+    // Must be stripped before the support-split regex or "with their parent"
+    // gets misread as a support act.
+    .replace(/\s*[-–]\s*21\s*(?:up|&\s*up|and\s*up)\b.*$/i, '')
+    // Trailing "Night N" run qualifier
+    .replace(/\s*[-–]\s*night\s*\d+\s*$/i, '')
+    // Trailing day-of-week qualifier (with optional part-of-day)
+    .replace(/\s*[-–]\s*(mon|tues|wednes|thurs|fri|satur|sun)day(\s+(morning|afternoon|evening|night))?\s*$/i, '')
+    .replace(/\s*\((mon|tues|wednes|thurs|fri|satur|sun)day\)\s*$/i, '')
+    // Trailing stage suffix
+    .replace(/\s*[-–]?\s*on the\s+(n[uü]trl\s+)?beach(\s+stage)?\s*$/i, '')
+    .replace(/\s*[-–]?\s*on the\s+inside\s+stage\s*$/i, '')
+    // Any dangling separator left behind after other strips
+    .replace(/\s*[-–]\s*$/, '')
+    .trim();
+}
+
+// Split a cleaned title into headliner + support + aliases.
+//
+//  " with " / " w/ "                → support act (separate opening/co-billed act)
+//  " featuring " / " feat. " / " ft. " → guest performing as part of the SAME act
+//                                     → attached to the headliner as an alias
+//
+// Deliberately does NOT split on "&" or "and" — those appear inside single band
+// names like "Mark Bryan & Friends" and "Ax and The Hatchetmen".
+function splitHeadlinerAndSupport(title) {
+  let headliner = String(title || '').trim();
+  let support   = '';
+  let aliases   = '';
+  if (!headliner) return { headliner: '', support: '', artistAliases: '' };
+
+  const wm = headliner.match(/^(.+?)\s+(?:with|w\/)\s+(.+)$/i);
+  if (wm) { headliner = wm[1].trim(); support = wm[2].trim(); }
+
+  const fm = headliner.match(/^(.+?)\s+(?:featuring|feat\.?|ft\.?)\s+(.+)$/i);
+  if (fm) { headliner = fm[1].trim(); aliases = fm[2].trim(); }
+
+  return { headliner, support, artistAliases: aliases };
+}
+
+// Shared helper: append the given events to the Shows sheet and fire
+// kickoffAdvanceForShow (which also runs ensureArtistsFromShow -> new Artist
+// Registry entries for any bands we don't already know about).
+async function importScrapedShows(events) {
+  const createdShows = [];
+  const aliasJobs    = []; // { headliner, aliasesText }
+  for (const ev of events) {
+    const show = {
+      id:          `${Date.now()}${Math.random().toString(36).slice(2, 6)}`,
+      date:        ev.date,
+      artist:      ev.artist || ev.title,
+      eventName:   '',
+      stage:       ev.stage,
+      status:      'pending',
+      showTime:    ev.time || '',
+      doorsTime:   '',
+      capacity:    '',
+      ticketPrice: '',
+      guarantee:   '',
+      promoter:    '',
+      tourManager: '',
+      support:     ev.support || '',
+      notes:       `Scraped from the-windjammer.com/events — ${ev.url || ''}`,
+      createdAt:   new Date().toISOString(),
+    };
+    await sheets.appendRow(config.googleSheets.sheets.shows, show);
+    createdShows.push(show);
+    if (ev.artistAliases) aliasJobs.push({ headliner: show.artist, aliasesText: ev.artistAliases });
+  }
+
+  // Fire-and-forget kickoff for every imported show (advance row + Drive folder + artist registry).
+  // After the kickoff has ensured the headliner artist exists, merge any parsed
+  // "featuring" names as aliases on that registry row.
+  Promise.resolve()
+    .then(async () => {
+      for (const s of createdShows) {
+        try { await kickoffAdvanceForShow(s); }
+        catch (err) { console.error('[scrape-import kickoff]', err.message); }
+      }
+      for (const job of aliasJobs) {
+        try { await mergeHeadlinerAliases(job.headliner, job.aliasesText); }
+        catch (err) { console.error('[scrape-import aliases]', err.message); }
+      }
+    })
+    .catch(err => console.error('[scrape-import kickoff]', err.message));
+
+  return { created: createdShows.length, createdShows };
+}
+
+// Merge "featuring" names onto the headliner's Artist Registry entry as
+// aliases. Idempotent — never duplicates an existing alias. Silent no-op if
+// the headliner row can't be located (rare — ensureArtistsFromShow should
+// have created it in the same tick).
+async function mergeHeadlinerAliases(headlinerName, aliasesText) {
+  const name = String(headlinerName || '').trim();
+  const additions = String(aliasesText || '')
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean);
+  if (!name || additions.length === 0) return;
+
+  const all = await sheets.getRows(config.googleSheets.sheets.artists);
+  const nameLc = name.toLowerCase();
+  const artist = all.find(a => (a.name || '').trim().toLowerCase() === nameLc);
+  if (!artist) return;
+
+  const current = String(artist.aliases || '')
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean);
+  const currentLc = new Set(current.map(s => s.toLowerCase()));
+  const toAdd = additions.filter(a => !currentLc.has(a.toLowerCase()));
+  if (toAdd.length === 0) return;
+
+  const merged = [...current, ...toAdd].join(', ');
+  await sheets.updateRowById(config.googleSheets.sheets.artists, artist.id, { aliases: merged });
+  console.log(`[scrape] merged aliases into "${name}": ${toAdd.join(', ')}`);
+}
+
+// Automatic scrubber: runs at most once per SCRUB_THROTTLE_MS across all logins.
+// Called from /api/sync/login-kickoff when the user is admin or production_manager.
+const SCRUB_THROTTLE_MS = 60 * 60 * 1000;
+let lastScrubAt = 0;
+let scrubInFlight = null;
+async function runScrubberIfDue() {
+  const now = Date.now();
+  if (now - lastScrubAt < SCRUB_THROTTLE_MS) {
+    return { ran: false, reason: 'throttled', nextEligibleAt: new Date(lastScrubAt + SCRUB_THROTTLE_MS).toISOString() };
+  }
+  if (scrubInFlight) return scrubInFlight;
+
+  scrubInFlight = (async () => {
+    lastScrubAt = now;
+    const all = await scrapeWindjammerEvents();
+    const fresh = all.filter(e => !e.isDuplicate && e.date && e.title);
+    let created = 0;
+    if (fresh.length) {
+      const result = await importScrapedShows(fresh);
+      created = result.created;
+      console.log(`[scrubber] imported ${created} new show(s): ${fresh.map(e => `${e.date} ${e.title}`).join(' | ')}`);
+    } else {
+      console.log(`[scrubber] no new shows (scanned ${all.length} events)`);
+    }
+    return { ran: true, scanned: all.length, imported: created, ranAt: new Date(now).toISOString() };
+  })().catch(err => {
+    console.error('[scrubber] failed:', err.message);
+    lastScrubAt = 0; // allow retry on next login after a failure
+    return { ran: false, reason: 'error', error: err.message };
+  }).finally(() => { scrubInFlight = null; });
+
+  return scrubInFlight;
+}
+
 app.get('/api/scrape/shows', requireAuth, async (req, res) => {
   try {
-    const VENUE_URL = 'https://the-windjammer.com/events/';
-    const html = await fetch(VENUE_URL, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-      },
-      signal: AbortSignal.timeout(15000),
-    }).then(r => r.text());
-
-    // Site uses custom WordPress theme — events are <div class="event-content-row"> blocks.
-    // Date: <div class="event-content-date"><p><b> 23 </b> April, 2026</p></div>
-    // URL/Title: <h2><a href="https://the-windjammer.com/event/SLUG">Title text</a></h2>
-    // Time: <ul><li>Thursday</li><li>9:30 pm</li></ul>
-    const MO = { january:'01',february:'02',march:'03',april:'04',may:'05',june:'06',
-                 july:'07',august:'08',september:'09',october:'10',november:'11',december:'12' };
-    const decodeHtml = s => s
-      .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n)))
-      .replace(/&amp;/g, '&').replace(/&nbsp;/g, ' ')
-      .replace(/&ndash;/g, '–').replace(/&mdash;/g, '—')
-      .replace(/&hellip;/g, '…').replace(/&quot;/g, '"');
-
-    const events = [];
-    const seen   = new Set();
-
-    // Split on each event-content-row div
-    const rows = html.split('<div class="event-content-row">');
-    rows.shift(); // discard content before first row
-
-    for (const row of rows) {
-      // URL — first event link in the row
-      const urlM = row.match(/href="(https?:\/\/the-windjammer\.com\/event\/[^"]+)"/i);
-      if (!urlM) continue;
-      const url = urlM[1].replace(/\/$/, '');
-      if (seen.has(url)) continue;
-      seen.add(url);
-
-      // Title — from <h2><a ...>TITLE</a></h2>
-      const h2M = row.match(/<h2[^>]*>\s*<a[^>]*>([^<]+)<\/a>/i);
-      const title = decodeHtml(h2M ? h2M[1].trim() : url.split('/event/')[1]?.replace(/-/g,' ') || '');
-      if (!title) continue;
-
-      // Date — extract the event-content-date div, strip all HTML, then parse plain text
-      // This handles &nbsp; and other entities that would break a raw HTML regex
-      let date = '';
-      const dateDivM = row.match(/<div[^>]*event-content-date[^>]*>([\s\S]*?)<\/div>/i);
-      if (dateDivM) {
-        const dateText = dateDivM[1]
-          .replace(/<[^>]+>/g, ' ')        // strip all tags
-          .replace(/&nbsp;/g, ' ')
-          .replace(/&#\d+;/g, ' ')
-          .replace(/&[a-z]+;/gi, ' ')
-          .replace(/\s+/g, ' ')
-          .trim();
-        // Match "23 April, 2026" or "23 April 2026"
-        const dmy = dateText.match(/(\d{1,2})\s+([a-z]+),?\s+(\d{4})/i);
-        if (dmy) {
-          const mo = MO[dmy[2].toLowerCase()] || '01';
-          date = `${dmy[3]}-${mo}-${dmy[1].padStart(2, '0')}`;
-        }
-      }
-
-      // Time — second <li> in the first <ul>
-      const ulM = row.match(/<ul[^>]*>([\s\S]*?)<\/ul>/i);
-      let showTime = '';
-      if (ulM) {
-        const liM = [...ulM[1].matchAll(/<li[^>]*>([^<]+)<\/li>/gi)];
-        showTime = liM[1]?.[1]?.trim() || '';
-      }
-
-      const stage = /beach|n[uü]trl/i.test(title) ? 'beach' : 'inside';
-      events.push({ title, date, time: showTime, stage, url });
-    }
-
-    // Normalize title: strip trailing day-of-week qualifiers like "– Thursday", "(Friday)", etc.
-    const normalizeTitle = t => t
-      .replace(/\s*[-–]\s*(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b.*/i, '')
-      .replace(/\s*\((monday|tuesday|wednesday|thursday|friday|saturday|sunday)\)\s*$/i, '')
-      .trim();
-
-    // Sort by date (earliest first), then deduplicate multi-day shows by normalized title
-    events.sort((a, b) => (a.date || '9999') < (b.date || '9999') ? -1 : 1);
-    const unique    = [];
-    const seenTitle = new Set();
-    for (const ev of events) {
-      const norm = normalizeTitle(ev.title).toLowerCase();
-      if (seenTitle.has(norm)) continue;
-      seenTitle.add(norm);
-      unique.push({ ...ev, title: normalizeTitle(ev.title) });
-    }
-
-    // Mark duplicates against existing shows
-    const existing = await sheets.getRows(config.googleSheets.sheets.shows);
-    const result   = unique.map(ev => {
-      const isDuplicate = existing.some(s => {
-        if (ev.date && s.date && s.date !== ev.date) return false;
-        const a = (s.artist || s.eventName || '').toLowerCase().slice(0, 15);
-        const b = ev.title.toLowerCase().slice(0, 15);
-        return a && b && (a === b || a.includes(b.slice(0, 8)) || b.includes(a.slice(0, 8)));
-      });
-      return { ...ev, isDuplicate };
-    });
-
-    res.json({ success: true, data: result });
+    const data = await scrapeWindjammerEvents();
+    res.json({ success: true, data });
   } catch (err) {
     console.error('Scrape error:', err.message);
     res.status(500).json({ success: false, message: 'Scrape failed: ' + err.message });
@@ -3686,41 +3996,7 @@ app.post('/api/scrape/import', requireAuth, requireRole('admin', 'production_man
     const { events } = req.body;
     if (!Array.isArray(events) || events.length === 0)
       return res.status(400).json({ success: false, message: 'No events provided' });
-    let created = 0;
-    const createdShows = [];
-    for (const ev of events) {
-      const show = {
-        id:          `${Date.now()}${Math.random().toString(36).slice(2, 6)}`,
-        date:        ev.date,
-        artist:      ev.title,
-        eventName:   '',
-        stage:       ev.stage,
-        status:      'pending',
-        showTime:    ev.time || '',
-        doorsTime:   '',
-        capacity:    '',
-        ticketPrice: '',
-        guarantee:   '',
-        promoter:    '',
-        tourManager: '',
-        notes:       `Scraped from the-windjammer.com/events — ${ev.url || ''}`,
-        createdAt:   new Date().toISOString(),
-      };
-      await sheets.appendRow(config.googleSheets.sheets.shows, show);
-      createdShows.push(show);
-      created++;
-    }
-
-    // Fire-and-forget kickoff for every imported show (advance row + Drive folder)
-    Promise.resolve()
-      .then(async () => {
-        for (const s of createdShows) {
-          try { await kickoffAdvanceForShow(s); }
-          catch (err) { console.error('[scrape-import kickoff]', err.message); }
-        }
-      })
-      .catch(err => console.error('[scrape-import kickoff]', err.message));
-
+    const { created } = await importScrapedShows(events);
     res.json({ success: true, created });
   } catch (err) {
     console.error('Import error:', err.message);

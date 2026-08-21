@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
-import api from '../api'
+import api, { createShowWithDupCheck } from '../api'
 import Modal from '../components/Modal'
 import PatchListEditor from '../components/PatchListEditor'
+import ArtistCombobox, { invalidateArtistCache } from '../components/ArtistCombobox'
 import { useSettings } from '../context/SettingsContext'
 import { useAuth } from '../context/AuthContext'
 import { useVenue } from '../context/VenueContext'
@@ -401,6 +402,8 @@ export default function ShowDetail() {
     setSavingShow(true)
     try {
       await api.put(`/shows/${show.id}`, showForm)
+      // Server may have auto-registered a new artist; refresh next picker load.
+      invalidateArtistCache()
       const res = await api.get('/shows')
       const updated = (res.data.data || []).find(s => s.id === id)
       if (updated) { setShow(updated); setShowForm({ ...BLANK_SHOW, ...updated }) }
@@ -847,7 +850,8 @@ export default function ShowDetail() {
                 delete payload.id
                 delete payload.createdAt
                 delete payload.updatedAt
-                const res = await api.post('/shows', payload)
+                const res = await createShowWithDupCheck(payload)
+                if (res === null) return
                 const newId = res?.data?.data?.id || res?.data?.id
                 if (newId) navigate(`/shows/${newId}`)
                 else window.location.reload()
@@ -1468,7 +1472,10 @@ export default function ShowDetail() {
             <div className="form-row">
               <div className="form-group">
                 <label>Artist Name</label>
-                <input value={showForm.artist} onChange={e => setShowForm(v => ({ ...v, artist: e.target.value }))} />
+                <ArtistCombobox
+                  value={showForm.artist}
+                  onChange={v => setShowForm(prev => ({ ...prev, artist: v }))}
+                />
               </div>
               <div className="form-group">
                 <label>Event Name</label>

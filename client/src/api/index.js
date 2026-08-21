@@ -45,4 +45,26 @@ api.interceptors.response.use(
   }
 )
 
+// POST /shows with duplicate-guard handling. If the server returns 409 with
+// code=duplicate, prompts the user; retries with ?force=1 on confirm.
+// Returns the response on success, or null if the user cancelled.
+export async function createShowWithDupCheck(payload) {
+  try {
+    return await api.post('/shows', payload)
+  } catch (err) {
+    const data = err?.response?.data
+    if (err?.response?.status === 409 && data?.code === 'duplicate') {
+      const conflictMsg = data.conflict
+        ? `\n\nExisting show: ${data.conflict.artist} on ${data.conflict.date}.`
+        : ''
+      const proceed = window.confirm(
+        `${data.message || 'A similar show already exists.'}${conflictMsg}\n\nCreate it anyway?`
+      )
+      if (!proceed) return null
+      return await api.post('/shows?force=1', payload)
+    }
+    throw err
+  }
+}
+
 export default api

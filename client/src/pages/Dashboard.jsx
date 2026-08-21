@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import api from '../api'
+import api, { createShowWithDupCheck } from '../api'
 import Modal from '../components/Modal'
 import { useAuth } from '../context/AuthContext'
 import { useSettings } from '../context/SettingsContext'
@@ -162,7 +162,8 @@ function ManagerDashboard({ user, shows, labor, navigate, isManager, isStageMana
     if (!addForm.date || !addForm.artist) { setAddError('Date and Artist are required.'); return }
     setAddSaving(true); setAddError('')
     try {
-      await api.post('/shows', { ...addForm, status: 'confirmed', eventName: addForm.artist })
+      const res = await createShowWithDupCheck({ ...addForm, status: 'confirmed', eventName: addForm.artist })
+      if (res === null) { setAddSaving(false); return }
       setAddOpen(false)
       // Simple refresh — take the manager to the shows list so they see it.
       navigate('/shows')
@@ -890,7 +891,8 @@ function PromoterDashboard({ user, shows, advancing, artists, navigate, tf, onRe
     if (!addForm.date || !addForm.artist) { alert('Date and Artist are required.'); return }
     setAddSaving(true)
     try {
-      await api.post('/shows', { ...addForm, status: 'pending', eventName: addForm.artist })
+      const res = await createShowWithDupCheck({ ...addForm, status: 'pending', eventName: addForm.artist })
+      if (res === null) { setAddSaving(false); return }
       setAddOpen(false); onReload()
     } catch (e) {
       alert('Could not add show: ' + (e?.response?.data?.message || e.message))

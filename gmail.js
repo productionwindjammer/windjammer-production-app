@@ -194,6 +194,14 @@ async function getAttachmentData(messageId, attachmentId, client) {
 }
 
 // ── Build a MIME message string and base64url-encode it ───────────────────────
+// Non-ASCII must be RFC 2047 encoded in headers, otherwise UTF-8 bytes leak
+// into the wire and clients render spaces around them as gibberish.
+function encodeMimeHeader(value) {
+  const s = String(value ?? '');
+  if (/^[\x20-\x7E]*$/.test(s)) return s;
+  return `=?UTF-8?B?${Buffer.from(s, 'utf8').toString('base64')}?=`;
+}
+
 function buildMimeRaw({ from, to, cc, subject, body, attachments = [], inReplyToMsgId }) {
   const boundary = `wj_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 
@@ -201,7 +209,7 @@ function buildMimeRaw({ from, to, cc, subject, body, attachments = [], inReplyTo
     `From: ${from || GMAIL_USER}`,
     `To: ${to}`,
     cc ? `Cc: ${cc}` : null,
-    `Subject: ${subject}`,
+    `Subject: ${encodeMimeHeader(subject)}`,
     `MIME-Version: 1.0`,
     `Content-Type: multipart/mixed; boundary="${boundary}"`,
     inReplyToMsgId ? `In-Reply-To: ${inReplyToMsgId}` : null,
