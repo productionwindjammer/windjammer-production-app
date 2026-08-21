@@ -169,6 +169,62 @@ export default function DayOfShow() {
 
   const currentAdvance = selectedShow ? advances.find(a => a.showId === selectedShow) : null
 
+  // Print the full day across both stages: one page per stage, run of show.
+  function printDaySheetForDay() {
+    const pages = []
+    for (const stage of STAGES) {
+      const rows = dayItemsByStage.get(stage.key) || []
+      if (rows.length === 0) continue
+      const stageShows = showsForDayByStage.get(stage.key) || []
+      const artistLine = stageShows.map(s => s.artist || s.eventName).filter(Boolean).join(' · ')
+      const rowsHtml = rows.map(it => `
+        <tr>
+          <td class="label">${escapeHtml(it.label || '')}</td>
+          <td class="time">${it.time ? escapeHtml(formatTime(it.time, tf)) : ''}</td>
+        </tr>`).join('')
+      pages.push(`
+        <section class="page">
+          <header>
+            <h1>The Windjammer</h1>
+            <h2>Isle of Palms, SC</h2>
+            <h2>${escapeHtml(prettyDateLong(dayDate))}</h2>
+            <h3>${escapeHtml(stage.label)}${artistLine ? ` — ${escapeHtml(artistLine)}` : ''}</h3>
+          </header>
+          <table>${rowsHtml}</table>
+        </section>`)
+    }
+    if (pages.length === 0) { alert('No schedule items to print for this day.'); return }
+    openPrintWindow(pages)
+  }
+
+  function openPrintWindow(pages) {
+    const html = `<!DOCTYPE html><html><head>
+      <title>Day Sheet</title>
+      <style>
+        @page { size: letter; margin: 0.6in; }
+        * { box-sizing: border-box; }
+        html, body { margin: 0; padding: 0; background: #fff; color: #000;
+          font-family: 'Impact','Arial Black','Helvetica Neue',sans-serif;
+          -webkit-font-smoothing: antialiased; }
+        .page { page-break-after: always; padding: 0.25in 0; }
+        .page:last-child { page-break-after: auto; }
+        header { text-align: center; margin-bottom: 0.4in; }
+        header h1 { font-size: 34pt; margin: 0 0 4pt; letter-spacing: 0.5pt; }
+        header h2 { font-size: 22pt; margin: 0; font-weight: 900; }
+        header h3 { font-size: 16pt; margin: 6pt 0 0; font-weight: 700; color: #333; }
+        table { margin: 0 auto; border-collapse: collapse; width: 70%; }
+        td { padding: 6pt 0; font-size: 22pt; font-weight: 900; vertical-align: baseline; }
+        td.label { text-align: right; padding-right: 0.6in; }
+        td.time  { text-align: left;  white-space: nowrap; font-variant-numeric: tabular-nums; }
+      </style>
+    </head><body>${pages.join('')}</body></html>`
+    const win = window.open('', '_blank')
+    win.document.write(html)
+    win.document.close()
+    win.focus()
+    setTimeout(() => win.print(), 400)
+  }
+
   function handlePrint() {
     if (viewMode === 'day') return printDaySheetForDay()
     // Group filtered items by show so "All Shows" prints one page per show.
@@ -206,31 +262,7 @@ export default function DayOfShow() {
         </section>`)
     }
 
-    const html = `<!DOCTYPE html><html><head>
-      <title>Day Sheet</title>
-      <style>
-        @page { size: letter; margin: 0.6in; }
-        * { box-sizing: border-box; }
-        html, body { margin: 0; padding: 0; background: #fff; color: #000;
-          font-family: 'Impact','Arial Black','Helvetica Neue',sans-serif;
-          -webkit-font-smoothing: antialiased; }
-        .page { page-break-after: always; padding: 0.25in 0; }
-        .page:last-child { page-break-after: auto; }
-        header { text-align: center; margin-bottom: 0.4in; }
-        header h1 { font-size: 34pt; margin: 0 0 4pt; letter-spacing: 0.5pt; }
-        header h2 { font-size: 22pt; margin: 0; font-weight: 900; }
-        table { margin: 0 auto; border-collapse: collapse; width: 70%; }
-        td { padding: 6pt 0; font-size: 22pt; font-weight: 900; vertical-align: baseline; }
-        td.label { text-align: right; padding-right: 0.6in; }
-        td.time  { text-align: left;  white-space: nowrap; font-variant-numeric: tabular-nums; }
-      </style>
-    </head><body>${pages.join('')}</body></html>`
-
-    const win = window.open('', '_blank')
-    win.document.write(html)
-    win.document.close()
-    win.focus()
-    setTimeout(() => win.print(), 400)
+    openPrintWindow(pages)
   }
 
   function escapeHtml(s) {
@@ -244,66 +276,165 @@ export default function DayOfShow() {
           <div className="page-title">Day of Show</div>
           <div className="page-subtitle">Load-in to load-out schedule and timeline management</div>
         </div>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <button className="btn btn-ghost" onClick={handlePrint} disabled={filteredByShow.length === 0}>🖨 Print Day Sheet</button>
-          <button className="btn btn-primary" onClick={openAdd}>+ Add Item</button>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <div style={{ display: 'flex', gap: 0, border: '1px solid rgba(255,255,255,0.15)', borderRadius: 6, overflow: 'hidden' }}>
+            <button
+              className={`btn btn-sm ${viewMode === 'show' ? 'btn-primary' : 'btn-ghost'}`}
+              onClick={() => setViewMode('show')}
+              style={{ borderRadius: 0 }}
+            >By Show</button>
+            <button
+              className={`btn btn-sm ${viewMode === 'day' ? 'btn-primary' : 'btn-ghost'}`}
+              onClick={() => setViewMode('day')}
+              style={{ borderRadius: 0 }}
+            >By Day (both stages)</button>
+          </div>
+          <button
+            className="btn btn-ghost"
+            onClick={handlePrint}
+            disabled={viewMode === 'day' ? dayItems.length === 0 : filteredByShow.length === 0}
+          >🖨 Print Day Sheet</button>
+          <button
+            className="btn btn-primary"
+            onClick={() => openAdd(viewMode === 'day' ? { date: dayDate } : {})}
+          >+ Add Item</button>
         </div>
       </div>
 
-      <div className="filter-bar">
-        <select value={selectedShow} onChange={e => setSelectedShow(e.target.value)}>
-          <option value="">All Shows</option>
-          {upcomingShows.map(s => (
-            <option key={s.id} value={s.id}>{s.date} — {s.artist || s.eventName} ({s.stage})</option>
-          ))}
-        </select>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'rgba(255,255,255,0.7)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
-          <input type="checkbox" checked={showPastShows} onChange={e => setShowPastShows(e.target.checked)} />
-          Show all (incl. past)
-        </label>
-      </div>
+      {viewMode === 'show' ? (
+        <div className="filter-bar">
+          <select value={selectedShow} onChange={e => setSelectedShow(e.target.value)}>
+            <option value="">All Shows</option>
+            {upcomingShows.map(s => (
+              <option key={s.id} value={s.id}>{s.date} — {s.artist || s.eventName} ({s.stage})</option>
+            ))}
+          </select>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'rgba(255,255,255,0.7)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+            <input type="checkbox" checked={showPastShows} onChange={e => setShowPastShows(e.target.checked)} />
+            Show all (incl. past)
+          </label>
+        </div>
+      ) : (
+        <div className="filter-bar" style={{ alignItems: 'center' }}>
+          <button className="btn btn-ghost btn-sm" onClick={() => setDayDate(shiftYmd(dayDate, -1))}>◀ Prev</button>
+          <input
+            type="date"
+            value={dayDate}
+            onChange={e => setDayDate(e.target.value || todayYmd())}
+            style={{ maxWidth: 180 }}
+          />
+          <button className="btn btn-ghost btn-sm" onClick={() => setDayDate(shiftYmd(dayDate, 1))}>Next ▶</button>
+          <button className="btn btn-ghost btn-sm" onClick={() => setDayDate(todayYmd())}>Today</button>
+          <span style={{ marginLeft: 12, fontSize: 13, color: 'rgba(255,255,255,0.7)' }}>{prettyDateLong(dayDate)}</span>
+        </div>
+      )}
 
-      <div className="card">
-        {loading ? <div className="loading">Loading…</div> : (
-          <div className="table-wrap responsive-cards">
-            <table>
-              <thead>
-                <tr>
-                  <th>Time</th>
-                  <th>Event / Task</th>
-                  <th>Show</th>
-                  <th>Stage</th>
-                  <th>Responsible</th>
-                  <th>Notes</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredByShow.length === 0 && (
-                  <tr><td colSpan={7}><div className="empty-state">No schedule items found</div></td></tr>
-                )}
-                {filteredByShow.map(item => (
-
-                  <tr key={item.id}>
-                    <td data-label="Time"><strong>{item.time ? formatTime(item.time, tf) : '—'}</strong></td>
-                    <td data-label="Event">{item.label || '—'}</td>
-                    <td data-label="Show" className="text-muted">{item.showName || '—'}</td>
-                    <td data-label="Stage"><span className={`badge badge-${item.stage}`}>{item.stage === 'inside' ? 'Inside' : 'Beach'}</span></td>
-                    <td data-label="Responsible" className="text-muted">{item.responsible || '—'}</td>
-                    <td data-label="Notes" className="text-muted" style={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.notes || '—'}</td>
-                    <td data-label="Actions">
-                      <div className="actions-cell">
-                        <button className="btn btn-ghost btn-sm" onClick={() => openEdit(item)}>Edit</button>
-                        <button className="btn btn-danger btn-sm" onClick={() => handleDelete(item.id)}>Del</button>
-                      </div>
-                    </td>
+      {viewMode === 'show' ? (
+        <div className="card">
+          {loading ? <div className="loading">Loading…</div> : (
+            <div className="table-wrap responsive-cards">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Time</th>
+                    <th>Event / Task</th>
+                    <th>Show</th>
+                    <th>Stage</th>
+                    <th>Responsible</th>
+                    <th>Notes</th>
+                    <th></th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
+                </thead>
+                <tbody>
+                  {filteredByShow.length === 0 && (
+                    <tr><td colSpan={7}><div className="empty-state">No schedule items found</div></td></tr>
+                  )}
+                  {filteredByShow.map(item => (
+                    <tr key={item.id}>
+                      <td data-label="Time"><strong>{item.time ? formatTime(item.time, tf) : '—'}</strong></td>
+                      <td data-label="Event">{item.label || '—'}</td>
+                      <td data-label="Show" className="text-muted">{item.showName || '—'}</td>
+                      <td data-label="Stage"><span className={`badge badge-${item.stage}`}>{item.stage === 'inside' ? 'Inside' : 'Beach'}</span></td>
+                      <td data-label="Responsible" className="text-muted">{item.responsible || '—'}</td>
+                      <td data-label="Notes" className="text-muted" style={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.notes || '—'}</td>
+                      <td data-label="Actions">
+                        <div className="actions-cell">
+                          <button className="btn btn-ghost btn-sm" onClick={() => openEdit(item)}>Edit</button>
+                          <button className="btn btn-danger btn-sm" onClick={() => handleDelete(item.id)}>Del</button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="day-stage-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: 16 }}>
+          {loading && <div className="card"><div className="loading">Loading…</div></div>}
+          {!loading && STAGES.map(stage => {
+            const rows = dayItemsByStage.get(stage.key) || []
+            const stageShows = showsForDayByStage.get(stage.key) || []
+            return (
+              <div key={stage.key} className="card" style={{ display: 'flex', flexDirection: 'column' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, gap: 8 }}>
+                  <div>
+                    <span className={`badge badge-${stage.key}`}>{stage.label}</span>
+                    <div style={{ marginTop: 6, fontSize: 13, color: 'rgba(255,255,255,0.7)' }}>
+                      {stageShows.length === 0
+                        ? 'No show scheduled'
+                        : stageShows.map(s => `${s.artist || s.eventName}${s.showTime ? ` · ${formatTime(s.showTime, tf)}` : ''}`).join(' + ')}
+                    </div>
+                  </div>
+                  <button
+                    className="btn btn-ghost btn-sm"
+                    onClick={() => openAdd({
+                      date: dayDate,
+                      stage: stage.key,
+                      showId: stageShows[0]?.id || '',
+                      showName: stageShows[0] ? `${stageShows[0].date} — ${stageShows[0].artist || stageShows[0].eventName}` : '',
+                    })}
+                  >+ Add item</button>
+                </div>
+                {rows.length === 0 ? (
+                  <div className="empty-state" style={{ padding: '20px 8px' }}>No items scheduled</div>
+                ) : (
+                  <table style={{ width: '100%' }}>
+                    <thead>
+                      <tr>
+                        <th style={{ width: 80 }}>Time</th>
+                        <th>Event</th>
+                        <th style={{ width: 130 }}>Responsible</th>
+                        <th style={{ width: 90 }}></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rows.map(item => (
+                        <tr key={item.id}>
+                          <td><strong>{item.time ? formatTime(item.time, tf) : '—'}</strong></td>
+                          <td>
+                            <div style={{ fontWeight: 600 }}>{item.label || '—'}</div>
+                            {item.showName && <div className="text-muted" style={{ fontSize: 12 }}>{item.showName}</div>}
+                            {item.notes && <div className="text-muted" style={{ fontSize: 12, marginTop: 2 }}>{item.notes}</div>}
+                          </td>
+                          <td className="text-muted">{item.responsible || '—'}</td>
+                          <td>
+                            <div className="actions-cell">
+                              <button className="btn btn-ghost btn-sm" onClick={() => openEdit(item)}>Edit</button>
+                              <button className="btn btn-danger btn-sm" onClick={() => handleDelete(item.id)}>Del</button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )}
 
       {modal && (
         <Modal
@@ -320,18 +451,28 @@ export default function DayOfShow() {
         >
           <div className="form-grid">
             <div className="form-group">
-              <label>Show</label>
+              <label>Show (optional)</label>
               <select value={f.showId} onChange={e => {
                 const s = shows.find(s => s.id === e.target.value)
-                setForm(v => ({ ...v, showId: e.target.value, showName: s ? `${s.date} — ${s.artist || s.eventName}` : '', stage: s?.stage || v.stage }))
+                setForm(v => ({
+                  ...v,
+                  showId: e.target.value,
+                  showName: s ? `${s.date} — ${s.artist || s.eventName}` : '',
+                  stage: s?.stage || v.stage,
+                  date: s?.date || v.date,
+                }))
               }}>
-                <option value="">Select show…</option>
+                <option value="">— None (facility item) —</option>
                 {upcomingShows.map(s => (
                   <option key={s.id} value={s.id}>{s.date} — {s.artist || s.eventName} ({s.stage})</option>
                 ))}
               </select>
             </div>
             <div className="form-row">
+              <div className="form-group">
+                <label>Date</label>
+                <input type="date" value={f.date} onChange={set('date')} />
+              </div>
               <div className="form-group">
                 <label>Time</label>
                 <input type="time" value={f.time} onChange={set('time')} />
