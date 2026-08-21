@@ -469,7 +469,8 @@ function buildTodoList(upcomingShows, laborRows) {
   const now = startOfToday()
   for (const s of upcomingShows) {
     const showDate = parseDate(s.date)
-    const days = showDate ? Math.round((showDate - now) / 86400000) : null
+    // parseDate returns local noon; startOfToday is local midnight — floor so today = 0.
+    const days = showDate ? Math.floor((showDate - now) / 86400000) : null
     const dateLabel = days == null ? '' : days === 0 ? 'Today' : days === 1 ? 'Tomorrow' : `${days}d`
     const severity = days != null && days <= 3 ? 'high' : days != null && days <= 10 ? 'med' : 'low'
     const runSuffix = s._nights > 1 ? ` (${s._nights} nights)` : ''
@@ -551,7 +552,8 @@ function ShowRow({ show, onClick, tf = '12h' }) {
 function DetailedShowRow({ show, onClick, tf = '12h', venue, today, crewCount = 0 }) {
   const isRun = (show._nights || 1) > 1
   const d = parseDate(show.date)
-  const days = d && today ? Math.round((d - today) / 86400000) : null
+  // parseDate returns local noon; today is local midnight — floor so today = 0.
+  const days = d && today ? Math.floor((d - today) / 86400000) : null
   const inLabel = days == null ? '' : days === 0 ? 'Today' : days === 1 ? 'Tomorrow' : `in ${days}d`
   const stageRgb = show.stage === 'inside' ? '96,174,255' : '74,222,128'
   const { sold, capacity, pct } = getTicketStats(show, venue)
