@@ -10,6 +10,7 @@ import { useVenue } from '../context/VenueContext'
 import { formatTime } from '../utils/time'
 import { getTicketStats } from '../utils/stages'
 import { hasFinancialAccess } from '../utils/roles'
+import AiProposalsBanner from '../components/AiProposalsBanner'
 
 const DOC_TYPES = [
   { value: 'rider',       label: 'Tech Rider' },
@@ -60,7 +61,10 @@ const BLANK_ADV = {
   riderReceived: 'false', riderNotes: '', stagingChanges: '', capacityChanges: '',
   soundRestrictions: '', curfew: '', productionNeeds: '', backlineNotes: '',
   cateringNotes: '', hospitalityNotes: '', localCrewNeeds: '', advancingComplete: 'false',
-  advanceContact: '', advancePhone: '', advanceEmail: '', notes: '',
+  advanceContact: '', advancePhone: '', advanceEmail: '',
+  truckCount: '', busCount: '', hasShorePower: 'unknown', dockAccess: '',
+  loadInStart: '', loadOutEnd: '',
+  notes: '',
 }
 
 const BLANK_SCHED = {
@@ -151,6 +155,23 @@ export default function ShowDetail() {
   const [reqNotes, setReqNotes]     = useState('')
   const [reqBusy, setReqBusy]       = useState(false)
 
+  // Contacts (per-show call sheet)
+  const [contacts, setContacts]         = useState([])
+  const [contactRoles, setContactRoles] = useState([])
+  const [contactModal, setContactModal] = useState(false)
+  const [editingContact, setEditingContact] = useState(null)
+  const BLANK_CONTACT = { role: '', name: '', phone: '', email: '', isPrimary: 'false', notes: '' }
+  const [contactForm, setContactForm]   = useState(BLANK_CONTACT)
+  const [savingContact, setSavingContact] = useState(false)
+
+  // Waiting-on tracker (ShowAsks)
+  const [asks, setAsks]                 = useState([])
+  const [askModal, setAskModal]         = useState(false)
+  const [editingAsk, setEditingAsk]     = useState(null)
+  const BLANK_ASK = { item: '', askedOf: '', askedAt: '', dueBy: '', notes: '', status: 'open' }
+  const [askForm, setAskForm]           = useState(BLANK_ASK)
+  const [savingAsk, setSavingAsk]       = useState(false)
+
   useEffect(() => { loadAll() }, [id]) // eslint-disable-line
 
   // ── Load all data ────────────────────────────────────────────────────────────
@@ -166,6 +187,17 @@ export default function ShowDetail() {
         api.get('/artists').catch(() => ({ data: { data: [] } })),
       ])
       setArtists(artistsRes.data.data || [])
+
+      // Contacts, asks, and the role vocabulary are non-blocking side loads.
+      Promise.all([
+        api.get('/show-contacts').catch(() => ({ data: { data: [] } })),
+        api.get('/show-asks').catch(() => ({ data: { data: [] } })),
+        api.get('/show-contact-roles').catch(() => ({ data: { data: [] } })),
+      ]).then(([cRes, aRes, rRes]) => {
+        setContacts((cRes.data.data || []).filter(c => String(c.showId) === String(id)))
+        setAsks((aRes.data.data || []).filter(a => String(a.showId) === String(id)))
+        setContactRoles(rRes.data.data || [])
+      })
 
       const shows = showsRes.data.data || []
       const thisShow = shows.find(s => s.id === id)
@@ -422,6 +454,118 @@ export default function ShowDetail() {
       setSavedAdv(true)
       setTimeout(() => setSavedAdv(false), 2500)
     } finally { setSavingAdv(false) }
+  }
+
+  // ── Contacts (per-show call sheet) ─────────────────────────────────────────
+  const setContact = k => e => setContactForm(v => ({ ...v, [k]: e.target.value }))
+  function openAddContact() {
+    setEditingContact(null); setContactForm({ ...BLANK_CONTACT }); setContactModal(true)
+  }
+  function openEditContact(c) {
+    setEditingContact(c); setContactForm({ ...BLANK_CONTACT, ...c }); setContactModal(true)
+  }
+  async function handleSaveContact() {
+    if (!contactForm.role || !contactForm.name) {
+      alert('Role and name are required.'); return
+    }
+    setSavingContact(true)
+    try {
+      const payload = {
+        ...contactForm,
+        showId: id,
+        updatedAt: new Date().toISOString(),
+      }
+      if (editingContact) {
+        await api.put(`/show-contacts/${editingContact.id}`, payload)
+        setContacts(prev => prev.map(c => c.id === editingContact.id ? { ...c, ...payload } : c))
+      } else {
+        const res = await api.post('/show-contacts', payload)
+        setContacts(prev => [...prev, res.data.data])
+      }
+      setContactModal(false)
+    } catch (err) {
+      alert('Failed to save contact: ' + (err?.response?.data?.message || err.message))
+    } finally { setSavingContact(false) }
+  }
+  async function deleteContact(c) {
+    if (!confirm(`Remove ${c.name} (${c.role}) from this show's call sheet?`)) return
+    try {
+      await api.delete(`/show-contacts/${c.id}`)
+      setContacts(prev => prev.filter(x => x.id !== c.id))
+    } catch (err) {
+      alert('Failed to delete: ' + (err?.response?.data?.message || err.message))
+    }
+  }
+
+  // ── Waiting-on tracker (ShowAsks) ─────────────────────────────────────────
+  const setAsk = k => e => setAskForm(v => ({ ...v, [k]: e.target.value }))
+  function openAddAsk() {
+    setEditingAsk(null)
+    setAskForm({ ...BLANK_ASK, askedAt: new Date().toISOString().slice(0, 10) })
+    setAskModal(true)
+  }
+  function openEditAsk(a) {
+    setEditingAsk(a); setAskForm({ ...BLANK_ASK, ...a }); setAskModal(true)
+  }
+  async function handleSaveAsk() {
+    if (!askForm.item) { alert('Item is required.'); return }
+    setSavingAsk(true)
+    try {
+      const payload = {
+        ...askForm,
+        showId: id,
+        source: askForm.source || 'manual',
+        updatedAt: new Date().toISOString(),
+        updatedBy: user?.email || user?.id || '',
+      }
+      if (editingAsk) {
+        await api.put(`/show-asks/${editingAsk.id}`, payload)
+        setAsks(prev => prev.map(a => a.id === editingAsk.id ? { ...a, ...payload } : a))
+      } else {
+        const res = await api.post('/show-asks', payload)
+        setAsks(prev => [...prev, res.data.data])
+      }
+      setAskModal(false)
+    } catch (err) {
+      alert('Failed to save: ' + (err?.response?.data?.message || err.message))
+    } finally { setSavingAsk(false) }
+  }
+  async function markAskReceived(a) {
+    try {
+      const payload = { status: 'received', receivedAt: new Date().toISOString(), updatedAt: new Date().toISOString(), updatedBy: user?.email || user?.id || '' }
+      await api.put(`/show-asks/${a.id}`, payload)
+      setAsks(prev => prev.map(x => x.id === a.id ? { ...x, ...payload } : x))
+    } catch (err) {
+      alert('Failed to update: ' + (err?.response?.data?.message || err.message))
+    }
+  }
+  async function cancelAsk(a) {
+    if (!confirm(`Cancel this request? (${a.item})`)) return
+    try {
+      const payload = { status: 'cancelled', updatedAt: new Date().toISOString(), updatedBy: user?.email || user?.id || '' }
+      await api.put(`/show-asks/${a.id}`, payload)
+      setAsks(prev => prev.map(x => x.id === a.id ? { ...x, ...payload } : x))
+    } catch (err) {
+      alert('Failed to update: ' + (err?.response?.data?.message || err.message))
+    }
+  }
+  async function deleteAsk(a) {
+    if (!confirm(`Delete this row completely? (${a.item})`)) return
+    try {
+      await api.delete(`/show-asks/${a.id}`)
+      setAsks(prev => prev.filter(x => x.id !== a.id))
+    } catch (err) {
+      alert('Failed to delete: ' + (err?.response?.data?.message || err.message))
+    }
+  }
+  function isAskOverdue(a) {
+    if (a.status !== 'open' || !a.dueBy) return false
+    return a.dueBy < new Date().toISOString().slice(0, 10)
+  }
+  function openShowPacket() {
+    const token = localStorage.getItem('wj_token') || ''
+    const url = `/api/show-packet/${id}?access_token=${encodeURIComponent(token)}`
+    window.open(url, '_blank', 'noopener')
   }
 
   // ── Schedule ──────────────────────────────────────────────────────────────────
@@ -695,11 +839,16 @@ export default function ShowDetail() {
 
       {/* ── Show Banner ───────────────────────────────────────────────────── */}
       <div style={{ marginBottom: 20 }}>
-        <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.4)', marginBottom: 8 }}>
+        <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.4)', marginBottom: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <Link to="/shows" style={{ color: 'rgba(255,255,255,0.4)', textDecoration: 'none' }}>
             ← All Shows
           </Link>
+          <Link to={`/shows/${id}/brief`} className="btn btn-primary btn-sm" style={{ textDecoration: 'none' }}>
+            🧠 AI Show Brief
+          </Link>
         </div>
+        {/* AI-proposed changes awaiting review for this show. */}
+        <AiProposalsBanner showId={id} compact />
         <div style={{
           borderRadius: 10, padding: '20px 24px',
           background: `linear-gradient(135deg, rgba(${stageRgb},0.14) 0%, rgba(255,255,255,0.03) 100%)`,
@@ -742,6 +891,9 @@ export default function ShowDetail() {
             </button>
             <button className="btn btn-ghost btn-sm" onClick={() => navigate(`/email?showId=${id}`)}>
               ✉️ Email
+            </button>
+            <button className="btn btn-ghost btn-sm" onClick={openShowPacket} title="One-page printable show packet">
+              🖨️ Print Packet
             </button>
           </div>
         </div>
@@ -925,6 +1077,8 @@ export default function ShowDetail() {
       <div style={{ display: 'flex', gap: 0, marginBottom: 20, borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
         {[
           { key: 'advancing', label: '🎸 Advancing' },
+          { key: 'contacts',  label: `☎️ Contacts${contacts.length ? ` (${contacts.length})` : ''}` },
+          { key: 'asks',      label: `⏳ Waiting On${asks.filter(a => a.status !== 'received' && a.status !== 'cancelled').length ? ` (${asks.filter(a => a.status !== 'received' && a.status !== 'cancelled').length})` : ''}` },
           { key: 'schedule',  label: `📋 Day of Show${schedule.length ? ` (${schedule.length})` : ''}` },
           { key: 'labor',     label: `👷 Crew${labor.length ? (canSeeFinancials ? ` · $${totalLaborCost.toFixed(0)}` : ` (${labor.length})`) : ''}` },
           { key: 'patch',     label: '🔌 Patch List' },
@@ -1031,6 +1185,42 @@ export default function ShowDetail() {
                 <textarea rows={3} value={f.hospitalityNotes} onChange={setAdv('hospitalityNotes')} />
               </div>
             </div>
+            <div style={{margin:'1rem 0 0.5rem',paddingTop:'0.75rem',borderTop:'1px solid #333',fontSize:'0.85rem',color:'#94a3b8',textTransform:'uppercase',letterSpacing:'0.05em'}}>
+              Load-In Logistics
+            </div>
+            <div className="form-row">
+              <div className="form-group">
+                <label>Load-In Start</label>
+                <input type="time" value={f.loadInStart} onChange={setAdv('loadInStart')} />
+              </div>
+              <div className="form-group">
+                <label>Load-Out End</label>
+                <input type="time" value={f.loadOutEnd} onChange={setAdv('loadOutEnd')} />
+              </div>
+            </div>
+            <div className="form-row">
+              <div className="form-group">
+                <label>Trucks</label>
+                <input type="number" min="0" value={f.truckCount} onChange={setAdv('truckCount')} placeholder="e.g. 3" />
+              </div>
+              <div className="form-group">
+                <label>Tour Buses</label>
+                <input type="number" min="0" value={f.busCount} onChange={setAdv('busCount')} placeholder="e.g. 2" />
+              </div>
+              <div className="form-group">
+                <label>Shore Power</label>
+                <select value={f.hasShorePower} onChange={setAdv('hasShorePower')}>
+                  <option value="unknown">Unknown</option>
+                  <option value="yes">Available</option>
+                  <option value="no">Not available (generator)</option>
+                  <option value="n/a">N/A (no buses)</option>
+                </select>
+              </div>
+            </div>
+            <div className="form-group">
+              <label>Dock Access / Load-In Notes</label>
+              <textarea rows={2} value={f.dockAccess} onChange={setAdv('dockAccess')} placeholder="Dock height, alley restrictions, ramp/elevator, PD detail…" />
+            </div>
             <div className="form-group">
               <label>Additional Notes</label>
               <textarea rows={3} value={f.notes} onChange={setAdv('notes')} />
@@ -1045,6 +1235,147 @@ export default function ShowDetail() {
               {savedAdv ? '✅ Saved!' : savingAdv ? 'Saving…' : 'Save Advancing'}
             </button>
           </div>
+        </div>
+      )}
+
+      {/* ══════════════════════════════════════════════════════════════════════
+          CONTACTS TAB — per-show call sheet
+      ══════════════════════════════════════════════════════════════════════ */}
+      {activeTab === 'contacts' && (
+        <div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+            <div style={{ fontSize: 13, color: 'rgba(255,255,255,0.55)' }}>
+              Everyone on this show's call sheet. Missing seats are highlighted in the show brief.
+            </div>
+            {canEditDocs && (
+              <button className="btn btn-primary btn-sm" onClick={openAddContact}>+ Add Contact</button>
+            )}
+          </div>
+          {contacts.length === 0 ? (
+            <div style={{
+              padding: 24, textAlign: 'center', color: 'rgba(255,255,255,0.4)',
+              border: '1px dashed rgba(255,255,255,0.15)', borderRadius: 8,
+            }}>
+              No contacts yet. Add Tour Manager, Tour PM, and promoter rep at minimum.
+            </div>
+          ) : (
+            <table className="table">
+              <thead>
+                <tr>
+                  <th style={{ width: 200 }}>Role</th>
+                  <th>Name</th>
+                  <th>Phone</th>
+                  <th>Email</th>
+                  <th>Notes</th>
+                  {canEditDocs && <th style={{ width: 100 }}></th>}
+                </tr>
+              </thead>
+              <tbody>
+                {contacts
+                  .slice()
+                  .sort((a, b) => (a.role || '').localeCompare(b.role || ''))
+                  .map(c => (
+                    <tr key={c.id}>
+                      <td>
+                        {c.role || <span className="text-muted">—</span>}
+                        {c.isPrimary === 'true' && (
+                          <span style={{ marginLeft: 6, fontSize: 10, background: '#0f5132', color: '#fff', padding: '1px 5px', borderRadius: 3, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Primary</span>
+                        )}
+                      </td>
+                      <td><strong>{c.name || <span className="text-muted">—</span>}</strong></td>
+                      <td>{c.phone ? <a href={`tel:${c.phone}`}>{c.phone}</a> : <span className="text-muted">—</span>}</td>
+                      <td>{c.email ? <a href={`mailto:${c.email}`}>{c.email}</a> : <span className="text-muted">—</span>}</td>
+                      <td className="text-muted" style={{ fontSize: 12 }}>{c.notes || ''}</td>
+                      {canEditDocs && (
+                        <td>
+                          <button className="btn btn-ghost btn-xs" onClick={() => openEditContact(c)}>Edit</button>
+                          <button className="btn btn-ghost btn-xs" onClick={() => deleteContact(c)}>✕</button>
+                        </td>
+                      )}
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+
+      {/* ══════════════════════════════════════════════════════════════════════
+          WAITING ON TAB — explicit, PM-controlled ask tracker
+      ══════════════════════════════════════════════════════════════════════ */}
+      {activeTab === 'asks' && (
+        <div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+            <div style={{ fontSize: 13, color: 'rgba(255,255,255,0.55)' }}>
+              What you've asked for and what's still outstanding. Overdue rows are highlighted.
+            </div>
+            {canEditDocs && (
+              <button className="btn btn-primary btn-sm" onClick={openAddAsk}>+ Log a Request</button>
+            )}
+          </div>
+          {asks.length === 0 ? (
+            <div style={{
+              padding: 24, textAlign: 'center', color: 'rgba(255,255,255,0.4)',
+              border: '1px dashed rgba(255,255,255,0.15)', borderRadius: 8,
+            }}>
+              Nothing logged. When you email a tour asking for something, add a row so you can follow up.
+            </div>
+          ) : (
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Item</th>
+                  <th>Asked Of</th>
+                  <th>Asked</th>
+                  <th>Due</th>
+                  <th>Status</th>
+                  <th>Notes</th>
+                  {canEditDocs && <th style={{ width: 200 }}></th>}
+                </tr>
+              </thead>
+              <tbody>
+                {asks
+                  .slice()
+                  .sort((a, b) => {
+                    // Open first, then overdue-open, then received/cancelled
+                    const rank = x => x.status === 'received' ? 3 : x.status === 'cancelled' ? 2 : isAskOverdue(x) ? 0 : 1
+                    return rank(a) - rank(b) || (a.dueBy || '').localeCompare(b.dueBy || '')
+                  })
+                  .map(a => {
+                    const overdue = isAskOverdue(a)
+                    return (
+                      <tr key={a.id} style={overdue ? { background: 'rgba(239,68,68,0.08)' } : undefined}>
+                        <td><strong>{a.item}</strong>{a.source === 'ai-proposed' && <span style={{ marginLeft: 6, fontSize: 10, background: '#2b3a4b', color: '#8ec5ff', padding: '1px 5px', borderRadius: 3 }}>AI-suggested</span>}</td>
+                        <td>{a.askedOf || <span className="text-muted">—</span>}</td>
+                        <td className="text-muted" style={{ fontSize: 12 }}>{(a.askedAt || '').slice(0, 10) || '—'}</td>
+                        <td className="text-muted" style={{ fontSize: 12 }}>
+                          {a.dueBy || <span className="text-muted">—</span>}
+                          {overdue && <span style={{ marginLeft: 6, color: '#ef4444', fontWeight: 600 }}>OVERDUE</span>}
+                        </td>
+                        <td>
+                          {a.status === 'received'  ? <span style={{ color: '#22c55e' }}>✓ Received</span>
+                            : a.status === 'cancelled' ? <span className="text-muted">Cancelled</span>
+                            : <span style={{ color: overdue ? '#ef4444' : '#f59e0b' }}>Open</span>}
+                        </td>
+                        <td className="text-muted" style={{ fontSize: 12 }}>{a.notes || ''}</td>
+                        {canEditDocs && (
+                          <td>
+                            {a.status === 'open' && (
+                              <button className="btn btn-ghost btn-xs" onClick={() => markAskReceived(a)}>✓ Received</button>
+                            )}
+                            <button className="btn btn-ghost btn-xs" onClick={() => openEditAsk(a)}>Edit</button>
+                            {a.status === 'open' && (
+                              <button className="btn btn-ghost btn-xs" onClick={() => cancelAsk(a)}>Cancel</button>
+                            )}
+                            <button className="btn btn-ghost btn-xs" onClick={() => deleteAsk(a)}>✕</button>
+                          </td>
+                        )}
+                      </tr>
+                    )
+                  })}
+              </tbody>
+            </table>
+          )}
         </div>
       )}
 
@@ -1847,6 +2178,126 @@ export default function ShowDetail() {
             </div>
             <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 8 }}>
               Tip: Rates auto-fill from each worker's saved Staff rate. Override any field per row before saving.
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* ══════════════════════════════════════════════════════════════════════
+          CONTACT MODAL — add/edit a call-sheet entry
+      ══════════════════════════════════════════════════════════════════════ */}
+      {contactModal && (
+        <Modal
+          title={editingContact ? 'Edit Contact' : 'Add Contact'}
+          onClose={() => setContactModal(false)}
+          footer={
+            <>
+              <button className="btn btn-ghost" onClick={() => setContactModal(false)}>Cancel</button>
+              <button className="btn btn-primary" onClick={handleSaveContact} disabled={savingContact}>
+                {savingContact ? 'Saving…' : 'Save Contact'}
+              </button>
+            </>
+          }
+        >
+          <div className="form-grid">
+            <div className="form-row">
+              <div className="form-group">
+                <label>Role *</label>
+                <select value={contactForm.role} onChange={setContact('role')}>
+                  <option value="">Choose role…</option>
+                  {contactRoles.map(r => <option key={r} value={r}>{r}</option>)}
+                </select>
+              </div>
+              <div className="form-group">
+                <label>Name *</label>
+                <input value={contactForm.name} onChange={setContact('name')} placeholder="Full name" />
+              </div>
+            </div>
+            <div className="form-row">
+              <div className="form-group">
+                <label>Phone</label>
+                <input value={contactForm.phone} onChange={setContact('phone')} placeholder="+1 555 555 5555" />
+              </div>
+              <div className="form-group">
+                <label>Email</label>
+                <input type="email" value={contactForm.email} onChange={setContact('email')} placeholder="name@tour.com" />
+              </div>
+            </div>
+            <div className="form-row">
+              <div className="form-group" style={{ flex: '0 0 auto' }}>
+                <label>&nbsp;</label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 400 }}>
+                  <input
+                    type="checkbox"
+                    checked={contactForm.isPrimary === 'true'}
+                    onChange={e => setContactForm(v => ({ ...v, isPrimary: e.target.checked ? 'true' : 'false' }))}
+                  />
+                  Primary contact for this role
+                </label>
+              </div>
+            </div>
+            <div className="form-group">
+              <label>Notes</label>
+              <textarea rows={2} value={contactForm.notes} onChange={setContact('notes')} placeholder="Best time to call, alt phone, on-site only, etc." />
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* ══════════════════════════════════════════════════════════════════════
+          ASK MODAL — add/edit a "waiting on" entry
+      ══════════════════════════════════════════════════════════════════════ */}
+      {askModal && (
+        <Modal
+          title={editingAsk ? 'Edit Request' : 'Log a Request'}
+          onClose={() => setAskModal(false)}
+          footer={
+            <>
+              <button className="btn btn-ghost" onClick={() => setAskModal(false)}>Cancel</button>
+              <button className="btn btn-primary" onClick={handleSaveAsk} disabled={savingAsk}>
+                {savingAsk ? 'Saving…' : 'Save'}
+              </button>
+            </>
+          }
+        >
+          <div className="form-grid">
+            <div className="form-group">
+              <label>What you asked for *</label>
+              <input value={askForm.item} onChange={setAsk('item')} placeholder="e.g. Tour rider, stage plot, input list, hospitality confirmation" />
+            </div>
+            <div className="form-row">
+              <div className="form-group">
+                <label>Asked Of</label>
+                <input value={askForm.askedOf} onChange={setAsk('askedOf')} placeholder="Name or role (Tour PM, Promoter Rep, etc.)"
+                  list="ask-contact-options" />
+                <datalist id="ask-contact-options">
+                  {contacts.map(c => (
+                    <option key={c.id} value={`${c.name}${c.role ? ` (${c.role})` : ''}`} />
+                  ))}
+                </datalist>
+              </div>
+              <div className="form-group">
+                <label>Status</label>
+                <select value={askForm.status} onChange={setAsk('status')}>
+                  <option value="open">Open</option>
+                  <option value="received">Received</option>
+                  <option value="cancelled">Cancelled</option>
+                </select>
+              </div>
+            </div>
+            <div className="form-row">
+              <div className="form-group">
+                <label>Asked At</label>
+                <input type="date" value={(askForm.askedAt || '').slice(0, 10)} onChange={setAsk('askedAt')} />
+              </div>
+              <div className="form-group">
+                <label>Due By</label>
+                <input type="date" value={askForm.dueBy || ''} onChange={setAsk('dueBy')} />
+              </div>
+            </div>
+            <div className="form-group">
+              <label>Notes</label>
+              <textarea rows={2} value={askForm.notes} onChange={setAsk('notes')} placeholder="Any context, prior follow-ups, etc." />
             </div>
           </div>
         </Modal>

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import api from '../api'
 import Modal from '../components/Modal'
+import AiProposalsBanner from '../components/AiProposalsBanner'
 import { useAuth } from '../context/AuthContext'
 import { useSettings } from '../context/SettingsContext'
 import { filterShowList } from '../utils/showFilters'
@@ -16,6 +17,8 @@ const BLANK = {
   cateringNotes: '', hospitalityNotes: '',
   localCrewNeeds: '', advancingComplete: 'false',
   advanceContact: '', advancePhone: '', advanceEmail: '',
+  truckCount: '', busCount: '', hasShorePower: 'unknown', dockAccess: '',
+  loadInStart: '', loadOutEnd: '',
   notes: ''
 }
 
@@ -761,6 +764,8 @@ export default function Advancing() {
                 🎛️ <strong>{editing.artistName}</strong> has artist defaults set for: <em>{Object.keys(editing.artistDefaults).join(', ')}</em>. Leave a field blank to inherit; fill it in to override for this show only.
               </div>
             )}
+            {/* AI proposals awaiting review for this show — no duplicate form. */}
+            {f.showId && <AiProposalsBanner showId={f.showId} />}
             <div className="form-row">
               <div className="form-group">
                 <label>
@@ -859,6 +864,43 @@ export default function Advancing() {
                 <label>Hospitality Notes</label>
                 <textarea value={f.hospitalityNotes} onChange={set('hospitalityNotes')} />
               </div>
+            </div>
+            {/* ── Load-In Logistics ─────────────────────────────────── */}
+            <div style={{margin:'1rem 0 0.5rem',paddingTop:'0.75rem',borderTop:'1px solid #333',fontSize:'0.85rem',color:'#94a3b8',textTransform:'uppercase',letterSpacing:'0.05em'}}>
+              Load-In Logistics
+            </div>
+            <div className="form-row">
+              <div className="form-group">
+                <label>Load-In Start</label>
+                <input type="time" value={f.loadInStart} onChange={set('loadInStart')} />
+              </div>
+              <div className="form-group">
+                <label>Load-Out End</label>
+                <input type="time" value={f.loadOutEnd} onChange={set('loadOutEnd')} />
+              </div>
+            </div>
+            <div className="form-row">
+              <div className="form-group">
+                <label>Truck Count</label>
+                <input type="number" min="0" value={f.truckCount} onChange={set('truckCount')} placeholder="e.g. 3" />
+              </div>
+              <div className="form-group">
+                <label>Tour Bus Count</label>
+                <input type="number" min="0" value={f.busCount} onChange={set('busCount')} placeholder="e.g. 2" />
+              </div>
+              <div className="form-group">
+                <label>Shore Power for Buses</label>
+                <select value={f.hasShorePower} onChange={set('hasShorePower')}>
+                  <option value="unknown">Unknown</option>
+                  <option value="yes">Available</option>
+                  <option value="no">Not available (generator)</option>
+                  <option value="n/a">N/A (no buses)</option>
+                </select>
+              </div>
+            </div>
+            <div className="form-group">
+              <label>Dock Access / Load-In Notes</label>
+              <textarea value={f.dockAccess} onChange={set('dockAccess')} placeholder="Dock height, access door, ramp, elevator, alley restrictions, PD detail…" />
             </div>
             <div className="form-group">
               <label>Additional Notes</label>
