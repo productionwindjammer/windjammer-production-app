@@ -3820,6 +3820,35 @@ app.post('/api/emails/:id/assign', requireAuth, requireRole('admin', 'production
 
     await sheets.updateRowById(config.googleSheets.sheets.emails, id, updates);
 
+    // Propagate the assignment to EmailFacts + EmailIssues so the show brief,
+    // waiting-on tracker, and email-intel views actually see the newly linked
+    // thread. Without this step, facts extracted at scrape time keep their
+    // old (often empty) showId and remain invisible to the show.
+    let factsUpdated = 0;
+    let issuesUpdated = 0;
+    if (showId && email.threadId) {
+      try {
+        const [facts, issues] = await Promise.all([
+          sheets.getRows(config.googleSheets.sheets.emailFacts).catch(() => []),
+          sheets.getRows(config.googleSheets.sheets.emailIssues).catch(() => []),
+        ]);
+        for (const f of facts) {
+          if (f.threadId === email.threadId && f.showId !== showId) {
+            await sheets.updateRowById(config.googleSheets.sheets.emailFacts, f.id, { showId });
+            factsUpdated++;
+          }
+        }
+        for (const i of issues) {
+          if (i.threadId === email.threadId && i.showId !== showId) {
+            await sheets.updateRowById(config.googleSheets.sheets.emailIssues, i.id, { showId });
+            issuesUpdated++;
+          }
+        }
+      } catch (err) {
+        console.warn('[assign email] fact/issue propagation failed:', err.message);
+      }
+    }
+
     // Optionally set advance email on the Advancing record
     let advanceEmailSet = null;
     if (setAdvanceEmail && showId) {
@@ -3844,6 +3873,8 @@ app.post('/api/emails/:id/assign', requireAuth, requireRole('admin', 'production
       artistId: updates.artistId || '',
       artistName: updates.artistName || '',
       advanceEmailSet,
+      factsUpdated,
+      issuesUpdated,
     });
   } catch (err) {
     console.error('Assign email error:', err.message);
@@ -3897,6 +3928,34 @@ app.post('/api/emails/assign-bulk', requireAuth, requireRole('admin', 'productio
       await sheets.updateRowById(config.googleSheets.sheets.emails, id, updates);
     }
 
+    // Propagate to EmailFacts + EmailIssues for every touched thread. Without
+    // this, previously-scraped facts/issues stay tagged to their old showId
+    // (often empty) and never appear in the show brief.
+    let factsUpdated = 0, issuesUpdated = 0;
+    if (showId && valid.length) {
+      try {
+        const threadIds = new Set(valid.map(id => (all.find(e => e.id === id) || {}).threadId).filter(Boolean));
+        const [facts, issues] = await Promise.all([
+          sheets.getRows(config.googleSheets.sheets.emailFacts).catch(() => []),
+          sheets.getRows(config.googleSheets.sheets.emailIssues).catch(() => []),
+        ]);
+        for (const f of facts) {
+          if (threadIds.has(f.threadId) && f.showId !== showId) {
+            await sheets.updateRowById(config.googleSheets.sheets.emailFacts, f.id, { showId });
+            factsUpdated++;
+          }
+        }
+        for (const i of issues) {
+          if (threadIds.has(i.threadId) && i.showId !== showId) {
+            await sheets.updateRowById(config.googleSheets.sheets.emailIssues, i.id, { showId });
+            issuesUpdated++;
+          }
+        }
+      } catch (err) {
+        console.warn('[bulk assign email] fact/issue propagation failed:', err.message);
+      }
+    }
+
     res.json({
       success: true,
       showId: updates.showId || '',
@@ -3905,6 +3964,8 @@ app.post('/api/emails/assign-bulk', requireAuth, requireRole('admin', 'productio
       artistName: updates.artistName || '',
       linked: valid.length,
       missing,
+      factsUpdated,
+      issuesUpdated,
     });
   } catch (err) {
     console.error('Bulk assign email error:', err.message);
