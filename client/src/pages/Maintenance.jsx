@@ -356,7 +356,7 @@ export default function Maintenance() {
     <div style={{ padding: '1rem 1.25rem', maxWidth: 1200 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 12 }}>
         <h2 style={{ margin: 0 }}>🛠️ Maintenance</h2>
-        <span style={{ color: '#6b7280', fontSize: 13 }}>Repairs · Maintenance · Upgrades · Project Proposals</span>
+        <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>Repairs · Maintenance · Upgrades · Project Proposals</span>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
           <button className="btn" onClick={() => openCreate('issue')}>+ New Issue</button>
           <button className="btn btn-primary" onClick={() => openCreate('project')}>+ New Project Proposal</button>
@@ -377,7 +377,7 @@ export default function Maintenance() {
       </div>
 
       {/* Tabs */}
-      <div style={{ display: 'flex', gap: 4, marginBottom: 12, borderBottom: '1px solid #e3e6ea' }}>
+      <div style={{ display: 'flex', gap: 4, marginBottom: 12, borderBottom: '1px solid var(--border)' }}>
         {[
           { key: 'all',       label: 'All' },
           { key: 'issues',    label: 'Issues' },
@@ -391,7 +391,7 @@ export default function Maintenance() {
               style={{
                 background: 'transparent', border: 0, padding: '8px 14px', cursor: 'pointer',
                 fontSize: 13, fontWeight: active ? 600 : 400,
-                color: active ? '#0b7bcf' : '#4a5461',
+                color: active ? '#0b7bcf' : 'var(--text-muted)',
                 borderBottom: active ? '2px solid #0b7bcf' : '2px solid transparent',
               }}>
               {t.label}
@@ -402,7 +402,7 @@ export default function Maintenance() {
 
       {/* Filters */}
       <div style={{
-        background: '#f7f8fa', border: '1px solid #e3e6ea', borderRadius: 8,
+        background: 'var(--bg-sidebar)', border: '1px solid var(--border)', borderRadius: 8,
         padding: 12, marginBottom: 12, display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center'
       }}>
         <input placeholder="Search…" value={filter.q}
@@ -427,18 +427,18 @@ export default function Maintenance() {
           <option value="">All Areas</option>
           {areaOptions.map(a => <option key={a} value={a}>{a}</option>)}
         </select>
-        <span style={{ color: '#6b7280', fontSize: 12, marginLeft: 'auto' }}>
+        <span style={{ color: 'var(--text-muted)', fontSize: 12, marginLeft: 'auto' }}>
           {filtered.length} of {items.length}
         </span>
       </div>
 
       {loading ? <p>Loading…</p> : filtered.length === 0 ? (
-        <p style={{ color: '#6b7280' }}>No maintenance items match these filters.</p>
+        <p style={{ color: 'var(--text-muted)' }}>No maintenance items match these filters.</p>
       ) : (
-        <div style={{ background: '#fff', border: '1px solid #e3e6ea', borderRadius: 8, overflow: 'hidden' }}>
+        <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
             <thead>
-              <tr style={{ background: '#f7f8fa' }}>
+              <tr style={{ background: 'var(--bg-sidebar)' }}>
                 <th style={th}>Item</th>
                 <th style={th}>Area</th>
                 <th style={th}>Category</th>
@@ -460,19 +460,19 @@ export default function Maintenance() {
                 const editable  = canEdit(row)
                 return (
                   <Fragment key={row.id}>
-                    <tr style={{ borderTop: '1px solid #f0f2f5' }}>
+                    <tr style={{ borderTop: '1px solid var(--border)' }}>
                       <td style={td}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                           {isProject && <Chip color="#7a5cff">PROJECT</Chip>}
                           <span style={{ fontWeight: 600 }}>{row.title}</span>
                         </div>
                         {row.description && (
-                          <div style={{ fontSize: 12, color: '#6b7280', marginTop: 2 }}>
+                          <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
                             {row.description.length > 90 ? row.description.slice(0, 90) + '…' : row.description}
                           </div>
                         )}
                         {isProject && row.proposedBy && (
-                          <div style={{ fontSize: 11, color: '#6b7280', marginTop: 2 }}>
+                          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
                             Proposed by {row.proposedBy}
                             {row.approvedBy && ` · ${row.status === 'rejected' ? 'Rejected' : 'Approved'} by ${row.approvedBy}`}
                           </div>
@@ -488,7 +488,7 @@ export default function Maintenance() {
                       <td style={{ ...td, textAlign: 'right' }}>
                         {row.estimatedCost ? money(row.estimatedCost) : ''}
                         {isProject && !row.estimatedCost && (row.budgetLow || row.budgetHigh) && (
-                          <span style={{ color: '#6b7280', fontSize: 11 }}>
+                          <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>
                             {row.budgetLow ? money(row.budgetLow) : ''}
                             {(row.budgetLow && row.budgetHigh) ? '–' : ''}
                             {row.budgetHigh ? money(row.budgetHigh) : ''}
@@ -509,8 +509,8 @@ export default function Maintenance() {
                       </td>
                     </tr>
                     {isOpen && (
-                      <tr key={`${row.id}-x`} style={{ background: '#fafbfc' }}>
-                        <td colSpan={11} style={{ padding: 14, borderTop: '1px solid #f0f2f5' }}>
+                      <tr key={`${row.id}-x`} style={{ background: 'rgba(127,127,127,0.06)' }}>
+                        <td colSpan={11} style={{ padding: 14, borderTop: '1px solid var(--border)' }}>
                           {isProject && (
                             <ProposalPanel
                               row={row}
@@ -702,10 +702,10 @@ function ProposalPanel({ row, canApprove, rejectDraft, onRejectDraftChange, onDe
   const bHi = row.budgetHigh ? money(row.budgetHigh) : ''
   return (
     <div style={{
-      background: '#f5f2ff', border: '1px solid #d9d0ff', borderRadius: 6,
+      background: 'rgba(122,92,255,0.08)', border: '1px solid rgba(122,92,255,0.30)', borderRadius: 6,
       padding: 12, marginBottom: 14,
     }}>
-      <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', fontSize: 12, color: '#4a5461', marginBottom: 8 }}>
+      <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', fontSize: 12, color: 'var(--text-muted)', marginBottom: 8 }}>
         <div><strong>Type:</strong> Project Proposal</div>
         {row.proposedBy && <div><strong>Proposed by:</strong> {row.proposedBy}</div>}
         {(bLo || bHi) && <div><strong>Budget range:</strong> {bLo}{(bLo && bHi) ? ' – ' : ''}{bHi}</div>}
@@ -719,18 +719,18 @@ function ProposalPanel({ row, canApprove, rejectDraft, onRejectDraftChange, onDe
 
       {row.justification && (
         <div style={{ marginBottom: 8 }}>
-          <div style={{ fontSize: 11, textTransform: 'uppercase', color: '#6b7280', letterSpacing: 0.3 }}>Justification</div>
+          <div style={{ fontSize: 11, textTransform: 'uppercase', color: 'var(--text-muted)', letterSpacing: 0.3 }}>Justification</div>
           <div style={{ whiteSpace: 'pre-wrap', fontSize: 13 }}>{row.justification}</div>
         </div>
       )}
       {row.scope && (
         <div style={{ marginBottom: 8 }}>
-          <div style={{ fontSize: 11, textTransform: 'uppercase', color: '#6b7280', letterSpacing: 0.3 }}>Scope of Work</div>
+          <div style={{ fontSize: 11, textTransform: 'uppercase', color: 'var(--text-muted)', letterSpacing: 0.3 }}>Scope of Work</div>
           <div style={{ whiteSpace: 'pre-wrap', fontSize: 13 }}>{row.scope}</div>
         </div>
       )}
       {row.rejectedReason && (
-        <div style={{ marginBottom: 8, padding: 8, background: '#fdecea', border: '1px solid #f5c6c1', borderRadius: 4 }}>
+        <div style={{ marginBottom: 8, padding: 8, background: 'rgba(192,57,43,0.10)', border: '1px solid rgba(192,57,43,0.35)', borderRadius: 4 }}>
           <div style={{ fontSize: 11, textTransform: 'uppercase', color: '#c0392b', letterSpacing: 0.3 }}>Rejection Reason</div>
           <div style={{ whiteSpace: 'pre-wrap', fontSize: 13 }}>{row.rejectedReason}</div>
         </div>
@@ -759,7 +759,7 @@ function ProposalPanel({ row, canApprove, rejectDraft, onRejectDraftChange, onDe
         </div>
       )}
       {!canApprove && isPending && (
-        <div style={{ fontSize: 12, color: '#6b7280' }}>
+        <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
           Awaiting review by admin or production manager.
         </div>
       )}
@@ -775,7 +775,7 @@ function QuotesPanel({ row, quoteForm, setQuoteForm, onAdd, onSelect, onRemove }
     : null
   return (
     <div>
-      <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', marginBottom: 10, fontSize: 12, color: '#4a5461' }}>
+      <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', marginBottom: 10, fontSize: 12, color: 'var(--text-muted)' }}>
         <div><strong>{quotes.length}</strong> quote{quotes.length === 1 ? '' : 's'}</div>
         {cheapest && <div>Lowest: <strong>{money(cheapest.amount)}</strong> — {cheapest.vendorName}</div>}
         {selected && <div>Selected: <strong>{money(selected.amount)}</strong> — {selected.vendorName}</div>}
@@ -806,7 +806,7 @@ function QuotesPanel({ row, quoteForm, setQuoteForm, onAdd, onSelect, onRemove }
                   {q.status === 'rejected'  && <Chip color="#999">Rejected</Chip>}
                   {(!q.status || q.status === 'pending') && <Chip color="#6b7280">Pending</Chip>}
                 </td>
-                <td style={{ ...tdSm, color: '#4a5461' }}>{q.notes || ''}</td>
+                <td style={{ ...tdSm, color: 'var(--text-muted)' }}>{q.notes || ''}</td>
                 <td style={tdSm}>
                   {q.status !== 'selected' && (
                     <button className="btn btn-sm" onClick={() => onSelect(q.id)}>Select</button>
@@ -820,7 +820,7 @@ function QuotesPanel({ row, quoteForm, setQuoteForm, onAdd, onSelect, onRemove }
       )}
 
       <div style={{
-        background: '#fff', border: '1px dashed #cfd4da', borderRadius: 6,
+        background: 'var(--bg-card)', border: '1px dashed var(--border)', borderRadius: 6,
         padding: 10, display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr 2fr auto', gap: 8, alignItems: 'end'
       }}>
         <Field label="Vendor" compact>
@@ -855,12 +855,12 @@ function QuotesPanel({ row, quoteForm, setQuoteForm, onAdd, onSelect, onRemove }
 function Kpi({ label, value, sub, danger }) {
   return (
     <div style={{
-      background: '#fff', border: `1px solid ${danger ? '#c0392b33' : '#e3e6ea'}`,
+      background: 'var(--bg-card)', border: `1px solid ${danger ? '#c0392b66' : 'var(--border)'}`,
       borderRadius: 8, padding: '14px 16px', minWidth: 150, flex: '1 1 150px'
     }}>
-      <div style={{ fontSize: 12, textTransform: 'uppercase', letterSpacing: 0.4, color: danger ? '#c0392b' : '#6b7280' }}>{label}</div>
+      <div style={{ fontSize: 12, textTransform: 'uppercase', letterSpacing: 0.4, color: danger ? '#c0392b' : 'var(--text-muted)' }}>{label}</div>
       <div style={{ fontSize: 22, fontWeight: 700, marginTop: 4, color: danger ? '#c0392b' : undefined }}>{value}</div>
-      {sub && <div style={{ fontSize: 11, color: '#6b7280', marginTop: 2 }}>{sub}</div>}
+      {sub && <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>{sub}</div>}
     </div>
   )
 }
@@ -868,13 +868,13 @@ function Kpi({ label, value, sub, danger }) {
 function Field({ label, span, compact, children }) {
   return (
     <label style={{ display: 'block', gridColumn: span === 2 ? '1 / -1' : undefined }}>
-      <div style={{ fontSize: 11, color: '#6b7280', marginBottom: compact ? 2 : 4, textTransform: 'uppercase', letterSpacing: 0.3 }}>{label}</div>
+      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: compact ? 2 : 4, textTransform: 'uppercase', letterSpacing: 0.3 }}>{label}</div>
       {children}
     </label>
   )
 }
 
-const th   = { padding: '10px 12px', textAlign: 'left', fontSize: 11, color: '#6b7280', textTransform: 'uppercase', letterSpacing: 0.4 }
+const th   = { padding: '10px 12px', textAlign: 'left', fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.4 }
 const td   = { padding: '10px 12px', verticalAlign: 'top' }
-const thSm = { padding: '4px 8px', textAlign: 'left', fontSize: 11, color: '#6b7280', borderBottom: '1px solid #e3e6ea' }
-const tdSm = { padding: '6px 8px', borderBottom: '1px solid #f0f2f5' }
+const thSm = { padding: '4px 8px', textAlign: 'left', fontSize: 11, color: 'var(--text-muted)', borderBottom: '1px solid var(--border)' }
+const tdSm = { padding: '6px 8px', borderBottom: '1px solid var(--border)' }

@@ -67,7 +67,7 @@ function Bar({ value, allocated, color = '#4f8cff' }) {
   if (!allocated || allocated <= 0) {
     // No allocation: show a neutral bar so the user still sees relative spend visually.
     return (
-      <div style={{ background: '#eef1f5', borderRadius: 4, height: 10 }}>
+      <div style={{ background: 'var(--border)', borderRadius: 4, height: 10 }}>
         {value > 0 && (
           <div style={{ width: '100%', height: '100%', background: '#c0392b', borderRadius: 4 }} title="Unbudgeted spend" />
         )}
@@ -77,7 +77,7 @@ function Bar({ value, allocated, color = '#4f8cff' }) {
   const pct = Math.min(100, Math.round((value / allocated) * 100))
   const over = value > allocated
   return (
-    <div style={{ background: '#eef1f5', borderRadius: 4, height: 10, position: 'relative', overflow: 'hidden' }}>
+    <div style={{ background: 'var(--border)', borderRadius: 4, height: 10, position: 'relative', overflow: 'hidden' }}>
       <div style={{
         width: `${pct}%`, height: '100%',
         background: over ? '#c0392b' : (pct > 85 ? '#c26a00' : color),
@@ -90,12 +90,12 @@ function Kpi({ label, value, sub, danger, warn }) {
   const color = danger ? '#c0392b' : warn ? '#c26a00' : undefined
   return (
     <div style={{
-      background: '#fff', border: `1px solid ${danger ? '#c0392b33' : warn ? '#c26a0033' : '#e3e6ea'}`,
+      background: 'var(--bg-card)', border: `1px solid ${danger ? '#c0392b66' : warn ? '#c26a0066' : 'var(--border)'}`,
       borderRadius: 8, padding: '14px 16px', minWidth: 170, flex: '1 1 170px'
     }}>
-      <div style={{ fontSize: 12, textTransform: 'uppercase', letterSpacing: 0.4, color: color || '#6b7280' }}>{label}</div>
+      <div style={{ fontSize: 12, textTransform: 'uppercase', letterSpacing: 0.4, color: color || 'var(--text-muted)' }}>{label}</div>
       <div style={{ fontSize: 24, fontWeight: 700, marginTop: 4, color }}>{value}</div>
-      {sub && <div style={{ fontSize: 12, color: '#6b7280', marginTop: 2 }}>{sub}</div>}
+      {sub && <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>{sub}</div>}
     </div>
   )
 }
@@ -293,12 +293,12 @@ export default function Budgets() {
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 12 }}>
         <h2 style={{ margin: 0 }}>📊 Production Budgets</h2>
         <label style={{ display: 'flex', alignItems: 'center', gap: 6, marginLeft: 8 }}>
-          <span style={{ fontSize: 12, color: '#6b7280' }}>Year</span>
+          <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Year</span>
           <select value={year} onChange={e => { setYear(e.target.value); setYearDraft(null); setShowDrafts({}) }}>
             {yearOptions.map(y => <option key={y} value={y}>{y}</option>)}
           </select>
         </label>
-        <span style={{ color: '#6b7280', fontSize: 13 }}>
+        <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>
           {yearBudget ? `Budget set · updated ${yearBudget.updatedAt?.slice(0, 10) || ''}` : 'No budget yet for this year'}
         </span>
       </div>
@@ -315,7 +315,7 @@ export default function Budgets() {
       </div>
 
       {/* Yearly budget table */}
-      <div style={{ background: '#fff', border: '1px solid #e3e6ea', borderRadius: 8, padding: 14, marginBottom: 24 }}>
+      <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8, padding: 14, marginBottom: 24 }}>
         <div style={{ display: 'flex', alignItems: 'center', marginBottom: 10 }}>
           <h3 style={{ margin: 0, fontSize: 15 }}>Annual Category Budget</h3>
           <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
@@ -372,7 +372,7 @@ export default function Budgets() {
                   </tr>
                 )
               })}
-              <tr style={{ borderTop: '2px solid #e3e6ea' }}>
+              <tr style={{ borderTop: '2px solid var(--border)' }}>
                 <td style={{ ...tdLeft, fontWeight: 700 }}>Total</td>
                 <td style={{ ...tdRight, fontWeight: 700 }}>{money(
                   Object.values(yearDraft || yearAllocations).reduce((s, v) => s + (parseFloat(v) || 0), 0)
@@ -392,16 +392,16 @@ export default function Budgets() {
       </div>
 
       {/* Per-show budgets */}
-      <div style={{ background: '#fff', border: '1px solid #e3e6ea', borderRadius: 8, padding: 14 }}>
+      <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8, padding: 14 }}>
         <div style={{ display: 'flex', alignItems: 'center', marginBottom: 10 }}>
           <h3 style={{ margin: 0, fontSize: 15 }}>Per-Show Budgets — {year}</h3>
-          <span style={{ marginLeft: 12, color: '#6b7280', fontSize: 12 }}>
+          <span style={{ marginLeft: 12, color: 'var(--text-muted)', fontSize: 12 }}>
             {yearShows.filter(s => showBudgetsById[s.id]).length} of {yearShows.length} shows have a budget
           </span>
         </div>
 
         {loading ? <p>Loading…</p> : yearShows.length === 0 ? (
-          <p style={{ color: '#6b7280' }}>No shows in {year}.</p>
+          <p style={{ color: 'var(--text-muted)' }}>No shows in {year}.</p>
         ) : (
           <table style={tableStyle}>
             <thead>
@@ -429,13 +429,13 @@ export default function Budgets() {
                 const dirty       = !!showDrafts[show.id]
                 return (
                   <Fragment key={show.id}>
-                    <tr style={{ borderTop: '1px solid #f0f2f5' }}>
+                    <tr style={{ borderTop: '1px solid var(--border)' }}>
                       <td style={tdLeft}>{show.date || ''}</td>
                       <td style={tdLeft}>
                         <Link to={`/shows/${show.id}`}>{show.artist || show.eventName || '(unnamed)'}</Link>
                       </td>
                       <td style={{ ...tdLeft, textTransform: 'capitalize' }}>{show.stage || ''}</td>
-                      <td style={tdRight}>{totalAlloc ? money(totalAlloc) : <span style={{ color: '#6b7280' }}>—</span>}</td>
+                      <td style={tdRight}>{totalAlloc ? money(totalAlloc) : <span style={{ color: 'var(--text-muted)' }}>—</span>}</td>
                       <td style={tdRight}>{money(totalActual)}</td>
                       <td style={{ ...tdRight, color: over ? '#c0392b' : undefined }}>
                         {totalAlloc ? money(remaining) : ''}
@@ -449,8 +449,8 @@ export default function Budgets() {
                       </td>
                     </tr>
                     {isOpen && (
-                      <tr style={{ background: '#fafbfc' }}>
-                        <td colSpan={8} style={{ padding: 14, borderTop: '1px solid #f0f2f5' }}>
+                      <tr style={{ background: 'rgba(127,127,127,0.06)' }}>
+                        <td colSpan={8} style={{ padding: 14, borderTop: '1px solid var(--border)' }}>
                           <div style={{ display: 'flex', alignItems: 'center', marginBottom: 8 }}>
                             <strong>Categories for this show</strong>
                             <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
@@ -489,7 +489,7 @@ export default function Budgets() {
                                       {c.label}
                                       {!isTracked && (
                                         <span title="Actuals for this category are only rolled up at the yearly level."
-                                          style={{ marginLeft: 6, fontSize: 10, color: '#6b7280' }}>
+                                          style={{ marginLeft: 6, fontSize: 10, color: 'var(--text-muted)' }}>
                                           (yearly only)
                                         </span>
                                       )}
@@ -499,7 +499,7 @@ export default function Budgets() {
                                         value={allocations[c.key] ?? 0}
                                         onChange={e => setShowAllocation(show.id, c.key, e.target.value)} />
                                     </td>
-                                    <td style={tdRight}>{isTracked ? money(actual) : <span style={{ color: '#ccc' }}>—</span>}</td>
+                                    <td style={tdRight}>{isTracked ? money(actual) : <span style={{ color: 'var(--text-muted)', opacity: 0.5 }}>—</span>}</td>
                                     <td style={{ ...tdRight, color: (isTracked && actual > allocated && allocated > 0) ? '#c0392b' : undefined }}>
                                       {isTracked && allocated ? money(rem) : ''}
                                     </td>
@@ -509,7 +509,7 @@ export default function Budgets() {
                               })}
                             </tbody>
                           </table>
-                          <div style={{ fontSize: 11, color: '#6b7280', marginTop: 6 }}>
+                          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>
                             Actuals shown here come from Labor (row.total) and Vendor Bookings (row.amount)
                             attached to this show. Other categories track at the yearly level only for now.
                           </div>
@@ -528,11 +528,12 @@ export default function Budgets() {
 }
 
 const tableStyle = { width: '100%', borderCollapse: 'collapse', fontSize: 13 }
-const tdLeft  = { padding: '6px 8px', borderBottom: '1px solid #f0f2f5' }
-const tdRight = { padding: '6px 8px', borderBottom: '1px solid #f0f2f5', textAlign: 'right', whiteSpace: 'nowrap' }
-const thLeft  = { padding: '6px 8px', textAlign: 'left',  borderBottom: '1px solid #e3e6ea', fontSize: 12, color: '#6b7280' }
-const thRight = { padding: '6px 8px', textAlign: 'right', borderBottom: '1px solid #e3e6ea', fontSize: 12, color: '#6b7280' }
+const tdLeft  = { padding: '6px 8px', borderBottom: '1px solid var(--border)' }
+const tdRight = { padding: '6px 8px', borderBottom: '1px solid var(--border)', textAlign: 'right', whiteSpace: 'nowrap' }
+const thLeft  = { padding: '6px 8px', textAlign: 'left',  borderBottom: '1px solid var(--border)', fontSize: 12, color: 'var(--text-muted)' }
+const thRight = { padding: '6px 8px', textAlign: 'right', borderBottom: '1px solid var(--border)', fontSize: 12, color: 'var(--text-muted)' }
 const cellInput = {
   width: 110, textAlign: 'right', padding: '4px 6px',
-  border: '1px solid #d0d5dc', borderRadius: 4, fontSize: 13,
+  border: '1px solid var(--border)', borderRadius: 4, fontSize: 13,
+  background: 'var(--bg-card)', color: 'var(--text)',
 }

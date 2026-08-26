@@ -67,7 +67,7 @@ function monthLabel(ym) {
 function Bar({ value, max, color = '#4f8cff' }) {
   const pct = max > 0 ? Math.max(2, Math.round((value / max) * 100)) : 0
   return (
-    <div style={{ background: '#eef1f5', borderRadius: 4, height: 10, overflow: 'hidden' }}>
+    <div style={{ background: 'var(--border)', borderRadius: 4, height: 10, overflow: 'hidden' }}>
       <div style={{ width: `${pct}%`, height: '100%', background: color }} />
     </div>
   )
@@ -76,12 +76,12 @@ function Bar({ value, max, color = '#4f8cff' }) {
 function KpiCard({ label, value, sub }) {
   return (
     <div style={{
-      background: '#fff', border: '1px solid #e3e6ea', borderRadius: 8,
+      background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8,
       padding: '14px 16px', minWidth: 170, flex: '1 1 170px'
     }}>
-      <div style={{ fontSize: 12, textTransform: 'uppercase', letterSpacing: 0.4, color: '#6b7280' }}>{label}</div>
+      <div style={{ fontSize: 12, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--text-muted)' }}>{label}</div>
       <div style={{ fontSize: 24, fontWeight: 700, marginTop: 4 }}>{value}</div>
-      {sub && <div style={{ fontSize: 12, color: '#6b7280', marginTop: 2 }}>{sub}</div>}
+      {sub && <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>{sub}</div>}
     </div>
   )
 }
@@ -331,7 +331,7 @@ export default function Financials() {
         <span style={{ background: '#fff7cc', color: '#7a5c00', padding: '2px 8px', borderRadius: 4, fontSize: 12 }}>
           Labor only · MVP
         </span>
-        <span style={{ color: '#6b7280', fontSize: 13 }}>{rangeLabel}</span>
+        <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>{rangeLabel}</span>
         <div style={{ marginLeft: 'auto' }}>
           <button className="btn" onClick={exportCsv} disabled={filtered.length === 0}>Export CSV</button>
         </div>
@@ -339,11 +339,11 @@ export default function Financials() {
 
       {/* Filters */}
       <div style={{
-        background: '#f7f8fa', border: '1px solid #e3e6ea', borderRadius: 8,
+        background: 'var(--bg-sidebar)', border: '1px solid var(--border)', borderRadius: 8,
         padding: 12, marginBottom: 16, display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center'
       }}>
         <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span style={{ fontSize: 12, color: '#6b7280' }}>Range</span>
+          <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Range</span>
           <select value={rangePreset} onChange={e => setRangePreset(e.target.value)}>
             {RANGE_PRESETS.map(p => <option key={p.key} value={p.key}>{p.label}</option>)}
           </select>
@@ -351,17 +351,17 @@ export default function Financials() {
         {rangePreset === 'custom' && (
           <>
             <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span style={{ fontSize: 12, color: '#6b7280' }}>From</span>
+              <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>From</span>
               <input type="date" value={customFrom} onChange={e => setCustomFrom(e.target.value)} />
             </label>
             <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span style={{ fontSize: 12, color: '#6b7280' }}>To</span>
+              <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>To</span>
               <input type="date" value={customTo} onChange={e => setCustomTo(e.target.value)} />
             </label>
           </>
         )}
         <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span style={{ fontSize: 12, color: '#6b7280' }}>Stage</span>
+          <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Stage</span>
           <select value={stageFilter} onChange={e => setStageFilter(e.target.value)}>
             <option value="">All</option>
             <option value="inside">Inside</option>
@@ -377,7 +377,7 @@ export default function Financials() {
       {loading ? (
         <p>Loading…</p>
       ) : filtered.length === 0 ? (
-        <p style={{ color: '#6b7280' }}>No labor entries in the selected range.</p>
+        <p style={{ color: 'var(--text-muted)' }}>No labor entries in the selected range.</p>
       ) : (
         <>
           {/* KPIs */}
@@ -565,7 +565,7 @@ export default function Financials() {
 function Section({ title, children }) {
   return (
     <div style={{
-      background: '#fff', border: '1px solid #e3e6ea', borderRadius: 8,
+      background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8,
       padding: 14, marginBottom: 20
     }}>
       <h3 style={{ margin: '0 0 10px', fontSize: 15 }}>{title}</h3>
@@ -575,14 +575,14 @@ function Section({ title, children }) {
 }
 
 function Empty() {
-  return <div style={{ color: '#6b7280', fontSize: 13 }}>No data.</div>
+  return <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>No data.</div>
 }
 
 const tableStyle = { width: '100%', borderCollapse: 'collapse', fontSize: 13 }
-const tdLeft  = { padding: '6px 8px', borderBottom: '1px solid #f0f2f5' }
-const tdRight = { padding: '6px 8px', borderBottom: '1px solid #f0f2f5', textAlign: 'right', whiteSpace: 'nowrap' }
-const thLeft  = { padding: '6px 8px', textAlign: 'left',  borderBottom: '1px solid #e3e6ea', fontSize: 12, color: '#6b7280' }
-const thRight = { padding: '6px 8px', textAlign: 'right', borderBottom: '1px solid #e3e6ea', fontSize: 12, color: '#6b7280' }
+const tdLeft  = { padding: '6px 8px', borderBottom: '1px solid var(--border)' }
+const tdRight = { padding: '6px 8px', borderBottom: '1px solid var(--border)', textAlign: 'right', whiteSpace: 'nowrap' }
+const thLeft  = { padding: '6px 8px', textAlign: 'left',  borderBottom: '1px solid var(--border)', fontSize: 12, color: 'var(--text-muted)' }
+const thRight = { padding: '6px 8px', textAlign: 'right', borderBottom: '1px solid var(--border)', fontSize: 12, color: 'var(--text-muted)' }
 const badgeUnion = {
   marginLeft: 6, background: '#e0f0ff', color: '#0b5cad',
   fontSize: 10, padding: '1px 6px', borderRadius: 3, verticalAlign: 'middle'
