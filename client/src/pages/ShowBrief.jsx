@@ -57,7 +57,7 @@ export default function ShowBrief() {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))', gap: 12 }}>
         {SECTIONS.slice(1).map(sec => (
           <SectionCard key={sec.key} title={sec.title} onOpenSources={setDrill}>
-            {renderSection(sec.key, brief, setDrill)}
+            {renderSection(sec.key, brief, setDrill, { showId, onRefresh: load })}
           </SectionCard>
         ))}
       </div>
@@ -162,7 +162,7 @@ function SectionCard({ title, children }) {
   )
 }
 
-function renderSection(key, brief, setDrill) {
+function renderSection(key, brief, setDrill, ctx) {
   const items = brief[key]
   if (!items || (Array.isArray(items) && items.length === 0)) {
     return <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>No items.</div>
@@ -175,9 +175,9 @@ function renderSection(key, brief, setDrill) {
     case 'waitingOn':           return <WaitingList items={items} setDrill={setDrill} />
     case 'keyContacts':         return <ContactsList items={items} />
     case 'loadInPlan':          return <LoadInList items={items} />
-    case 'recommendedActions':  return <ActionList items={items} setDrill={setDrill} />
+    case 'recommendedActions':  return <ActionList items={items} setDrill={setDrill} ctx={ctx} />
     case 'recentEmailIntel':    return <IntelList items={items} setDrill={setDrill} />
-    case 'proposedFormUpdates': return <ProposalList items={items} setDrill={setDrill} />
+    case 'proposedFormUpdates': return <ProposalList items={items} setDrill={setDrill} ctx={ctx} />
     case 'venueImpact':         return <ImpactList items={items} setDrill={setDrill} />
     case 'documents':           return <DocList items={items} setDrill={setDrill} />
     case 'advancementHistory':  return <HistoryList items={items} setDrill={setDrill} />
@@ -323,17 +323,28 @@ function LoadInList({ items }) {
     </div>
   ))
 }
-function ActionList({ items, setDrill }) {
-  return items.map(i => (
-    <div key={i.id} style={{ padding: '6px 0', borderTop: '1px solid #f0f0f0' }}>
-      <div style={{ fontSize: 13 }}>
-        <ClaimBadge type={i.claimType} />
-        <TierBadge tier={i.tier} /> {i.text}
-      </div>
-      {i.why && <TinyMeta text={i.why} />}
-      <SourcesLink item={i} setDrill={setDrill} />
-    </div>
-  ))
+function ActionList({ items, setDrill, ctx }) {
+  return (
+    <>
+      {items.map(i => (
+        <div key={i.id} style={{ padding: '6px 0', borderTop: '1px solid #f0f0f0' }}>
+          <div style={{ fontSize: 13 }}>
+            <ClaimBadge type={i.claimType} />
+            <TierBadge tier={i.tier} /> {i.text}
+          </div>
+          {i.why && <TinyMeta text={i.why} />}
+          <SourcesLink item={i} setDrill={setDrill} />
+        </div>
+      ))}
+      {ctx?.showId && (
+        <div style={{ paddingTop: 8, marginTop: 6, borderTop: '1px solid var(--border)', fontSize: 12 }}>
+          <Link to={`/email-intel?showId=${encodeURIComponent(ctx.showId)}`} style={{ color: '#3b82f6' }}>
+            Review pending AI proposals and approve/reject in Email Intel →
+          </Link>
+        </div>
+      )}
+    </>
+  )
 }
 function IntelList({ items, setDrill }) {
   return items.map(i => (
@@ -345,18 +356,68 @@ function IntelList({ items, setDrill }) {
     </div>
   ))
 }
-function ProposalList({ items, setDrill }) {
-  return items.map(i => (
-    <div key={i.id} style={{ padding: '6px 0', borderTop: '1px solid #f0f0f0' }}>
+function ProposalList({ items, setDrill, ctx }) {
+  return (
+    <>
+      {items.map(i => (
+        <ProposalRow key={i.id} item={i} setDrill={setDrill} onDecided={ctx?.onRefresh} />
+      ))}
+      {ctx?.showId && items.length > 0 && (
+        <div style={{ paddingTop: 8, marginTop: 6, borderTop: '1px solid var(--border)', fontSize: 12 }}>
+          <Link to={`/email-intel?showId=${encodeURIComponent(ctx.showId)}`} style={{ color: '#3b82f6' }}>
+            Open full review in Email Intel →
+          </Link>
+        </div>
+      )}
+    </>
+  )
+}
+function ProposalRow({ item: i, setDrill, onDecided }) {
+  const [busy, setBusy] = useState(null) // 'approve' | 'reject' | null
+  const [err, setErr] = useState(null)
+  async function decide(action) {
+    if (busy) return
+    if (action === 'reject' && !window.confirm(`Reject proposed change to ${i.humanField}?`)) return
+    setBusy(action); setErr(null)
+    try {
+      await api.post(`/email-intel/facts/${encodeURIComponent(i.id)}/${action}`, {})
+      onDecided?.()
+    } catch (e) {
+      setErr(e.response?.data?.message || e.message)
+      setBusy(null)
+    }
+  }
+  return (
+    <div style={{ padding: '6px 0', borderTop: '1px solid #f0f0f0' }}>
       <div style={{ fontSize: 13 }}>
         <ClaimBadge type={i.claimType} />
         <strong>{i.humanField}</strong>: {String(i.current ?? '—')} → <strong>{String(i.proposed)}</strong>
         <RiskBadge risk={i.risk} />
       </div>
       {i.reason && <TinyMeta text={i.reason} />}
-      <SourcesLink item={i} setDrill={setDrill} />
+      <div style={{ marginTop: 6, display: 'flex', gap: 6, alignItems: 'center' }}>
+        <button
+          onClick={() => decide('approve')}
+          disabled={!!busy}
+          style={{
+            fontSize: 12, padding: '3px 10px', borderRadius: 4, border: 'none',
+            background: '#22c55e', color: '#fff', cursor: busy ? 'wait' : 'pointer',
+          }}
+        >{busy === 'approve' ? 'Approving…' : 'Approve'}</button>
+        <button
+          onClick={() => decide('reject')}
+          disabled={!!busy}
+          style={{
+            fontSize: 12, padding: '3px 10px', borderRadius: 4,
+            border: '1px solid var(--border)', background: 'transparent',
+            color: 'var(--text)', cursor: busy ? 'wait' : 'pointer',
+          }}
+        >{busy === 'reject' ? 'Rejecting…' : 'Reject'}</button>
+        <SourcesLink item={i} setDrill={setDrill} />
+      </div>
+      {err && <div style={{ fontSize: 11, color: '#c00', marginTop: 4 }}>{err}</div>}
     </div>
-  ))
+  )
 }
 function RiskBadge({ risk }) {
   const map = { high:{bg:'#fee',color:'#900'}, low:{bg:'#eaf6ea',color:'#2a6b2a'}, unknown:{bg:'#f4f4f4',color: 'var(--text-muted)'} }

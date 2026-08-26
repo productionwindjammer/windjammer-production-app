@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
 import api from '../api'
 import Modal from '../components/Modal'
 
@@ -259,12 +260,30 @@ function DetailView({ data, onRules }) {
       {/* ── WAITING ON ── */}
       {data.waitingOn?.length ? (
         <Section title="⏳ WAITING ON">
-          {data.waitingOn.map((w, i) => (
-            <div key={i} style={rowBox}>
-              <div><strong>{w.kind === 'email_fact' ? `Approve email fact: ${w.field}` : w.ruleId}</strong></div>
-              <div style={{ fontSize: 12, color: '#94a3b8' }}>{w.why || ''}{w.from ? ` — from ${w.from}` : ''}</div>
-            </div>
-          ))}
+          {data.waitingOn.map((w, i) => {
+            const isFact = w.kind === 'email_fact'
+            const body = (
+              <>
+                <div>
+                  <strong>{isFact ? `Approve email fact: ${w.field}` : w.ruleId}</strong>
+                  {isFact && <span style={{ marginLeft: 8, fontSize: 11, color: '#3b82f6' }}>Review →</span>}
+                </div>
+                <div style={{ fontSize: 12, color: '#94a3b8' }}>{w.why || ''}{w.from ? ` — from ${w.from}` : ''}</div>
+              </>
+            )
+            if (isFact && data.showId) {
+              return (
+                <Link
+                  key={i}
+                  to={`/email-intel?showId=${encodeURIComponent(data.showId)}`}
+                  style={{ ...rowBox, display: 'block', textDecoration: 'none', color: 'inherit' }}
+                >
+                  {body}
+                </Link>
+              )
+            }
+            return <div key={i} style={rowBox}>{body}</div>
+          })}
         </Section>
       ) : null}
 
@@ -280,6 +299,16 @@ function DetailView({ data, onRules }) {
               </li>
             ))}
           </ol>
+          {data.showId && (
+            <div style={{ marginTop: 8, fontSize: 12 }}>
+              <Link
+                to={`/email-intel?showId=${encodeURIComponent(data.showId)}`}
+                style={{ color: '#3b82f6' }}
+              >
+                Review pending AI proposals and approve/reject in Email Intel →
+              </Link>
+            </div>
+          )}
         </Section>
       ) : null}
 
