@@ -8,6 +8,7 @@ import Onboard from './pages/Onboard'
 import Dashboard from './pages/Dashboard'
 import Shows from './pages/Shows'
 import ShowDetail from './pages/ShowDetail'
+import ShowBrief from './pages/ShowBrief'
 import Events from './pages/Events'
 import EventSchedule from './pages/EventSchedule'
 import Advancing from './pages/Advancing'
@@ -20,12 +21,17 @@ import Vendors from './pages/Vendors'
 import Staff from './pages/Staff'
 import StaffDetail from './pages/StaffDetail'
 import TechPack from './pages/TechPack'
+import VenueKnowledge from './pages/VenueKnowledge'
+import VenueKnowledgeReview from './pages/VenueKnowledgeReview'
+import IndustryKnowledge from './pages/IndustryKnowledge'
 import Users from './pages/Users'
 import Settings from './pages/Settings'
 import Calendar from './pages/Calendar'
 import Artists from './pages/Artists'
 import Email from './pages/Email'
+import EmailIntel from './pages/EmailIntel'
 import EmailTemplates from './pages/EmailTemplates'
+import AdvancementDashboard from './pages/AdvancementDashboard'
 import { SettingsProvider } from './context/SettingsContext'
 import { SplitProvider } from './context/SplitContext'
 import { VenueProvider } from './context/VenueContext'
@@ -46,6 +52,7 @@ export default function App() {
             <Route path="/dashboard"   element={<Dashboard />} />
             <Route path="/shows"       element={<Shows />} />
             <Route path="/shows/:id"   element={<ShowDetail />} />
+            <Route path="/shows/:id/brief" element={<ShowBrief />} />
             <Route path="/events"      element={<Events />} />
             <Route path="/events/:id/schedule" element={<EventSchedule />} />
             <Route path="/calendar"    element={<Calendar />} />
@@ -62,8 +69,13 @@ export default function App() {
             <Route path="/staff/:id"   element={<StaffDetail />} />
             <Route path="/users"       element={<Users />} />
             <Route path="/tech-pack"   element={<TechPack />} />
+            <Route path="/venue-knowledge" element={<VenueKnowledge />} />
+            <Route path="/venue-knowledge-review" element={<VenueKnowledgeReview />} />
+            <Route path="/industry-knowledge" element={<IndustryKnowledge />} />
             <Route path="/email"       element={<Email />} />
+            <Route path="/email-intel" element={<EmailIntel />} />
             <Route path="/email-templates" element={<EmailTemplates />} />
+            <Route path="/advancement" element={<AdvancementDashboard />} />
             <Route path="/settings"    element={<Settings />} />
           </Route>
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
