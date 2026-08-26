@@ -1065,6 +1065,36 @@ app.put('/api/settings/venue', requireAuth, requireRole('admin', 'production_man
 crudRoutes(app, '/api/schedule',        'schedule',  ['admin','production_manager','venue_management','promoter']);
 crudRoutes(app, '/api/labor',           'labor',     ['admin','production_manager','stage_manager'], { afterCreate: notifyShiftAssigned });
 
+// ── Per-show call sheet (contacts) ────────────────────────────────────────
+// A real advance is coordinated across a dozen or more contacts. Standardized
+// roles make the brief able to spot missing critical seats (e.g. no Tour PM
+// listed) and let the print packet render a clean call sheet.
+const SHOW_CONTACT_ROLES = Object.freeze([
+  'Tour Manager', 'Tour Production Manager', 'Tour Accountant',
+  'Artist Management', 'Booking Agent',
+  'Promoter Rep', 'Promoter Runner',
+  'FOH Engineer', 'Monitor Engineer', 'Lighting Designer', 'Backline Tech',
+  'Bus Driver', 'Truck Driver',
+  'Venue Production Manager', 'Venue Stage Manager', 'House Sound',
+  'House Lighting', 'Local Crew Steward',
+  'Security Chief', 'Medic', 'Box Office', 'Merch Lead', 'Catering Lead',
+  'Runner', 'Other',
+]);
+app.get('/api/show-contact-roles', requireAuth, (_req, res) => {
+  res.json({ success: true, data: SHOW_CONTACT_ROLES });
+});
+crudRoutes(app, '/api/show-contacts', 'showContacts',
+  ['admin','production_manager','stage_manager','venue_management']);
+
+// ── Waiting-on tracker (ShowAsks) ────────────────────────────────────────
+// Explicit, PM-controlled log of "asked X for Y". Rows the PM creates are
+// FACTs (they typed them). AI can propose asks from email intel; those enter
+// with source='ai-proposed' and status='open' and require no separate
+// approval step because they don't touch authoritative rows — but the PM can
+// dismiss or edit any of them at will.
+crudRoutes(app, '/api/show-asks',      'showAsks',
+  ['admin','production_manager','stage_manager','venue_management']);
+
 // Stage managers can create/edit maintenance items and project proposals, but
 // only admin / production_manager may approve, reject, or delete them.
 const APPROVAL_STATUSES = new Set(['approved', 'rejected']);
@@ -1088,6 +1118,584 @@ crudRoutes(app, '/api/vendors',         'vendors');
 crudRoutes(app, '/api/vendor-bookings', 'vendorBookings');
 crudRoutes(app, '/api/settlement',      'settlement');
 crudRoutes(app, '/api/unavailability',  'unavailability', ['admin','production_manager']);
+
+// ── Venue Intelligence ──────────────────────────────────────────────────────
+// Persistent venue knowledge: permanent RULES (what the building can/can't do)
+// and historical OBSERVATIONS (patterns we've seen across shows). This is the
+// venue-scoped tier of the AI knowledge system. It is deliberately kept
+// separate from advance/schedule data — those are current-show facts, not
+// venue capabilities. See venueKnowledge.js for the taxonomy and the safety
+// rule: `analyzeCapability` never fabricates missing information.
+const venueKnowledge = require('./venueKnowledge');
+const VENUE_WRITE_ROLES = ['admin','production_manager','venue_management'];
+// Internal-staff roles that may read AI content (email excerpts, audit logs,
+// proposals, briefs). Promoters and crew NEVER see raw AI content.
+const AI_READ_ROLES = ['admin','production_manager','stage_manager','venue_management'];
+// Roles that may read the AI change-log and correction audit trails.
+const AI_AUDIT_ROLES = ['admin','production_manager'];
+
+// Per-show ACL. Admin/PM/venue_management/stage_manager see every show.
+// Promoters see shows they booked (Shows.promoter matches their name or
+// email). Crew see shows they're scheduled on (Labor row for that show).
+// Used to gate per-show AI reads so a promoter can view the brief for
+// THEIR show without also seeing every other show in the workspace.
+async function canUserAccessShow(user, showId) {
+  if (!user || !showId) return false;
+  const role = user.role || '';
+  if (['admin','production_manager','stage_manager','venue_management'].includes(role)) return true;
+  const shows = await sheets.getRows(config.googleSheets.sheets.shows);
+  const show = shows.find(s => String(s.id) === String(showId));
+  if (!show) return false;
+  const name  = String(user.name  || '').trim().toLowerCase();
+  const email = String(user.email || '').trim().toLowerCase();
+  if (role === 'promoter') {
+    const promoterField = String(show.promoter || '').trim().toLowerCase();
+    if (!promoterField) return false;
+    return (name  && promoterField.includes(name))
+        || (email && promoterField.includes(email));
+  }
+  if (role === 'crew') {
+    const labor = await sheets.getRows(config.googleSheets.sheets.labor);
+    return labor.some(l =>
+      String(l.showId) === String(showId) && (
+        (name  && String(l.workerName || '').toLowerCase().includes(name)) ||
+        (user.staffId && String(l.staffId || '') === String(user.staffId))
+      )
+    );
+  }
+  return false;
+}
+
+// Express middleware version — reads showId from route params. Attach after
+// `requireAuth` on any per-show AI read endpoint that should be scoped.
+function requireShowAccess(req, res, next) {
+  const showId = req.params.showId || req.query.showId || '';
+  if (!showId) return res.status(400).json({ success: false, message: 'showId required' });
+  canUserAccessShow(req.user, showId).then(ok => {
+    if (!ok) return res.status(403).json({ success: false, message: 'No access to this show' });
+    next();
+  }).catch(err => res.status(500).json({ success: false, message: err.message }));
+}
+
+app.get('/api/venue-knowledge', requireAuth, async (req, res) => {
+  try {
+    const filter = {};
+    for (const k of ['kind','category','subcategory','scope','status','subject','attributePath']) {
+      if (req.query[k]) filter[k] = String(req.query[k]);
+    }
+    const items = await venueKnowledge.listAll(filter);
+    res.json({ success: true, data: items });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+
+app.get('/api/venue-knowledge/observations', requireAuth, async (req, res) => {
+  try {
+    const items = await venueKnowledge.getObservations({
+      subject:       req.query.subject       || null,
+      attributePath: req.query.attributePath || null,
+      category:      req.query.category      || null,
+    });
+    res.json({ success: true, data: items });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+
+app.get('/api/venue-knowledge/:id', requireAuth, async (req, res) => {
+  try {
+    const item = await venueKnowledge.findById(req.params.id);
+    if (!item) return res.status(404).json({ success: false, message: 'Not found' });
+    res.json({ success: true, data: item });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+
+app.get('/api/venue-knowledge/:id/history', requireAuth, async (req, res) => {
+  try {
+    const history = await venueKnowledge.getHistory(req.params.id);
+    res.json({ success: true, data: history });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+
+app.post('/api/venue-knowledge', requireAuth, requireRole(...VENUE_WRITE_ROLES), async (req, res) => {
+  try {
+    const item = await venueKnowledge.createItem(req.body || {}, req.user.id);
+    res.json({ success: true, data: item });
+  } catch (err) {
+    const status = err.code === 'validation' ? 400 : 500;
+    res.status(status).json({ success: false, message: err.message });
+  }
+});
+
+app.put('/api/venue-knowledge/:id', requireAuth, requireRole(...VENUE_WRITE_ROLES), async (req, res) => {
+  try {
+    const item = await venueKnowledge.updateItem(req.params.id, req.body || {}, req.user.id, (req.body || {}).note);
+    res.json({ success: true, data: item });
+  } catch (err) {
+    const status = err.code === 'not_found' ? 404
+                 : err.code === 'validation' || err.code === 'invalid_state' ? 400
+                 : 500;
+    res.status(status).json({ success: false, message: err.message });
+  }
+});
+
+app.delete('/api/venue-knowledge/:id', requireAuth, requireRole('admin'), async (req, res) => {
+  try {
+    const item = await venueKnowledge.archiveItem(req.params.id, req.user.id, req.query.note || '');
+    res.json({ success: true, data: item });
+  } catch (err) {
+    const status = err.code === 'not_found' ? 404 : 500;
+    res.status(status).json({ success: false, message: err.message });
+  }
+});
+
+// Ask the venue: "Can we do X?" — Returns a structured comparison of the
+// tour's request against what the venue can actually provide. Refuses to
+// guess: when there's no rule on file it returns matches:'unknown'.
+app.post('/api/venue-knowledge/analyze', requireAuth, requireRole(...AI_READ_ROLES), async (req, res) => {
+  try {
+    const result = await venueKnowledge.analyzeCapability(req.body || {});
+    res.json({ success: true, data: result });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+
+// ── Email Intelligence ──────────────────────────────────────────────────────
+// Reads production email threads as CONVERSATIONS. Extracts structured facts
+// with provenance, detects supersession, questions, deadlines, conflicts, and
+// stages every change as a PROPOSAL for PM review. Nothing is auto-applied.
+// See emailIntelligence.js for the full contract.
+const emailIntel = require('./emailIntelligence');
+// Maps approved AI facts back into the existing Shows/Advancing/Schedule forms
+// and writes to the immutable AiChangeLog audit trail.
+const factMapping = require('./factMapping');
+
+// Live-concert industry knowledge ontology + venue-extensible rules.
+// Six-tier stratified knowledge model. Never fabricates values.
+const industry = require('./industryKnowledge');
+
+// Corrections log + candidate knowledge review. Repeated corrections become
+// candidate rules that require PM authorization before promotion.
+const learning = require('./learningSystem');
+
+// Assembles the 12-section PM Show Brief. Deterministic, fully source-linked.
+const showBrief = require('./showBrief');
+const showPacket = require('./showPacket');
+
+// ── Printable show packet ────────────────────────────────────────────────
+// Zero-AI, source-of-truth packet a PM prints Friday afternoon. Composed
+// from Shows + Advancing + Schedule + Labor + ShowContacts + ShowAsks +
+// ArtistDocuments only. Per-show gated.
+app.get('/api/show-packet/:showId', requireAuth, requireShowAccess, async (req, res) => {
+  try {
+    const data = await showPacket.buildPacketData(req.params.showId);
+    const html = showPacket.renderPacketHtml(data);
+    res.set('Content-Type', 'text/html; charset=utf-8').send(html);
+  } catch (err) {
+    if (err.code === 'not_found') return res.status(404).send('Show not found.');
+    console.error('[show-packet]', err);
+    res.status(500).send('Error building show packet: ' + err.message);
+  }
+});
+
+// Analyze an ad-hoc thread (messages posted in the request). No writes.
+// Body: { messages: [...], shows?: [...], existingShowData?: {...}, threadContext?: {...} }
+app.post('/api/email-intel/analyze', requireAuth, requireRole(...AI_READ_ROLES), async (req, res) => {
+  try {
+    let { messages = [], shows, existingShowData, threadContext } = req.body || {};
+    if (!Array.isArray(shows)) shows = await sheets.getRows(config.googleSheets.sheets.shows);
+    const analysis = await emailIntel.analyzeThread({ messages, shows, existingShowData, threadContext });
+    res.json({ success: true, data: analysis });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+
+// Analyze an existing Gmail thread and stage its facts as proposals. PM only.
+app.post('/api/email-intel/analyze-gmail-thread', requireAuth, requireRole('admin','production_manager','stage_manager'), async (req, res) => {
+  try {
+    const { threadId } = req.body || {};
+    if (!threadId) return res.status(400).json({ success: false, message: 'threadId required' });
+
+    const client = await gmail.getGmailClientForToken(req.user.id).catch(() => null);
+    if (!client) return res.status(400).json({ success: false, message: 'Gmail not connected for this user' });
+
+    const thread = await client.users.threads.get({ userId: 'me', id: threadId, format: 'full' });
+    const messages = (thread.data.messages || []).map(m => {
+      const parsed = gmail.parseMessage(m);
+      return {
+        id:        parsed.gmailMessageId,
+        threadId:  parsed.gmailThreadId,
+        from:      parsed.from,
+        subject:   parsed.subject,
+        date:      parsed.date,
+        body:      parsed.textBody || parsed.htmlBody.replace(/<[^>]+>/g, ' '),
+      };
+    });
+    const shows = await sheets.getRows(config.googleSheets.sheets.shows);
+    const analysis = await emailIntel.analyzeThread({ messages, shows });
+    const written  = await emailIntel.proposeFromAnalysis(analysis, { actor: 'user:' + req.user.id });
+    res.json({ success: true, data: { analysis, written } });
+  } catch (err) {
+    console.error('[email-intel gmail]', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Stage a manually-supplied analysis (or its underlying messages) as proposals.
+app.post('/api/email-intel/propose', requireAuth, requireRole('admin','production_manager','stage_manager'), async (req, res) => {
+  try {
+    let { analysis, messages, shows } = req.body || {};
+    if (!analysis) {
+      if (!Array.isArray(shows)) shows = await sheets.getRows(config.googleSheets.sheets.shows);
+      analysis = await emailIntel.analyzeThread({ messages: messages || [], shows });
+    }
+    const written = await emailIntel.proposeFromAnalysis(analysis, { actor: 'user:' + req.user.id });
+    res.json({ success: true, data: written });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+
+// Review queue: proposed facts awaiting decision.
+app.get('/api/email-intel/queue', requireAuth, requireRole(...AI_READ_ROLES), async (req, res) => {
+  try {
+    const items = await emailIntel.listQueue({
+      status:   req.query.status || 'proposed',
+      showId:   req.query.showId || null,
+      threadId: req.query.threadId || null,
+    });
+    // Optional inline preview so the UI can render the FIELD/CURRENT/PROPOSED/
+    // SOURCE/CONFIDENCE/REASON/STATUS row without an extra round-trip per fact.
+    if (req.query.withPreview === '1') {
+      const previews = await Promise.all(items.map(f => factMapping.preview(f).catch(err => ({ error: err.message }))));
+      const merged = items.map((f, i) => ({ fact: f, preview: previews[i] }));
+      return res.json({ success: true, data: merged });
+    }
+    res.json({ success: true, data: items });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+
+app.get('/api/email-intel/facts/:id', requireAuth, requireRole(...AI_READ_ROLES), async (req, res) => {
+  try {
+    const fact = await emailIntel.getFactById(req.params.id);
+    if (!fact) return res.status(404).json({ success: false, message: 'Not found' });
+    res.json({ success: true, data: fact });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+
+// Field-diff preview: FIELD / CURRENT / PROPOSED / SOURCE / CONFIDENCE / REASON / STATUS.
+app.get('/api/email-intel/facts/:id/preview', requireAuth, requireRole(...AI_READ_ROLES), async (req, res) => {
+  try {
+    const fact = await emailIntel.getFactById(req.params.id);
+    if (!fact) return res.status(404).json({ success: false, message: 'Not found' });
+    const preview = await factMapping.preview(fact);
+    res.json({ success: true, data: preview });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+
+app.post('/api/email-intel/facts/:id/approve', requireAuth, requireRole('admin','production_manager'), async (req, res) => {
+  try {
+    const body = req.body || {};
+    const note = body.note || '';
+    let fact = await emailIntel.approveFact(req.params.id, 'user:' + req.user.id, note);
+    // If the PM overrode the proposed value, log it as a correction BEFORE
+    // applying — the corrected value is what actually goes to the form.
+    if (body.correctedValue !== undefined && !valuesEqualLoose(body.correctedValue, fact.newValue)) {
+      const shows = await sheets.getRows(config.googleSheets.sheets.shows);
+      const show = shows.find(s => s.id === fact.showId) || {};
+      await learning.logCorrection({
+        showId: fact.showId, showDate: show.date || '',
+        venue: show.venue || '', promoter: show.promoter || '', artist: show.artist || '',
+        tourName: show.tour || '',
+        factId: fact.id, field: fact.field, source: 'email:' + (fact.threadId || ''),
+        aiValue: fact.newValue, correctedValue: body.correctedValue,
+        correctionType: body.correctionType || 'SHOW_SPECIFIC',
+        reason: body.reason || '', note,
+      }, req.user);
+      fact = { ...fact, newValue: body.correctedValue };
+    }
+    const applied = await factMapping.applyApprovedFact(fact, req.user, { note });
+    res.json({ success: true, data: { fact, applied } });
+  } catch (err) {
+    const status = err.code === 'not_found' ? 404 : err.code === 'invalid_state' ? 400 : 500;
+    res.status(status).json({ success: false, message: err.message });
+  }
+});
+
+function valuesEqualLoose(a, b) {
+  if (a === b) return true;
+  return String(a ?? '') === String(b ?? '');
+}
+
+// Batch approval — LOW-RISK, no-conflict, mapped facts only. Anything else
+// is rejected up-front with a per-fact reason so the UI can surface it.
+app.post('/api/email-intel/facts/batch-approve', requireAuth, requireRole('admin','production_manager'), async (req, res) => {
+  try {
+    const ids  = Array.isArray(req.body?.ids) ? req.body.ids : [];
+    const note = req.body?.note || '';
+    if (ids.length === 0) return res.status(400).json({ success: false, message: 'no ids' });
+
+    const results = [];
+    for (const id of ids) {
+      try {
+        const fact = await emailIntel.getFactById(id);
+        if (!fact) { results.push({ id, ok: false, reason: 'not_found' }); continue; }
+        const preview = await factMapping.preview(fact);
+        if (!factMapping.eligibleForBatch(preview)) {
+          // Spec: high-risk changes MUST NOT be batch-approvable. Refuse.
+          results.push({ id, ok: false, reason: 'not_eligible_for_batch', risk: preview.risk, status: preview.status });
+          continue;
+        }
+        const approved = await emailIntel.approveFact(id, 'user:' + req.user.id, note);
+        const applied  = await factMapping.applyApprovedFact(approved, req.user, { note });
+        results.push({ id, ok: true, applied });
+      } catch (err) {
+        results.push({ id, ok: false, reason: 'error', message: err.message });
+      }
+    }
+    res.json({ success: true, data: results });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+
+app.post('/api/email-intel/facts/:id/reject', requireAuth, requireRole('admin','production_manager'), async (req, res) => {
+  try {
+    const out = await emailIntel.rejectFact(req.params.id, 'user:' + req.user.id, (req.body || {}).note || '');
+    res.json({ success: true, data: out });
+  } catch (err) {
+    const status = err.code === 'not_found' ? 404 : err.code === 'invalid_state' ? 400 : 500;
+    res.status(status).json({ success: false, message: err.message });
+  }
+});
+
+// AI change audit log — every fact approval writes here. Never edited/deleted.
+app.get('/api/ai-changes', requireAuth, requireRole(...AI_AUDIT_ROLES), async (req, res) => {
+  try {
+    const rows = await sheets.getRows(config.googleSheets.sheets.aiChangeLog);
+    const filtered = rows.filter(r =>
+      (!req.query.showId || r.showId === req.query.showId) &&
+      (!req.query.status || r.status === req.query.status),
+    );
+    // Newest first
+    filtered.sort((a, b) => (b.at || '').localeCompare(a.at || ''));
+    res.json({ success: true, data: filtered });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+
+// ── Industry Knowledge Layer ────────────────────────────────────────────────
+// Stratified domain ontology + venue-extensible rules. Never invents values.
+
+app.get('/api/industry/domains', requireAuth, (req, res) => {
+  res.json({ success: true, data: industry.listDomains() });
+});
+
+app.get('/api/industry/concepts', requireAuth, (req, res) => {
+  res.json({ success: true, data: industry.listConcepts({ domain: req.query.domain }) });
+});
+
+app.get('/api/industry/concepts/:id', requireAuth, (req, res) => {
+  const c = industry.getConcept(req.params.id);
+  if (!c) return res.status(404).json({ success: false, message: 'concept not found' });
+  res.json({ success: true, data: c });
+});
+
+app.get('/api/industry/workflows', requireAuth, (req, res) => {
+  res.json({ success: true, data: industry.listWorkflows() });
+});
+
+app.get('/api/industry/workflows/:id', requireAuth, (req, res) => {
+  const w = industry.getWorkflow(req.params.id);
+  if (!w) return res.status(404).json({ success: false, message: 'workflow not found' });
+  res.json({ success: true, data: w });
+});
+
+app.get('/api/industry/requirements/:domain', requireAuth, (req, res) => {
+  res.json({ success: true, data: industry.informationRequirements(req.params.domain) });
+});
+
+// Context-aware term resolution. Body: { term, context? }.
+app.post('/api/industry/resolve', requireAuth, async (req, res) => {
+  try {
+    const { term, context = '' } = req.body || {};
+    if (!term) return res.status(400).json({ success: false, message: 'term required' });
+    const userRules = await industry.loadUserRules();
+    const result = industry.resolveTerm(term, { context, userRules });
+    res.json({ success: true, data: result });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+
+// User-instructed ontology rules — the venue's local layer above industry standard.
+app.get('/api/industry/user-rules', requireAuth, async (req, res) => {
+  try {
+    await industry.ensureUserRulesSheet();
+    const rules = await industry.loadUserRules();
+    res.json({ success: true, data: rules });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+
+app.post('/api/industry/user-rules', requireAuth, requireRole('admin','production_manager'), async (req, res) => {
+  try {
+    await industry.ensureUserRulesSheet();
+    const row = await industry.addUserRule(req.body || {}, req.user);
+    res.json({ success: true, data: row });
+  } catch (err) { res.status(400).json({ success: false, message: err.message }); }
+});
+
+app.patch('/api/industry/user-rules/:id', requireAuth, requireRole('admin','production_manager'), async (req, res) => {
+  try {
+    const row = await industry.updateUserRule(req.params.id, req.body || {}, req.user);
+    res.json({ success: true, data: row });
+  } catch (err) { res.status(400).json({ success: false, message: err.message }); }
+});
+
+app.delete('/api/industry/user-rules/:id', requireAuth, requireRole('admin','production_manager'), async (req, res) => {
+  try {
+    await industry.deleteUserRule(req.params.id);
+    res.json({ success: true });
+  } catch (err) { res.status(400).json({ success: false, message: err.message }); }
+});
+
+// ── Learning / Correction System ────────────────────────────────────────────
+// Every PM correction is recorded here. Repeated corrections become
+// candidate knowledge that must be authorized before promotion to VenueKnowledge.
+
+app.post('/api/corrections', requireAuth, requireRole('admin','production_manager','stage_manager'), async (req, res) => {
+  try {
+    await learning.ensureSheets();
+    const row = await learning.logCorrection(req.body || {}, req.user);
+    res.json({ success: true, data: row });
+  } catch (err) { res.status(400).json({ success: false, message: err.message }); }
+});
+
+app.get('/api/corrections', requireAuth, requireRole(...AI_AUDIT_ROLES), async (req, res) => {
+  try {
+    const rows = await learning.listCorrections({
+      showId: req.query.showId,
+      field: req.query.field,
+      correctionType: req.query.correctionType,
+    });
+    res.json({ success: true, data: rows });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+
+app.post('/api/corrections/scan', requireAuth, requireRole('admin','production_manager'), async (req, res) => {
+  try {
+    await learning.ensureSheets();
+    const opts = {
+      minOccurrences: Number(req.body?.minOccurrences) || 3,
+      minShows:       Number(req.body?.minShows)       || 2,
+    };
+    const result = await learning.scanForPatterns(opts);
+    res.json({ success: true, data: result });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+
+app.get('/api/knowledge-candidates', requireAuth, requireRole(...AI_AUDIT_ROLES), async (req, res) => {
+  try {
+    const rows = await learning.listCandidates({ status: req.query.status });
+    res.json({ success: true, data: rows });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+
+app.post('/api/knowledge-candidates/:id/review', requireAuth, requireRole('admin','production_manager'), async (req, res) => {
+  try {
+    const { action, ...patch } = req.body || {};
+    if (!action) return res.status(400).json({ success: false, message: 'action required' });
+    const result = await learning.reviewCandidate(req.params.id, action, patch, req.user);
+    res.json({ success: true, data: result });
+  } catch (err) {
+    const status = err.code === 'not_found' ? 404 : err.code === 'invalid_state' ? 400 : 500;
+    res.status(status).json({ success: false, message: err.message });
+  }
+});
+
+// ── Show Brief — the PM's AI workspace for one show ─────────────────────────
+app.get('/api/show-brief/:showId', requireAuth, requireShowAccess, async (req, res) => {
+  try {
+    const brief = await showBrief.buildBrief(req.params.showId, { since: req.query.since });
+    res.json({ success: true, data: brief });
+  } catch (err) {
+    const status = err.code === 'not_found' ? 404 : 500;
+    res.status(status).json({ success: false, message: err.message });
+  }
+});
+
+// Thread rows (assignment + participants), and their issue list.
+app.get('/api/email-intel/threads', requireAuth, requireRole(...AI_READ_ROLES), async (req, res) => {
+  try {
+    const rows = await sheets.getRows(config.googleSheets.sheets.emailThreads);
+    res.json({ success: true, data: rows });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+
+app.get('/api/email-intel/issues', requireAuth, requireRole(...AI_READ_ROLES), async (req, res) => {
+  try {
+    const rows = await sheets.getRows(config.googleSheets.sheets.emailIssues);
+    const filtered = rows.filter(r =>
+      (!req.query.threadId || r.threadId === req.query.threadId) &&
+      (!req.query.showId   || r.showId   === req.query.showId) &&
+      (!req.query.status   || r.status   === req.query.status),
+    );
+    res.json({ success: true, data: filtered });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+
+// ── Show Advancement Intelligence ────────────────────────────────────────────
+// Stateless engine that composes show + advance + schedule + labor + vendor
+// bookings + approved email facts + venue knowledge into a per-show operational
+// readiness report. See advancementEngine.js for the full contract.
+const advancementEngine = require('./advancementEngine');
+
+app.get('/api/advancement/dashboard', requireAuth, requireRole(...AI_READ_ROLES), async (req, res) => {
+  try {
+    const upcomingOnly = req.query.all !== '1';
+    const summary = await advancementEngine.dashboardSummary({ upcomingOnly });
+    res.json({ success: true, data: summary });
+  } catch (err) {
+    console.error('[advancement dashboard]', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+app.get('/api/advancement/:showId', requireAuth, requireShowAccess, async (req, res) => {
+  try {
+    const state = await advancementEngine.buildShowState(req.params.showId);
+    const result = await advancementEngine.evaluate(state);
+    res.json({ success: true, data: result });
+  } catch (err) {
+    if (err.code === 'not_found') return res.status(404).json({ success: false, message: 'show_not_found' });
+    console.error('[advancement show]', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+app.get('/api/advancement/:showId/priorities', requireAuth, requireShowAccess, async (req, res) => {
+  try {
+    const state = await advancementEngine.buildShowState(req.params.showId);
+    const result = await advancementEngine.evaluate(state);
+    res.json({ success: true, data: {
+      status: result.status,
+      priorities: result.priorities,
+      recommendedActions: result.recommendedActions,
+    } });
+  } catch (err) {
+    if (err.code === 'not_found') return res.status(404).json({ success: false, message: 'show_not_found' });
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+app.get('/api/advancement/:showId/rules', requireAuth, requireShowAccess, async (req, res) => {
+  try {
+    // Full rule catalog + applies/because for THIS show, so the PM can see
+    // exactly why each requirement did or did not fire.
+    const state = await advancementEngine.buildShowState(req.params.showId);
+    const audit = [];
+    for (const rule of advancementEngine.RULES) {
+      const app = await Promise.resolve(rule.applies(state));
+      audit.push({
+        id: rule.id, category: rule.category, tier: rule.tier, title: rule.title,
+        applies: !!(app && app.applies),
+        because: app && app.applies ? app.because : null,
+      });
+    }
+    res.json({ success: true, data: audit });
+  } catch (err) {
+    if (err.code === 'not_found') return res.status(404).json({ success: false, message: 'show_not_found' });
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
 
 // ── Email Templates ──────────────────────────────────────────────────────────
 // Reusable email templates with {{merge-tag}} placeholders and auto-resolving
@@ -3576,6 +4184,7 @@ async function runAutoSync() {
     const relevance  = await buildInboxRelevanceFilter();
 
     let grandTotal = 0, grandLinked = 0;
+    let grandAnalyzed = 0, grandProposed = 0;
     const affectedShowIds = new Set();
     for (const user of connected) {
       const tag = user.isHouseMailbox === 'true' ? '🏠 ' : '';
@@ -3601,6 +4210,11 @@ async function runAutoSync() {
         continue;
       }
       const toAppend = [];
+      // Parallel array of full parsed messages for AI analysis. Only inbound
+      // messages with an assigned showId are candidates — outbound doesn't
+      // need extraction (it's ours) and unassigned messages have no show
+      // context to attach facts to.
+      const analyzable = [];
       let linked = 0;
       for (const ref of messageRefs) {
         if (storedKeys.has(`${user.id}|${ref.id}`)) continue;
@@ -3636,6 +4250,19 @@ async function runAutoSync() {
             sourceUserId:   user.id,
             sourceEmail:    user.gmailEmail || '',
           });
+          if (direction === 'inbound' && match?.showId) {
+            analyzable.push({
+              showId: match.showId,
+              parsed: {
+                id:       parsed.gmailMessageId,
+                threadId: parsed.gmailThreadId,
+                from:     parsed.from,
+                subject:  parsed.subject,
+                date:     parsed.date,
+                body:     parsed.textBody || (parsed.htmlBody || '').replace(/<[^>]+>/g, ' '),
+              },
+            });
+          }
           storedKeys.add(`${user.id}|${ref.id}`);
         } catch (err) {
           console.error(`[auto-sync] message ${ref.id}: ${err.message}`);
@@ -3649,21 +4276,62 @@ async function runAutoSync() {
           console.error(`[auto-sync] append failed for ${user.gmailEmail}: ${err.message}`);
         }
       }
+      // ── Charter-safe auto-analysis ─────────────────────────────────────
+      // Group new inbound messages by (showId, gmailThreadId) and stage
+      // proposals in EmailFacts. Proposals are ALWAYS pending — the PM must
+      // approve each one before it becomes an authoritative row. This
+      // preserves the "PM is final authority" invariant while removing the
+      // hand-crank of clicking "analyze" on every arriving thread.
+      // proposeFromAnalysis dedupes by (messageId, field, scope, showId), so
+      // re-syncs never produce duplicate proposals. One bad thread must not
+      // stop the sync; each is wrapped independently.
+      if (analyzable.length) {
+        const groups = new Map(); // key = `${showId}|${threadId}` → parsed[]
+        for (const a of analyzable) {
+          const key = `${a.showId}|${a.parsed.threadId}`;
+          if (!groups.has(key)) groups.set(key, { showId: a.showId, parsed: [] });
+          groups.get(key).parsed.push(a.parsed);
+        }
+        for (const { showId, parsed } of groups.values()) {
+          try {
+            const analysis = await emailIntel.analyzeThread({
+              messages: parsed,
+              shows,
+              threadContext: { showId },
+            });
+            const written = await emailIntel.proposeFromAnalysis(analysis, { actor: 'auto-sync' });
+            grandAnalyzed += 1;
+            grandProposed += (written && written.written) ? written.written.length : 0;
+          } catch (err) {
+            console.error(`[auto-sync] analyze failed for show=${showId} thread=${parsed[0]?.threadId}: ${err.message}`);
+          }
+        }
+      }
       grandTotal  += toAppend.length;
       grandLinked += linked;
       await new Promise(r => setTimeout(r, 1000)); // brief pause between users
     }
     if (grandTotal > 0)
-      console.log(`[auto-sync] Done — ${grandTotal} new email(s), ${grandLinked} auto-linked across ${connected.length} mailbox(es).`);
+      console.log(`[auto-sync] Done — ${grandTotal} new email(s), ${grandLinked} auto-linked; analyzed ${grandAnalyzed} thread(s), staged ${grandProposed} pending fact(s) across ${connected.length} mailbox(es).`);
   } catch (err) {
     console.error('[auto-sync] Error:', err.message);
   }
 }
 
-// Kick off the first run shortly after startup, then every 15 minutes.
-// Auto-sync intentionally disabled — connect accounts + sync manually from the Email page.
-// setTimeout(runAutoSync, 30 * 1000);
-// setInterval(runAutoSync, 15 * 60 * 1000);
+// Kick off the first run shortly after startup, then every N minutes.
+// Opt-in via env: AUTO_SYNC_MINUTES=15 enables 15-minute polling. Anything
+// falsy/zero/non-numeric keeps auto-sync disabled and forces PM-triggered
+// manual analysis (the original charter-safe default). Auto-analysis inside
+// runAutoSync still stages proposals as `pending` — the PM approval gate is
+// unchanged whether or not the schedule is enabled.
+{
+  const mins = Number(process.env.AUTO_SYNC_MINUTES || 0);
+  if (Number.isFinite(mins) && mins > 0) {
+    console.log(`[auto-sync] scheduled every ${mins} min (proposals stay pending; PM must approve)`);
+    setTimeout(runAutoSync, 30 * 1000);
+    setInterval(runAutoSync, mins * 60 * 1000);
+  }
+}
 
 // ── Inbox sync — pull entire Gmail inbox regardless of advance contact ────────
 app.post('/api/emails/sync-inbox', requireAuth, async (req, res) => {
