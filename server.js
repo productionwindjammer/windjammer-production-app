@@ -1,4 +1,14 @@
 ﻿require('dotenv').config();
+
+// Surface silent boot-time crashes in Railway logs instead of letting Node
+// exit with no explanation (which appears to the user as a 503 "Offline").
+process.on('uncaughtException', (err) => {
+  console.error('[fatal] uncaughtException:', err && (err.stack || err.message || err));
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[fatal] unhandledRejection:', reason && (reason.stack || reason.message || reason));
+});
+
 const express = require('express');
 const path    = require('path');
 const jwt     = require('jsonwebtoken');
@@ -12,6 +22,12 @@ const bot     = require('./advancingBot');
 const app = express();
 app.set('trust proxy', true);
 app.use(express.json({ limit: '50mb' }));
+
+// Lightweight liveness probe. Unauthenticated by design — Railway's edge and
+// external monitors hit this to confirm the container is alive.
+app.get('/api/health', (_req, res) => {
+  res.json({ ok: true, uptime: process.uptime(), pid: process.pid, node: process.version });
+});
 
 // Serve React build in production.
 // Hashed assets get long cache; HTML and sw.js MUST always be fresh so users
