@@ -1627,21 +1627,25 @@ app.post('/api/onboard/:token', async (req, res) => {
 });
 crudRoutes(app, '/api/staff', 'staff', ['admin','production_manager'], { afterCreate: autoCreateUserForStaff, awaitAfterCreate: true, deleteRoles: ['admin'] });
 
-// ── Users (admin-managed) ─────────────────────────────────────────────────────
-app.get('/api/users', requireAuth, requireRole('admin'), async (req, res) => {
+// ── Users (admin + production_manager) ────────────────────────────────────────
+// Production managers can list/create/invite non-admin users but cannot edit
+// existing users or grant admin. Admin-only for PUT.
+app.get('/api/users', requireAuth, requireRole('admin', 'production_manager'), async (req, res) => {
   try {
     const rows = await sheets.getRows(config.googleSheets.sheets.users);
     res.json({ success: true, data: rows.map(({ password, ...u }) => u) });
   } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 });
 
-app.post('/api/users', requireAuth, requireRole('admin'), async (req, res) => {
+app.post('/api/users', requireAuth, requireRole('admin', 'production_manager'), async (req, res) => {
   try {
     const { name, email, password, role, invite } = req.body;
     if (!name || !email || !role)
       return res.status(400).json({ success: false, message: 'Name, email, and role are required' });
     if (!invite && !password)
       return res.status(400).json({ success: false, message: 'Password is required (or enable invite mode)' });
+    if (req.user.role !== 'admin' && role === 'admin')
+      return res.status(403).json({ success: false, message: 'Only admin can grant the admin role.' });
 
     const normalizedEmail = String(email).trim().toLowerCase();
     const existing = await sheets.getRows(config.googleSheets.sheets.users);
@@ -1678,12 +1682,14 @@ app.post('/api/users', requireAuth, requireRole('admin'), async (req, res) => {
 // POST /api/users/:id/invite — (re)send an invite email to an existing user.
 // Used to re-issue the onboarding link if the user never completed setup or
 // the original link expired.
-app.post('/api/users/:id/invite', requireAuth, requireRole('admin'), async (req, res) => {
+app.post('/api/users/:id/invite', requireAuth, requireRole('admin', 'production_manager'), async (req, res) => {
   try {
     const users = await sheets.getRows(config.googleSheets.sheets.users);
     const user  = users.find(u => u.id === req.params.id);
     if (!user)         return res.status(404).json({ success: false, message: 'User not found' });
     if (!user.email)   return res.status(400).json({ success: false, message: 'User has no email on file' });
+    if (req.user.role !== 'admin' && user.role === 'admin')
+      return res.status(403).json({ success: false, message: 'Only admin can re-invite an admin.' });
     if (user.onboardingComplete === 'true')
       return res.status(400).json({ success: false, message: 'User has already completed onboarding. Reset their password via Edit instead.' });
     // Look up an optional linked staff record so onboarding can prefill.

@@ -11,7 +11,7 @@ const STAGE_COLORS = {
   inside: { bg: 'rgba(26,74,122,0.85)',  border: '#3b82f6', text: '#fff' },
   beach:  { bg: 'rgba(26,107,74,0.85)',  border: '#10b981', text: '#fff' },
 }
-const STATUS_DIM = { pending: 0.55, advancing: 0.75, cancelled: 0.35, settled: 0.5, confirmed: 1 }
+const STATUS_DIM = { pending: 0.55, advancing: 0.75, cancelled: 0.35, no_production: 0.35, settled: 0.5, confirmed: 1 }
 
 function ymd(d) {
   const y = d.getFullYear()
@@ -360,7 +360,7 @@ function ShowChip({ show, tf, onClick }) {
         border: `1px solid ${colors.border}`, borderRadius: 4,
         padding: '2px 5px', fontSize: 10.5, lineHeight: 1.2,
         cursor: 'pointer', opacity: dim,
-        textDecoration: status === 'cancelled' ? 'line-through' : 'none',
+        textDecoration: (status === 'cancelled' || status === 'no_production') ? 'line-through' : 'none',
         overflow: 'hidden',
       }}
     >

@@ -18,6 +18,8 @@ const ROLES = [
 
 export default function Users() {
   const { user: me } = useAuth()
+  const isAdmin = me?.role === 'admin'
+  const roleOptions = isAdmin ? ROLES : ROLES.filter(r => r.value !== 'admin')
   const [users, setUsers]   = useState([])
   const [loading, setLoad]  = useState(true)
   const [modal, setModal]   = useState(false)
@@ -209,7 +211,7 @@ export default function Users() {
                     <td className="text-muted">{(u.createdAt || '').slice(0, 10)}</td>
                     <td>
                       <div className="actions-cell">
-                        {u.onboardingComplete !== 'true' && u.email && (
+                        {u.onboardingComplete !== 'true' && u.email && (isAdmin || u.role !== 'admin') && (
                           <button
                             className="btn btn-ghost btn-sm"
                             onClick={() => handleResendInvite(u)}
@@ -218,8 +220,8 @@ export default function Users() {
                             ✉️ Invite
                           </button>
                         )}
-                        <button className="btn btn-ghost btn-sm" onClick={() => openEdit(u)}>Edit</button>
-                        <button className="btn btn-danger btn-sm" onClick={() => handleDelete(u)}>Del</button>
+                        {isAdmin && <button className="btn btn-ghost btn-sm" onClick={() => openEdit(u)}>Edit</button>}
+                        {isAdmin && <button className="btn btn-danger btn-sm" onClick={() => handleDelete(u)}>Del</button>}
                       </div>
                     </td>
                   </tr>
@@ -266,7 +268,7 @@ export default function Users() {
               <div className="form-group">
                 <label>Role *</label>
                 <select value={f.role} onChange={set('role')}>
-                  {ROLES.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
+                  {roleOptions.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
                 </select>
               </div>
               <div className="form-group">

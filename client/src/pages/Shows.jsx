@@ -326,6 +326,7 @@ export default function Shows() {
           <option value="confirmed">Confirmed</option>
           <option value="cancelled">Cancelled</option>
           <option value="settled">Settled</option>
+          <option value="no_production">No Production</option>
         </select>
         <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'rgba(255,255,255,0.7)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
           <input type="checkbox" checked={showPast} onChange={e => setShowPast(e.target.checked)} />
@@ -571,6 +572,7 @@ export default function Shows() {
                   <option value="confirmed">Confirmed</option>
                   <option value="cancelled">Cancelled</option>
                   <option value="settled">Settled</option>
+                  <option value="no_production">No Production (scrub from prod views)</option>
                 </select>
               </div>
             </div>

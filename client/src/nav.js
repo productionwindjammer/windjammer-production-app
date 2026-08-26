@@ -16,7 +16,7 @@ export const NAV_ITEMS = [
   { label: 'Day of Show',  path: '/day-of-show',   icon: '📅', sub: true, roles: ['admin', 'production_manager', 'stage_manager', 'venue_management', 'crew', 'staff', 'tech'] },
   { label: 'Vendors',      path: '/vendors',       icon: '🏢', roles: ['admin', 'production_manager'] },
   { label: 'Staff',        path: '/staff',         icon: '👥', roles: ['admin', 'production_manager'] },
-  { label: 'Users',        path: '/users',         icon: '🔐', roles: ['admin'] },
+  { label: 'Users',        path: '/users',         icon: '🔐', roles: ['admin', 'production_manager'] },
   { label: 'Tech Pack',    path: '/tech-pack',     icon: '📁', roles: ['admin', 'production_manager', 'stage_manager', 'venue_management', 'crew', 'staff', 'tech'] },
   { label: 'Email',        path: '/email',         icon: '✉️', roles: ['admin', 'production_manager', 'stage_manager'] },
   { label: 'Email Templates', path: '/email-templates', icon: '📝', sub: true, roles: ['admin', 'production_manager'] },

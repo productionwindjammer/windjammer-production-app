@@ -1515,6 +1515,7 @@ export default function ShowDetail() {
                   <option value="advancing">Advancing</option>
                   <option value="confirmed">Confirmed</option>
                   <option value="cancelled">Cancelled</option>
+                  <option value="no_production">No Production (scrub from prod views)</option>
                 </select>
               </div>
             </div>

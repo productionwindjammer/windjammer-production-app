@@ -7,6 +7,7 @@ import { useSettings } from '../context/SettingsContext'
 import { useVenue } from '../context/VenueContext'
 import { formatTime } from '../utils/time'
 import { getTicketStats } from '../utils/stages'
+import { isProductionActive } from '../utils/showFilters'
 
 // Parse YYYY-MM-DD dates as local noon to avoid UTC timezone shifts
 const parseDate = d => d ? new Date(d + 'T12:00:00') : null
@@ -140,7 +141,7 @@ export default function Dashboard() {
 function ManagerDashboard({ user, shows, labor, events = [], navigate, isManager, isStageManager, showRequests = [] }) {
   const today = startOfToday()
   const upcomingRaw = shows.filter(s => {
-    const d = parseDate(s.date); return d && d >= today && s.status !== 'cancelled'
+    const d = parseDate(s.date); return d && d >= today && isProductionActive(s)
   })
   // Collapse multi-night runs / event groups into a single event card
   const upcoming = useMemo(() => groupShowRuns(upcomingRaw, events), [shows, events])
@@ -440,7 +441,7 @@ function PendingRequestsPanel({ showRequests = [], shows = [], labor = [], navig
     if ((r.status || 'requested') === 'withdrawn') continue
     const show = shows.find(s => s.id === r.showId)
     const d = parseDate(show?.date)
-    if (!d || d < today || show?.status === 'cancelled') continue
+    if (!d || d < today || !isProductionActive(show)) continue
     const onCrew = labor.some(l => l.showId === r.showId && l.staffId === r.staffId)
     const list = grouped.get(r.showId) || []
     list.push({ ...r, _onCrew: onCrew })
@@ -721,7 +722,7 @@ function CrewDashboard({ user, shows, labor, navigate, showRequests = [], onRelo
       const show = shows.find(s => s.id === l.showId)
       return { ...l, _show: show, _date: parseDate(show?.date) }
     })
-    .filter(l => l._date && l._date >= today && l._show?.status !== 'cancelled')
+    .filter(l => l._date && l._date >= today && isProductionActive(l._show))
     .sort((a, b) => a._date - b._date)
 
   // My open requests (upcoming, non-withdrawn) that haven't turned into an assignment yet
@@ -732,7 +733,7 @@ function CrewDashboard({ user, shows, labor, navigate, showRequests = [], onRelo
       const show = shows.find(s => s.id === r.showId)
       return { ...r, _show: show, _date: parseDate(show?.date) }
     })
-    .filter(r => r._date && r._date >= today && r._show?.status !== 'cancelled')
+    .filter(r => r._date && r._date >= today && isProductionActive(r._show))
     .sort((a, b) => a._date - b._date)
 
   async function withdraw(reqId) {
@@ -1252,7 +1253,7 @@ function PromoterDashboard({ user, shows, advancing, artists, events = [], navig
 function VenueDashboard({ user, shows, labor, advancing, events = [], navigate }) {
   const today = startOfToday()
   const upcomingShows = shows.filter(s => {
-    const d = parseDate(s.date); return d && d >= today && s.status !== 'cancelled'
+    const d = parseDate(s.date); return d && d >= today && isProductionActive(s)
   })
   const upcoming = useMemo(() => groupShowRuns(upcomingShows, events), [shows, events])
   const thisWeek = upcoming.filter(s => (parseDate(s.date) - today) / 86400000 <= 7)

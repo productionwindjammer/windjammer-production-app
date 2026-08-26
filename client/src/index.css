@@ -111,6 +111,7 @@ body {
 .badge-cancelled  { background: rgba(239,68,68,0.15);   color: var(--danger);  border: 1px solid rgba(239,68,68,0.3); }
 .badge-advancing  { background: rgba(59,130,246,0.15);  color: #93c5fd; border: 1px solid rgba(59,130,246,0.3); }
 .badge-settled    { background: rgba(168,85,247,0.15);  color: #c4b5fd; border: 1px solid rgba(168,85,247,0.3); }
+.badge-no_production { background: rgba(127,127,127,0.18); color: var(--text-muted); border: 1px solid rgba(127,127,127,0.35); }
 
 /* ─── Buttons ────────────────────────────────────────────────────────────── */
 .btn         { display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px; border-radius: 7px; font-size: 0.85rem; font-weight: 500; cursor: pointer; border: none; transition: opacity 0.15s; white-space: nowrap; }

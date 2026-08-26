@@ -2,6 +2,16 @@
 // Default rule: shows whose date is before today are hidden unless the
 // user opts in via the "Show all (incl. past)" toggle.
 
+// Status marker meaning "the production team is not involved with this show"
+// (e.g. venue-only rental, external promoter handling their own crew).
+// Hidden from production dashboards/calendars alongside cancelled shows.
+export const NO_PRODUCTION_STATUS = 'no_production'
+
+export function isProductionActive(show) {
+  const s = (show?.status || '').toLowerCase()
+  return s !== 'cancelled' && s !== NO_PRODUCTION_STATUS
+}
+
 export function isUpcoming(show, today = startOfToday()) {
   if (!show?.date) return true // no date = always show
   const d = new Date(show.date + 'T12:00:00')
