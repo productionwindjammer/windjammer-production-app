@@ -27,6 +27,7 @@ export default function Shows() {
   const navigate = useNavigate()
   const [shows, setShows]       = useState([])
   const [labor, setLabor]       = useState([])
+  const [events, setEvents]     = useState([])
   const [loading, setLoading]   = useState(true)
   const [modal, setModal]       = useState(false)
   const [editing, setEditing]   = useState(null)
@@ -38,17 +39,22 @@ export default function Shows() {
   const [additionalDates, setAdditionalDates] = useState([])
   const [selectedIds, setSelectedIds] = useState(new Set())
   const [bulkDeleting, setBulkDeleting] = useState(false)
+  const [groupModal, setGroupModal]     = useState(false)
+  const [groupChoice, setGroupChoice]   = useState('')   // event id, or '__new__'
+  const [newEventName, setNewEventName] = useState('')
+  const [grouping, setGrouping]         = useState(false)
 
   useEffect(() => { load() }, [])
 
   async function load() {
     setLoading(true)
     try {
-      const requests = [api.get('/shows')]
+      const requests = [api.get('/shows'), api.get('/events').catch(() => ({ data: { data: [] } }))]
       if (canSeeLaborCost) requests.push(api.get('/labor'))
       const results = await Promise.all(requests)
       setShows((results[0].data.data || []).sort((a, b) => new Date(a.date) - new Date(b.date)))
-      if (results[1]) setLabor(results[1].data.data || [])
+      setEvents(results[1].data.data || [])
+      if (results[2]) setLabor(results[2].data.data || [])
     } finally { setLoading(false) }
   }
 
@@ -151,6 +157,51 @@ export default function Shows() {
     }
   }
 
+  function openGroupModal() {
+    if (selectedIds.size === 0) return
+    setGroupChoice(events[0]?.id || '__new__')
+    setNewEventName('')
+    setGroupModal(true)
+  }
+
+  async function handleBulkGroup() {
+    const ids = [...selectedIds]
+    if (ids.length === 0) return
+    setGrouping(true)
+    try {
+      let eventId = groupChoice
+      if (eventId === '__new__') {
+        const name = newEventName.trim()
+        if (!name) { alert('Event name is required'); setGrouping(false); return }
+        const dates = ids
+          .map(id => shows.find(s => s.id === id)?.date)
+          .filter(Boolean)
+          .sort()
+        const created = await api.post('/events', {
+          name,
+          startDate: dates[0] || '',
+          endDate:   dates[dates.length - 1] || '',
+          color:     '#7c3aed',
+        })
+        eventId = created.data.data.id
+      }
+      await api.post(`/events/${eventId}/attach-shows`, { showIds: ids })
+      setGroupModal(false)
+      setSelectedIds(new Set())
+      await load()
+    } catch (err) {
+      alert(err?.response?.data?.message || err.message || 'Grouping failed')
+    } finally {
+      setGrouping(false)
+    }
+  }
+
+  const eventById = useMemo(() => {
+    const m = new Map()
+    for (const e of events) m.set(e.id, e)
+    return m
+  }, [events])
+
   const f = form
   const set = k => e => setForm(v => ({ ...v, [k]: e.target.value }))
 
@@ -191,7 +242,12 @@ export default function Shows() {
     }).sort((a, b) => new Date(a.date) - new Date(b.date))
     const seen = new Set()
     return sorted.filter(s => {
-      const key = normalizeTitle(s.artist || s.eventName || '')
+      // Shows attached to an event keep every night visible (each date is a
+      // distinct row); loose shows still de-duplicate by artist title so
+      // ad-hoc multi-night runs collapse to a single representative row.
+      const key = s.eventId
+        ? `${s.eventId}|${s.date}|${s.stage}`
+        : normalizeTitle(s.artist || s.eventName || '')
       if (seen.has(key)) return false
       seen.add(key)
       return true
@@ -207,13 +263,21 @@ export default function Shows() {
         </div>
         <div style={{display:'flex',gap:8}}>
           {selectedIds.size > 0 && (
-            <button
-              className="btn btn-danger"
-              onClick={handleBulkDelete}
-              disabled={bulkDeleting}
-            >
-              {bulkDeleting ? 'Deleting…' : `Delete ${selectedIds.size} Selected`}
-            </button>
+            <>
+              <button
+                className="btn btn-secondary"
+                onClick={openGroupModal}
+              >
+                🎪 Group into Event
+              </button>
+              <button
+                className="btn btn-danger"
+                onClick={handleBulkDelete}
+                disabled={bulkDeleting}
+              >
+                {bulkDeleting ? 'Deleting…' : `Delete ${selectedIds.size} Selected`}
+              </button>
+            </>
           )}
           <ExportMenu
             items={[
@@ -321,7 +385,25 @@ export default function Shows() {
                       />
                     </td>
                     <td data-label="Date" className="text-muted">{show.date}</td>
-                    <td data-label="Artist"><strong>{show.artist || show.eventName || '—'}</strong></td>
+                    <td data-label="Artist">
+                      <strong>{show.artist || show.eventName || '—'}</strong>
+                      {show.eventId && eventById.get(show.eventId) && (
+                        <span
+                          className="badge"
+                          onClick={e => { e.stopPropagation(); navigate('/events') }}
+                          style={{
+                            marginLeft: 8,
+                            background: eventById.get(show.eventId).color || '#7c3aed',
+                            color: '#fff',
+                            cursor: 'pointer',
+                            fontSize: 11,
+                          }}
+                          title={`Part of "${eventById.get(show.eventId).name}"`}
+                        >
+                          🎪 {eventById.get(show.eventId).name}
+                        </span>
+                      )}
+                    </td>
                     <td data-label="Stage"><span className={`badge badge-${show.stage}`}>{show.stage === 'inside' ? 'Inside' : 'Beach'}</span></td>
                     <td data-label="Show Time" className="text-muted">{show.showTime ? formatTime(show.showTime, tf) : '—'}</td>
                     <td data-label="Capacity" className="text-muted">{show.capacity || '—'}</td>
@@ -515,6 +597,57 @@ export default function Shows() {
             <div className="form-group">
               <label>Notes</label>
               <textarea value={f.notes} onChange={set('notes')} placeholder="Additional notes…" />
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {groupModal && (
+        <Modal
+          title={`Group ${selectedIds.size} Show${selectedIds.size === 1 ? '' : 's'} into an Event`}
+          onClose={() => setGroupModal(false)}
+          footer={
+            <>
+              <button className="btn btn-ghost" onClick={() => setGroupModal(false)}>Cancel</button>
+              <button
+                className="btn btn-primary"
+                onClick={handleBulkGroup}
+                disabled={grouping || (groupChoice === '__new__' && !newEventName.trim())}
+              >
+                {grouping ? 'Saving…' : 'Group Shows'}
+              </button>
+            </>
+          }
+        >
+          <div className="form-grid">
+            <div className="form-group">
+              <label>Event</label>
+              <select value={groupChoice} onChange={e => setGroupChoice(e.target.value)}>
+                {events.map(ev => (
+                  <option key={ev.id} value={ev.id}>{ev.name}</option>
+                ))}
+                <option value="__new__">+ Create new event…</option>
+              </select>
+            </div>
+            {groupChoice === '__new__' && (
+              <div className="form-group">
+                <label>New Event Name *</label>
+                <input
+                  value={newEventName}
+                  onChange={e => setNewEventName(e.target.value)}
+                  placeholder="e.g. Spring Fest 2026, Weekend Residency"
+                  autoFocus
+                />
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
+                  Start/end dates auto-fill from the selected shows. You can edit
+                  color, description, and notes on the Events page.
+                </div>
+              </div>
+            )}
+            <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+              The selected shows will be linked to this event but remain
+              individually editable. You can detach them any time from the
+              Events page.
             </div>
           </div>
         </Modal>

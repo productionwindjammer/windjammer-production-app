@@ -61,6 +61,7 @@ export default function Calendar() {
   const today = new Date()
   const [cursor, setCursor] = useState(new Date(today.getFullYear(), today.getMonth(), 1))
   const [shows, setShows] = useState([])
+  const [events, setEvents] = useState([])
   const [unav, setUnav]   = useState([])
   const [staff, setStaff] = useState([])
   const [loading, setLoading] = useState(true)
@@ -75,14 +76,16 @@ export default function Calendar() {
   async function load() {
     setLoading(true)
     try {
-      const [showsRes, unavRes, staffRes] = await Promise.all([
+      const [showsRes, unavRes, staffRes, evRes] = await Promise.all([
         api.get('/shows'),
         api.get('/unavailability').catch(() => ({ data: { data: [] } })),
         api.get('/staff').catch(() => ({ data: { data: [] } })),
+        api.get('/events').catch(() => ({ data: { data: [] } })),
       ])
       setShows(showsRes.data.data || [])
       setUnav(unavRes.data.data || [])
       setStaff(staffRes.data.data || [])
+      setEvents(evRes.data.data || [])
     } finally { setLoading(false) }
   }
 
@@ -109,6 +112,39 @@ export default function Calendar() {
     }
     return map
   }, [shows, unav])
+
+  // For each Event, expand its date range into per-day entries so we can draw
+  // a colored chip on every day the event covers. The range is taken from the
+  // event's own startDate/endDate when set; otherwise inferred from the dates
+  // of the attached shows.
+  const eventDayMap = useMemo(() => {
+    const map = new Map()
+    const showsByEvent = new Map()
+    for (const s of shows) {
+      if (!s.eventId || !s.date) continue
+      if (!showsByEvent.has(s.eventId)) showsByEvent.set(s.eventId, [])
+      showsByEvent.get(s.eventId).push(s.date.slice(0, 10))
+    }
+    for (const ev of events) {
+      const dates = (showsByEvent.get(ev.id) || []).slice().sort()
+      const startStr = ev.startDate || dates[0]
+      const endStr   = ev.endDate   || dates[dates.length - 1] || startStr
+      const start = parseYmd(startStr)
+      const end   = parseYmd(endStr)
+      if (!start || !end) continue
+      const d = new Date(start)
+      let idx = 0
+      const total = Math.round((end - start) / 86400000) + 1
+      while (d <= end) {
+        const key = ymd(d)
+        if (!map.has(key)) map.set(key, [])
+        map.get(key).push({ event: ev, dayIndex: idx, totalDays: total, isFirst: idx === 0, isLast: idx === total - 1 })
+        d.setDate(d.getDate() + 1)
+        idx++
+      }
+    }
+    return map
+  }, [events, shows])
 
   const matrix = monthMatrix(cursor.getFullYear(), cursor.getMonth())
   const todayKey = ymd(today)
@@ -181,6 +217,7 @@ export default function Calendar() {
       <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 12, fontSize: 12, color: 'rgba(255,255,255,0.6)' }}>
         <LegendDot color={STAGE_COLORS.inside.border} label="Inside Stage" />
         <LegendDot color={STAGE_COLORS.beach.border}  label="Beach Stage" />
+        <LegendDot color="#7c3aed" label="🎪 Event / Festival" />
         <LegendDot color="#9ca3af" label="Unavailable crew" />
         <span style={{ marginLeft: 'auto', opacity: 0.6 }}>Dimmed = pending / cancelled / settled</span>
       </div>
@@ -202,6 +239,7 @@ export default function Calendar() {
                 const isMonth  = d.getMonth() === cursor.getMonth()
                 const isToday  = key === todayKey
                 const items    = eventsByDate.get(key) || []
+                const evDays   = eventDayMap.get(key) || []
                 return (
                   <div
                     key={ci}
@@ -215,9 +253,25 @@ export default function Calendar() {
                       position: 'relative', display: 'flex', flexDirection: 'column',
                     }}
                   >
+                    {evDays.length > 0 && (
+                      <div style={{
+                        position: 'absolute', top: 0, left: 0, right: 0, height: 3,
+                        background: evDays[0].event.color || '#7c3aed',
+                        borderTopLeftRadius: evDays[0].isFirst ? 0 : 0,
+                      }} />
+                    )}
                     <div style={{ fontSize: 12, fontWeight: isToday ? 700 : 500, color: isToday ? '#60a5fa' : 'rgba(255,255,255,0.7)', marginBottom: 3, textAlign: 'right', flexShrink: 0 }}>
                       {d.getDate()}
                     </div>
+                    {evDays.map((ed, i) => (ed.isFirst || ci === 0) && (
+                      <EventChip
+                        key={`e${i}`}
+                        event={ed.event}
+                        dayIndex={ed.dayIndex}
+                        totalDays={ed.totalDays}
+                        onClick={e => { e.stopPropagation(); navigate('/events') }}
+                      />
+                    ))}
                     {(() => {
                       const shown = items.slice(0, 3)
                       const hidden = items.length - shown.length
@@ -312,6 +366,27 @@ function ShowChip({ show, tf, onClick }) {
     >
       <div style={{ fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</div>
       {time && <div style={{ opacity: 0.85, fontVariantNumeric: 'tabular-nums', fontSize: 9.5 }}>{time}</div>}
+    </button>
+  )
+}
+
+function EventChip({ event, dayIndex, totalDays, onClick }) {
+  const color = event.color || '#7c3aed'
+  return (
+    <button
+      onClick={onClick}
+      title={`${event.name} — day ${dayIndex + 1} of ${totalDays}`}
+      style={{
+        display: 'block', width: '100%', textAlign: 'left',
+        background: color, color: '#fff',
+        border: `1px solid ${color}`, borderRadius: 4,
+        padding: '2px 5px', fontSize: 9.5, lineHeight: 1.2,
+        cursor: 'pointer', marginBottom: 2, flexShrink: 0,
+        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        fontWeight: 600,
+      }}
+    >
+      🎪 {event.name}{totalDays > 1 ? ` · d${dayIndex + 1}/${totalDays}` : ''}
     </button>
   )
 }

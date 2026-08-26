@@ -8,9 +8,13 @@ import Onboard from './pages/Onboard'
 import Dashboard from './pages/Dashboard'
 import Shows from './pages/Shows'
 import ShowDetail from './pages/ShowDetail'
+import Events from './pages/Events'
 import Advancing from './pages/Advancing'
 import DayOfShow from './pages/DayOfShow'
 import Labor from './pages/Labor'
+import Financials from './pages/Financials'
+import Maintenance from './pages/Maintenance'
+import Budgets from './pages/Budgets'
 import Vendors from './pages/Vendors'
 import Staff from './pages/Staff'
 import StaffDetail from './pages/StaffDetail'
@@ -41,12 +45,16 @@ export default function App() {
             <Route path="/dashboard"   element={<Dashboard />} />
             <Route path="/shows"       element={<Shows />} />
             <Route path="/shows/:id"   element={<ShowDetail />} />
+            <Route path="/events"      element={<Events />} />
             <Route path="/calendar"    element={<Calendar />} />
             <Route path="/artists"     element={<Artists />} />
             <Route path="/artists/:id" element={<Artists />} />
             <Route path="/advancing"   element={<Advancing />} />
             <Route path="/day-of-show" element={<DayOfShow />} />
             <Route path="/labor"       element={<Labor />} />
+            <Route path="/financials"  element={<Financials />} />
+            <Route path="/maintenance" element={<Maintenance />} />
+            <Route path="/budgets"     element={<Budgets />} />
             <Route path="/vendors"     element={<Vendors />} />
             <Route path="/staff"       element={<Staff />} />
             <Route path="/staff/:id"   element={<StaffDetail />} />

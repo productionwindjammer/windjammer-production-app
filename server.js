@@ -823,6 +823,98 @@ crudRoutes(app, '/api/shows',           'shows',     ['admin','production_manage
   },
 });
 
+// ── Events (multi-day / multi-show groupings) ────────────────────────────────
+// Lightweight overlay on Shows. A show belongs to at most one Event via its
+// eventId column; regular one-off shows leave eventId blank and behave exactly
+// as before. Used for festivals, residencies, weekend-long bookings, etc.
+
+// Clear eventId on shows that were attached to a deleted event. Registered
+// BEFORE crudRoutes so this middleware matches the DELETE first and passes
+// through to the crudRoutes-installed delete handler via next().
+app.delete('/api/events/:id', requireAuth, requireRole('admin', 'production_manager'), async (req, res, next) => {
+  try {
+    const shows = await sheets.getRows(config.googleSheets.sheets.shows);
+    const linked = shows.filter(s => String(s.eventId || '') === String(req.params.id));
+    for (const s of linked) {
+      await sheets.updateRowById(config.googleSheets.sheets.shows, s.id, { eventId: '' });
+    }
+  } catch (err) {
+    console.warn('[events delete cascade]', err.message);
+  }
+  next();
+});
+
+crudRoutes(app, '/api/events', 'events', ['admin', 'production_manager'], {
+  // Recompute startDate/endDate from linked shows if they weren't supplied.
+  // Keeps the event's date range accurate as shows get attached/removed.
+  afterUpdate: async (next /*, prev, req */) => {
+    try {
+      if (next.startDate && next.endDate) return;
+      const shows = await sheets.getRows(config.googleSheets.sheets.shows);
+      const dates = shows
+        .filter(s => String(s.eventId || '') === String(next.id))
+        .map(s => s.date)
+        .filter(Boolean)
+        .sort();
+      if (dates.length === 0) return;
+      const patch = {};
+      if (!next.startDate) patch.startDate = dates[0];
+      if (!next.endDate)   patch.endDate   = dates[dates.length - 1];
+      if (Object.keys(patch).length) {
+        await sheets.updateRowById(config.googleSheets.sheets.events, next.id, patch);
+      }
+    } catch (err) {
+      console.warn('[events afterUpdate range]', err.message);
+    }
+  },
+});
+
+// Bulk-attach a set of existing shows to an event in one call.
+// Body: { showIds: string[] }
+app.post('/api/events/:id/attach-shows', requireAuth, requireRole('admin', 'production_manager'), async (req, res) => {
+  try {
+    const showIds = Array.isArray(req.body?.showIds) ? req.body.showIds : [];
+    if (showIds.length === 0) return res.json({ success: true, updated: 0 });
+    const events = await sheets.getRows(config.googleSheets.sheets.events);
+    const event = events.find(e => String(e.id) === String(req.params.id));
+    if (!event) return res.status(404).json({ success: false, message: 'Event not found' });
+    let updated = 0;
+    for (const id of showIds) {
+      await sheets.updateRowById(config.googleSheets.sheets.shows, String(id), { eventId: event.id });
+      updated++;
+    }
+    const shows = await sheets.getRows(config.googleSheets.sheets.shows);
+    const dates = shows
+      .filter(s => String(s.eventId || '') === String(event.id))
+      .map(s => s.date)
+      .filter(Boolean)
+      .sort();
+    if (dates.length) {
+      await sheets.updateRowById(config.googleSheets.sheets.events, event.id, {
+        startDate: dates[0],
+        endDate:   dates[dates.length - 1],
+      });
+    }
+    res.json({ success: true, updated });
+  } catch (err) {
+    console.error('[events attach-shows]', err.message);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Detach a single show from its event (clears eventId).
+app.post('/api/events/:id/detach-show', requireAuth, requireRole('admin', 'production_manager'), async (req, res) => {
+  try {
+    const showId = String(req.body?.showId || '');
+    if (!showId) return res.status(400).json({ success: false, message: 'showId is required' });
+    await sheets.updateRowById(config.googleSheets.sheets.shows, showId, { eventId: '' });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[events detach-show]', err.message);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 // ── Artist defaults: shared helpers ──────────────────────────────────────────
 // The artist registry now owns long-term production info (rider, production
 // needs, backline, hospitality, catering, advance contact). Per-show Advancing
@@ -943,6 +1035,26 @@ app.put('/api/settings/venue', requireAuth, requireRole('admin', 'production_man
 
 crudRoutes(app, '/api/schedule',        'schedule');
 crudRoutes(app, '/api/labor',           'labor',     ['admin','production_manager','stage_manager'], { afterCreate: notifyShiftAssigned });
+
+// Stage managers can create/edit maintenance items and project proposals, but
+// only admin / production_manager may approve, reject, or delete them.
+const APPROVAL_STATUSES = new Set(['approved', 'rejected']);
+app.put('/api/maintenance/:id', requireAuth, (req, res, next) => {
+  const role = req.user?.role;
+  if (role === 'stage_manager') {
+    if (req.body && APPROVAL_STATUSES.has(req.body.status)) {
+      return res.status(403).json({ success: false, message: 'Only admin or production manager can approve or reject.' });
+    }
+    if (req.body && (req.body.approvedBy || req.body.approvedAt)) {
+      return res.status(403).json({ success: false, message: 'Only admin or production manager can stamp approval.' });
+    }
+  }
+  next();
+});
+crudRoutes(app, '/api/maintenance',     'maintenance',    ['admin','production_manager','stage_manager'], {
+  deleteRoles: ['admin','production_manager'],
+});
+crudRoutes(app, '/api/budgets',         'budgets',        ['admin','production_manager']);
 crudRoutes(app, '/api/vendors',         'vendors');
 crudRoutes(app, '/api/vendor-bookings', 'vendorBookings');
 crudRoutes(app, '/api/settlement',      'settlement');

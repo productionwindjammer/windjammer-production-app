@@ -12,15 +12,22 @@ import { getTicketStats } from '../utils/stages'
 const parseDate = d => d ? new Date(d + 'T12:00:00') : null
 const startOfToday = () => { const d = new Date(); d.setHours(0,0,0,0); return d }
 
-// Group shows so a multi-night run by the same artist on the same stage
-// counts as ONE event. The earliest dated row becomes the representative
-// (its id is used for navigation); extra dates are kept on `._dates`.
-function groupShowRuns(shows) {
+// Group shows so a multi-night run counts as ONE event on the dashboard.
+// Priority: shows sharing an explicit `eventId` are grouped first (festivals,
+// residencies, multi-artist events); remaining shows fall back to the
+// implicit same-artist + same-stage rule for informal multi-night runs.
+// The earliest dated row is the representative; extra dates are kept on `._dates`.
+function groupShowRuns(shows, events = []) {
   const buckets = new Map()
+  const eventById = new Map(events.map(e => [e.id, e]))
   for (const s of shows) {
+    if (s.eventId && eventById.has(s.eventId)) {
+      const key = `__event__${s.eventId}`
+      if (!buckets.has(key)) buckets.set(key, [])
+      buckets.get(key).push(s); continue
+    }
     const artistKey = (s.artist || s.eventName || '').trim().toLowerCase()
     if (!artistKey) {
-      // No artist name — treat as its own event (use id as key)
       buckets.set(`__id__${s.id}`, [s]); continue
     }
     const key = `${artistKey}|${(s.stage || '').toLowerCase()}`
@@ -28,14 +35,18 @@ function groupShowRuns(shows) {
     buckets.get(key).push(s)
   }
   const groups = []
-  for (const rows of buckets.values()) {
+  for (const [key, rows] of buckets.entries()) {
     rows.sort((a, b) => (parseDate(a.date) || 0) - (parseDate(b.date) || 0))
     const rep = rows[0]
+    const eventMeta = key.startsWith('__event__')
+      ? eventById.get(key.slice('__event__'.length))
+      : null
     groups.push({
       ...rep,
       _dates: rows.map(r => r.date).filter(Boolean),
       _allShowIds: rows.map(r => r.id),
       _nights: rows.length,
+      _event: eventMeta || null,
     })
   }
   return groups
@@ -69,6 +80,7 @@ export default function Dashboard() {
 
   const [shows, setShows] = useState([])
   const [labor, setLabor] = useState([])
+  const [events, setEvents] = useState([])
   const [advancing, setAdvancing] = useState([])
   const [artists, setArtists]     = useState([])
   const [showRequests, setShowRequests] = useState([])
@@ -90,6 +102,8 @@ export default function Dashboard() {
     }
     // Show requests are cheap to fetch and useful on every dashboard.
     requests.push(api.get('/show-requests').catch(() => ({ data: { data: [] } })))
+    // Events overlay (festivals / residencies). Cheap; used to collapse multi-show groups.
+    requests.push(api.get('/events').catch(() => ({ data: { data: [] } })))
     Promise.all(requests.map(r => r || Promise.resolve(null)))
       .then(results => {
         setShows(results[0].data.data || [])
@@ -97,6 +111,7 @@ export default function Dashboard() {
         if (results[2]) setAdvancing(results[2].data.data || [])
         if (results[3]) setArtists(results[3].data.data || [])
         if (results[4]) setShowRequests(results[4].data.data || [])
+        if (results[5]) setEvents(results[5].data.data || [])
       })
       .finally(() => setLoading(false))
   }, [isCrew, isManager, isStageManager, isVenue, isPromoter, reloadKey])
@@ -109,25 +124,26 @@ export default function Dashboard() {
       shows={shows}
       advancing={advancing}
       artists={artists}
+      events={events}
       navigate={navigate}
       tf={tf}
       onReload={() => setReloadKey(k => k + 1)}
     />
   )
-  if (isVenue)    return <VenueDashboard    user={user} shows={shows} labor={labor} advancing={advancing} navigate={navigate} tf={tf} />
-  if (isCrew)     return <CrewDashboard     user={user} shows={shows} labor={labor} navigate={navigate} showRequests={showRequests} onReload={() => setReloadKey(k => k + 1)} />
-  return <ManagerDashboard user={user} shows={shows} labor={labor} navigate={navigate} isManager={isManager} isStageManager={isStageManager} showRequests={showRequests} />
+  if (isVenue)    return <VenueDashboard    user={user} shows={shows} labor={labor} advancing={advancing} events={events} navigate={navigate} tf={tf} />
+  if (isCrew)     return <CrewDashboard     user={user} shows={shows} labor={labor} events={events} navigate={navigate} showRequests={showRequests} onReload={() => setReloadKey(k => k + 1)} />
+  return <ManagerDashboard user={user} shows={shows} labor={labor} events={events} navigate={navigate} isManager={isManager} isStageManager={isStageManager} showRequests={showRequests} />
 }
 
 /* ─────────────────────────────────────────────────────────────── Manager ── */
 
-function ManagerDashboard({ user, shows, labor, navigate, isManager, isStageManager, showRequests = [] }) {
+function ManagerDashboard({ user, shows, labor, events = [], navigate, isManager, isStageManager, showRequests = [] }) {
   const today = startOfToday()
   const upcomingRaw = shows.filter(s => {
     const d = parseDate(s.date); return d && d >= today && s.status !== 'cancelled'
   })
-  // Collapse multi-night runs (same artist + stage) into a single event
-  const upcoming = useMemo(() => groupShowRuns(upcomingRaw), [shows])
+  // Collapse multi-night runs / event groups into a single event card
+  const upcoming = useMemo(() => groupShowRuns(upcomingRaw, events), [shows, events])
   const thisWeek = upcoming.filter(s => (parseDate(s.date) - today) / 86400000 <= 7)
   const next30   = upcoming.filter(s => (parseDate(s.date) - today) / 86400000 <= 30)
   const insideShows = upcoming.filter(s => s.stage === 'inside')
@@ -530,6 +546,18 @@ function ShowRow({ show, onClick, tf = '12h' }) {
       <div style={{ flex: 1 }}>
         <div style={{ fontWeight: 600, fontSize: '0.875rem' }}>
           {show.artist || show.eventName || '—'}
+          {show._event && (
+            <span
+              className="badge"
+              style={{
+                marginLeft: 6, fontSize: '0.65rem',
+                background: show._event.color || '#7c3aed', color: '#fff',
+              }}
+              title={`Part of ${show._event.name}`}
+            >
+              🎪 {show._event.name}
+            </span>
+          )}
           {isRun && <span style={{ marginLeft: 6, fontSize: '0.7rem', color: 'var(--text-muted)', fontWeight: 500 }}>
             · {show._nights} nights ({dateRangeLabel(show._dates)})
           </span>}
@@ -604,6 +632,17 @@ function DetailedShowRow({ show, onClick, tf = '12h', venue, today, crewCount = 
             {show.artist || show.eventName || 'Untitled show'}
           </span>
           <span className={`badge badge-${show.stage}`}>{show.stage === 'inside' ? 'Inside' : 'Beach'}</span>
+          {show._event && (
+            <span
+              className="badge"
+              style={{
+                background: show._event.color || '#7c3aed', color: '#fff', fontSize: '0.72rem',
+              }}
+              title={`Part of ${show._event.name}`}
+            >
+              🎪 {show._event.name}
+            </span>
+          )}
           {show.status && show.status !== 'confirmed' && (
             <span className={`badge badge-${show.status}`}>{show.status}</span>
           )}
@@ -875,12 +914,12 @@ function CrewDashboard({ user, shows, labor, navigate, showRequests = [], onRelo
 const QUICK_BLANK = { date: '', artist: '', stage: 'inside', showTime: '', notes: '' }
 const CONTACT_BLANK = { contactName: '', contactEmail: '', contactPhone: '' }
 
-function PromoterDashboard({ user, shows, advancing, artists, navigate, tf, onReload }) {
+function PromoterDashboard({ user, shows, advancing, artists, events = [], navigate, tf, onReload }) {
   const today = startOfToday()
   const upcomingRaw = shows.filter(s => {
     const d = parseDate(s.date); return d && d >= today && s.status !== 'cancelled'
   })
-  const upcoming = useMemo(() => groupShowRuns(upcomingRaw), [shows])
+  const upcoming = useMemo(() => groupShowRuns(upcomingRaw, events), [shows, events])
   const next30 = upcoming.filter(s => (parseDate(s.date) - today) / 86400000 <= 30)
   const greeting = user?.name ? `Hi ${user.name.split(' ')[0]}` : 'Welcome'
 
@@ -1210,12 +1249,12 @@ function PromoterDashboard({ user, shows, advancing, artists, navigate, tf, onRe
  * dashboard (occupancy, revenue indicators, etc.) is planned for a later
  * pass — this stub keeps the role usable in the meantime.
  */
-function VenueDashboard({ user, shows, labor, advancing, navigate }) {
+function VenueDashboard({ user, shows, labor, advancing, events = [], navigate }) {
   const today = startOfToday()
   const upcomingShows = shows.filter(s => {
     const d = parseDate(s.date); return d && d >= today && s.status !== 'cancelled'
   })
-  const upcoming = useMemo(() => groupShowRuns(upcomingShows), [shows])
+  const upcoming = useMemo(() => groupShowRuns(upcomingShows, events), [shows, events])
   const thisWeek = upcoming.filter(s => (parseDate(s.date) - today) / 86400000 <= 7)
   const greeting = user?.name ? `Hi ${user.name.split(' ')[0]}` : 'Welcome'
 

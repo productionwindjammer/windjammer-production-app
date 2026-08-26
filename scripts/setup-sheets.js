@@ -32,8 +32,17 @@ const SHEETS = [
     headers: [
       'id', 'date', 'artist', 'eventName', 'stage', 'status',
       'showTime', 'doorsTime', 'capacity', 'ticketPrice', 'guarantee',
-      'promoter', 'tourManager', 'advancingComplete', 'settled', 'notes', 'createdAt'
+      'promoter', 'tourManager', 'advancingComplete', 'settled', 'notes',
+      'eventId', 'createdAt'
     ]
+  },
+  {
+    name: 'Events',
+    headers: [
+      'id', 'name', 'description', 'startDate', 'endDate',
+      'color', 'notes', 'createdAt'
+    ],
+    note: 'Multi-day / multi-show groupings (festivals, residencies, weekends). Shows link via Shows.eventId.'
   },
   {
     name: 'Advancing',
@@ -122,6 +131,27 @@ const SHEETS = [
       'createdBy', 'createdAt', 'updatedAt'
     ],
     note: 'body is HTML with {{placeholders}}; attachments is a JSON array of attachment recipes',
+  },
+  {
+    name: 'Maintenance',
+    headers: [
+      'id', 'itemType', 'title', 'description', 'category', 'area', 'priority', 'status',
+      'reportedBy', 'reportedDate', 'dueDate', 'scheduledDate', 'completedDate',
+      'estimatedCost', 'approvedCost', 'actualCost',
+      'vendorId', 'vendorName', 'invoiceNumber',
+      'proposedBy', 'justification', 'scope', 'budgetLow', 'budgetHigh',
+      'approvedBy', 'approvedAt', 'rejectedReason',
+      'quotes', 'notes', 'createdAt'
+    ],
+    note: 'itemType is "issue" (repair/maintenance ticket) or "project" (production-head proposal needing approval). quotes is a JSON array.',
+  },
+  {
+    name: 'Budgets',
+    headers: [
+      'id', 'scope', 'scopeKey', 'categories',
+      'totalAllocated', 'notes', 'createdAt', 'updatedAt'
+    ],
+    note: 'scope="year" (scopeKey is a year like "2026") or scope="show" (scopeKey is a showId). categories is a JSON array of { key, allocated }.',
   }
 ];
 

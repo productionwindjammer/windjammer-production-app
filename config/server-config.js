@@ -12,6 +12,7 @@ module.exports = {
     sheets: {
       users:          'Users',
       shows:          'Shows',
+      events:         'Events',
       advancing:      'Advancing',
       schedule:       'Schedule',
       labor:          'Labor',
@@ -30,6 +31,8 @@ module.exports = {
       patchLists:         'PatchLists',
       showRequests:       'ShowRequests',
       emailTemplates:     'EmailTemplates',
+      maintenance:        'Maintenance',
+      budgets:            'Budgets',
     }
   }
 };

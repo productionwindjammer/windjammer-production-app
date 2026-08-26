@@ -46,6 +46,7 @@ export default function DayOfShow() {
   const tf = settings.timeFormat || '12h'
   const [items, setItems]     = useState([])
   const [shows, setShows]     = useState([])
+  const [events, setEvents]   = useState([])
   const [advances, setAdvances] = useState([])
   const [loading, setLoading] = useState(true)
   const [modal, setModal]     = useState(false)
@@ -62,22 +63,26 @@ export default function DayOfShow() {
       api.get('/schedule'),
       api.get('/shows'),
       api.get('/advancing').catch(() => ({ data: { data: [] } })),
-    ]).then(([sc, s, a]) => {
+      api.get('/events').catch(() => ({ data: { data: [] } })),
+    ]).then(([sc, s, a, e]) => {
       setItems(sc.data.data || [])
       setShows(s.data.data || [])
       setAdvances(a.data.data || [])
+      setEvents(e.data.data || [])
     }).finally(() => setLoading(false))
   }, [])
 
   async function load() {
-    const [sc, s, a] = await Promise.all([
+    const [sc, s, a, e] = await Promise.all([
       api.get('/schedule'),
       api.get('/shows'),
       api.get('/advancing').catch(() => ({ data: { data: [] } })),
+      api.get('/events').catch(() => ({ data: { data: [] } })),
     ])
     setItems(sc.data.data || [])
     setShows(s.data.data || [])
     setAdvances(a.data.data || [])
+    setEvents(e.data.data || [])
   }
 
   // Backfill: when the user picks a show, ensure the standard day-sheet is
@@ -136,10 +141,21 @@ export default function DayOfShow() {
     return it.date || showsById.get(String(it.showId))?.date || ''
   }
 
-  // "By Show" filter (existing behavior)
-  const filteredByShow = items
-    .filter(i => !selectedShow || i.showId === selectedShow)
-    .sort((a, b) => (a.time || '').localeCompare(b.time || ''))
+  // "By Show" filter — supports either a single show id, or an "event:<id>"
+  // pseudo-value that includes every show attached to the event.
+  const filteredByShow = (() => {
+    if (!selectedShow) return items.slice().sort((a, b) => (a.time || '').localeCompare(b.time || ''))
+    if (selectedShow.startsWith('event:')) {
+      const eventId = selectedShow.slice(6)
+      const showIds = new Set(shows.filter(s => s.eventId === eventId).map(s => s.id))
+      return items
+        .filter(i => showIds.has(i.showId))
+        .sort((a, b) => (itemDate(a) || '').localeCompare(itemDate(b) || '') || (a.time || '').localeCompare(b.time || ''))
+    }
+    return items
+      .filter(i => i.showId === selectedShow)
+      .sort((a, b) => (a.time || '').localeCompare(b.time || ''))
+  })()
 
   // "By Day" filter — every item on the selected date, regardless of show.
   const dayItems = useMemo(() => {
@@ -167,7 +183,34 @@ export default function DayOfShow() {
     return map
   }, [showsForDay])
 
-  const currentAdvance = selectedShow ? advances.find(a => a.showId === selectedShow) : null
+  const currentAdvance = selectedShow && !selectedShow.startsWith('event:')
+    ? advances.find(a => a.showId === selectedShow)
+    : null
+
+  const eventById = useMemo(() => new Map(events.map(e => [e.id, e])), [events])
+
+  // Event context for the current By-Day view: an event whose date range
+  // covers the selected dayDate.
+  const dayEvent = useMemo(() => {
+    for (const ev of events) {
+      const start = ev.startDate || null
+      const end   = ev.endDate   || ev.startDate
+      if (!start) continue
+      if (dayDate >= start && dayDate <= (end || start)) return ev
+    }
+    return null
+  }, [events, dayDate])
+
+  // If an Event is selected in the By-Show dropdown, gather its shows.
+  const selectedEvent = selectedShow && selectedShow.startsWith('event:')
+    ? eventById.get(selectedShow.slice(6))
+    : null
+  const selectedEventShows = useMemo(() => {
+    if (!selectedEvent) return []
+    return shows
+      .filter(s => s.eventId === selectedEvent.id)
+      .sort((a, b) => (a.date || '').localeCompare(b.date || ''))
+  }, [selectedEvent, shows])
 
   // Print the full day across both stages: one page per stage, run of show.
   function printDaySheetForDay() {
@@ -305,9 +348,18 @@ export default function DayOfShow() {
         <div className="filter-bar">
           <select value={selectedShow} onChange={e => setSelectedShow(e.target.value)}>
             <option value="">All Shows</option>
-            {upcomingShows.map(s => (
-              <option key={s.id} value={s.id}>{s.date} — {s.artist || s.eventName} ({s.stage})</option>
-            ))}
+            {events.length > 0 && (
+              <optgroup label="🎪 Events">
+                {events.map(ev => (
+                  <option key={ev.id} value={`event:${ev.id}`}>{ev.name} (all shows)</option>
+                ))}
+              </optgroup>
+            )}
+            <optgroup label="Individual Shows">
+              {upcomingShows.map(s => (
+                <option key={s.id} value={s.id}>{s.date} — {s.artist || s.eventName} ({s.stage})</option>
+              ))}
+            </optgroup>
           </select>
           <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'rgba(255,255,255,0.7)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
             <input type="checkbox" checked={showPastShows} onChange={e => setShowPastShows(e.target.checked)} />
@@ -326,6 +378,63 @@ export default function DayOfShow() {
           <button className="btn btn-ghost btn-sm" onClick={() => setDayDate(shiftYmd(dayDate, 1))}>Next ▶</button>
           <button className="btn btn-ghost btn-sm" onClick={() => setDayDate(todayYmd())}>Today</button>
           <span style={{ marginLeft: 12, fontSize: 13, color: 'rgba(255,255,255,0.7)' }}>{prettyDateLong(dayDate)}</span>
+        </div>
+      )}
+
+      {viewMode === 'day' && dayEvent && (
+        <div
+          className="card"
+          style={{
+            borderLeft: `4px solid ${dayEvent.color || '#7c3aed'}`,
+            display: 'flex', alignItems: 'center', gap: 12, marginTop: 8, padding: '12px 16px',
+          }}
+        >
+          <span style={{ fontSize: 20 }}>🎪</span>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontWeight: 600 }}>{dayEvent.name}</div>
+            <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+              {dayEvent.startDate}{dayEvent.endDate && dayEvent.endDate !== dayEvent.startDate ? ` – ${dayEvent.endDate}` : ''}
+              {dayEvent.description ? ` · ${dayEvent.description}` : ''}
+            </div>
+          </div>
+          {dayEvent.startDate && (
+            <button className="btn btn-ghost btn-sm" onClick={() => setDayDate(dayEvent.startDate)}>Jump to Day 1</button>
+          )}
+        </div>
+      )}
+
+      {viewMode === 'show' && selectedEvent && (
+        <div
+          className="card"
+          style={{
+            borderLeft: `4px solid ${selectedEvent.color || '#7c3aed'}`,
+            marginTop: 8, padding: '12px 16px',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <span style={{ fontSize: 20 }}>🎪</span>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: 600 }}>{selectedEvent.name}</div>
+              <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                {selectedEventShows.length} show{selectedEventShows.length === 1 ? '' : 's'}
+                {selectedEvent.description ? ` · ${selectedEvent.description}` : ''}
+              </div>
+            </div>
+          </div>
+          {selectedEventShows.length > 0 && (
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 10 }}>
+              {selectedEventShows.map(s => (
+                <button
+                  key={s.id}
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => setSelectedShow(s.id)}
+                  title={`${s.artist || s.eventName} · ${s.stage}`}
+                >
+                  {s.date} · {s.artist || s.eventName}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
