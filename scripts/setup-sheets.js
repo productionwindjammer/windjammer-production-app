@@ -55,6 +55,8 @@ const SHEETS = [
       'cateringNotes', 'hospitalityNotes',
       'localCrewNeeds', 'advancingComplete',
       'advanceContact', 'advancePhone', 'advanceEmail',
+      'truckCount', 'busCount', 'hasShorePower', 'dockAccess',
+      'loadInStart', 'loadOutEnd',
       'notes', 'createdAt'
     ]
   },
@@ -152,6 +154,23 @@ const SHEETS = [
       'totalAllocated', 'notes', 'createdAt', 'updatedAt'
     ],
     note: 'scope="year" (scopeKey is a year like "2026") or scope="show" (scopeKey is a showId). categories is a JSON array of { key, allocated }.',
+  },
+  {
+    name: 'ShowContacts',
+    headers: [
+      'id', 'showId', 'role', 'name', 'phone', 'email',
+      'isPrimary', 'notes', 'createdBy', 'createdAt', 'updatedAt'
+    ],
+    note: 'Per-show call sheet. role is one of the standardized SHOW_CONTACT_ROLES in server.js. isPrimary marks the primary advance contact for each role.',
+  },
+  {
+    name: 'ShowAsks',
+    headers: [
+      'id', 'showId', 'item', 'askedOf', 'askedOfContactId',
+      'askedAt', 'dueBy', 'status', 'receivedAt', 'notes',
+      'source', 'createdBy', 'createdAt', 'updatedAt', 'updatedBy'
+    ],
+    note: 'Explicit "waiting on" tracker. status in {open, received, cancelled}. Overdue is derived (status=open AND dueBy < today). source in {manual, ai-proposed}.',
   }
 ];
 

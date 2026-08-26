@@ -9,6 +9,35 @@ const SCOPES = [
   'https://www.googleapis.com/auth/drive.file',
 ];
 
+// Google Sheets returns 429 on burst-write above 60/min. Retrying with
+// exponential backoff + jitter converts most bursts into a small delay
+// instead of a hard failure. Delays: 500, 1000, 2000, 4000 ms + up to 250ms
+// jitter. Non-retryable errors (auth, bad request, not found) fail fast.
+const RETRYABLE_HTTP = new Set([429, 500, 502, 503, 504]);
+const RETRYABLE_REASON = /rateLimitExceeded|userRateLimitExceeded|quotaExceeded|backendError|internal(Error)?|unavailable/i;
+function isRetryable(err) {
+  const code = err?.code || err?.response?.status || 0;
+  if (RETRYABLE_HTTP.has(code)) return true;
+  const reason = err?.errors?.[0]?.reason || err?.response?.data?.error?.message || err?.message || '';
+  return RETRYABLE_REASON.test(String(reason));
+}
+async function withRetry(fn, label = 'sheets-op') {
+  const delays = [500, 1000, 2000, 4000];
+  let lastErr;
+  for (let attempt = 0; attempt <= delays.length; attempt++) {
+    try { return await fn(); }
+    catch (err) {
+      lastErr = err;
+      if (attempt === delays.length || !isRetryable(err)) throw err;
+      const jitter = Math.floor(Math.random() * 250);
+      const wait = delays[attempt] + jitter;
+      console.warn(`[sheets retry] ${label} attempt ${attempt + 1} failed (${err.code || err.message}); waiting ${wait}ms`);
+      await new Promise(r => setTimeout(r, wait));
+    }
+  }
+  throw lastErr;
+}
+
 function getAuth() {
   if (process.env.GOOGLE_SERVICE_ACCOUNT) {
     const credentials = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT);
@@ -30,10 +59,10 @@ async function getRows(sheetName) {
   const api = await getSheetsClient();
   let response;
   try {
-    response = await api.spreadsheets.values.get({
+    response = await withRetry(() => api.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
       range: sheetName,
-    });
+    }), `getRows(${sheetName})`);
   } catch (err) {
     if (String(err.message || '').includes('Unable to parse range')) return [];
     throw err;
@@ -59,18 +88,18 @@ async function getRows(sheetName) {
 async function appendRow(sheetName, data) {
   const api = await getSheetsClient();
   await ensureHeaders(sheetName, Object.keys(data), api);
-  const response = await api.spreadsheets.values.get({
+  const response = await withRetry(() => api.spreadsheets.values.get({
     spreadsheetId: SPREADSHEET_ID,
     range: `${sheetName}!1:1`,
-  });
+  }), `appendRow.getHeaders(${sheetName})`);
   const headers = response.data.values?.[0] || Object.keys(data);
   const row = headers.map(h => data[h] !== undefined ? String(data[h]) : '');
-  await api.spreadsheets.values.append({
+  await withRetry(() => api.spreadsheets.values.append({
     spreadsheetId: SPREADSHEET_ID,
     range: sheetName,
     valueInputOption: 'USER_ENTERED',
     resource: { values: [row] },
-  });
+  }), `appendRow(${sheetName})`);
 }
 
 // Append many rows in a single API call. Ensures headers once.
@@ -81,22 +110,22 @@ async function appendRows(sheetName, dataArr) {
   const allKeys = Array.from(new Set(dataArr.flatMap(d => Object.keys(d))));
   const headers = await ensureHeaders(sheetName, allKeys, api);
   const values = dataArr.map(d => headers.map(h => d[h] !== undefined ? String(d[h]) : ''));
-  await api.spreadsheets.values.append({
+  await withRetry(() => api.spreadsheets.values.append({
     spreadsheetId: SPREADSHEET_ID,
     range: sheetName,
     valueInputOption: 'USER_ENTERED',
     resource: { values },
-  });
+  }), `appendRows(${sheetName}, n=${dataArr.length})`);
   return dataArr.length;
 }
 
 async function updateRowById(sheetName, id, data) {
   const api = await getSheetsClient();
   await ensureHeaders(sheetName, Object.keys(data), api);
-  const response = await api.spreadsheets.values.get({
+  const response = await withRetry(() => api.spreadsheets.values.get({
     spreadsheetId: SPREADSHEET_ID,
     range: sheetName,
-  });
+  }), `updateRowById.read(${sheetName})`);
   const [headers, ...rows] = response.data.values || [];
   if (!headers) throw new Error('Sheet not found or empty');
   const idIdx = headers.indexOf('id');
@@ -106,24 +135,24 @@ async function updateRowById(sheetName, id, data) {
   const updatedRow = headers.map((h, i) =>
     data[h] !== undefined ? String(data[h]) : (rows[rowIdx][i] || '')
   );
-  await api.spreadsheets.values.update({
+  await withRetry(() => api.spreadsheets.values.update({
     spreadsheetId: SPREADSHEET_ID,
     range: `${sheetName}!A${sheetRow}`,
     valueInputOption: 'USER_ENTERED',
     resource: { values: [updatedRow] },
-  });
+  }), `updateRowById.write(${sheetName})`);
 }
 
 // Make sure a tab with the given title exists in the spreadsheet. Idempotent.
 async function ensureSheet(sheetName, api) {
   api = api || (await getSheetsClient());
-  const meta = await api.spreadsheets.get({ spreadsheetId: SPREADSHEET_ID });
+  const meta = await withRetry(() => api.spreadsheets.get({ spreadsheetId: SPREADSHEET_ID }), `ensureSheet.meta(${sheetName})`);
   const exists = meta.data.sheets.some(s => s.properties.title === sheetName);
   if (exists) return false;
-  await api.spreadsheets.batchUpdate({
+  await withRetry(() => api.spreadsheets.batchUpdate({
     spreadsheetId: SPREADSHEET_ID,
     resource: { requests: [{ addSheet: { properties: { title: sheetName } } }] },
-  });
+  }), `ensureSheet.add(${sheetName})`);
   return true;
 }
 
@@ -133,48 +162,48 @@ async function ensureHeaders(sheetName, keys, api) {
   api = api || (await getSheetsClient());
   let headerRes;
   try {
-    headerRes = await api.spreadsheets.values.get({
+    headerRes = await withRetry(() => api.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
       range: `${sheetName}!1:1`,
-    });
+    }), `ensureHeaders.read(${sheetName})`);
   } catch (err) {
     // Sheet/tab probably doesn't exist yet — create it and retry once.
     if (String(err.message || '').includes('Unable to parse range')) {
       await ensureSheet(sheetName, api);
-      headerRes = await api.spreadsheets.values.get({
+      headerRes = await withRetry(() => api.spreadsheets.values.get({
         spreadsheetId: SPREADSHEET_ID,
         range: `${sheetName}!1:1`,
-      });
+      }), `ensureHeaders.reread(${sheetName})`);
     } else { throw err; }
   }
   const current = headerRes.data.values?.[0] || [];
   const missing = keys.filter(k => k && !current.includes(k));
   if (missing.length === 0) return current;
   const updated = current.concat(missing);
-  await api.spreadsheets.values.update({
+  await withRetry(() => api.spreadsheets.values.update({
     spreadsheetId: SPREADSHEET_ID,
     range: `${sheetName}!1:1`,
     valueInputOption: 'RAW',
     resource: { values: [updated] },
-  });
+  }), `ensureHeaders.write(${sheetName})`);
   return updated;
 }
 
 async function deleteRowById(sheetName, id) {
   const api = await getSheetsClient();
-  const meta = await api.spreadsheets.get({ spreadsheetId: SPREADSHEET_ID });
+  const meta = await withRetry(() => api.spreadsheets.get({ spreadsheetId: SPREADSHEET_ID }), `deleteRowById.meta(${sheetName})`);
   const sheet = meta.data.sheets.find(s => s.properties.title === sheetName);
   if (!sheet) throw new Error('Sheet not found');
   const sheetId = sheet.properties.sheetId;
-  const response = await api.spreadsheets.values.get({
+  const response = await withRetry(() => api.spreadsheets.values.get({
     spreadsheetId: SPREADSHEET_ID,
     range: sheetName,
-  });
+  }), `deleteRowById.read(${sheetName})`);
   const [headers, ...rows] = response.data.values || [];
   const idIdx = headers.indexOf('id');
   const rowIdx = rows.findIndex(r => r[idIdx] === id);
   if (rowIdx === -1) throw new Error('Record not found');
-  await api.spreadsheets.batchUpdate({
+  await withRetry(() => api.spreadsheets.batchUpdate({
     spreadsheetId: SPREADSHEET_ID,
     resource: {
       requests: [{
@@ -188,7 +217,7 @@ async function deleteRowById(sheetName, id) {
         }
       }]
     }
-  });
+  }), `deleteRowById.write(${sheetName})`);
 }
 
 // Root folder (or Shared Drive) ID where this app's files live.
@@ -294,4 +323,4 @@ async function getDriveClient() {
   return drive;
 }
 
-module.exports = { getRows, appendRow, appendRows, updateRowById, deleteRowById, getDriveClient, getDriveRoot, ensureHeaders, ensureSheet };
+module.exports = { getRows, appendRow, appendRows, updateRowById, deleteRowById, getDriveClient, getDriveRoot, ensureHeaders, ensureSheet, withRetry, _isRetryable: isRetryable };

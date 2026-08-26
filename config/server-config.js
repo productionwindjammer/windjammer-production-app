@@ -33,6 +33,17 @@ module.exports = {
       emailTemplates:     'EmailTemplates',
       maintenance:        'Maintenance',
       budgets:            'Budgets',
+      venueKnowledge:        'VenueKnowledge',
+      venueKnowledgeHistory: 'VenueKnowledgeHistory',
+      emailFacts:            'EmailFacts',
+      emailThreads:          'EmailThreads',
+      emailIssues:           'EmailIssues',
+      aiChangeLog:           'AiChangeLog',
+      userOntologyRules:     'UserOntologyRules',
+      aiCorrections:         'AiCorrections',
+      knowledgeCandidates:   'KnowledgeCandidates',
+      showContacts:          'ShowContacts',
+      showAsks:              'ShowAsks',
     }
   }
 };
