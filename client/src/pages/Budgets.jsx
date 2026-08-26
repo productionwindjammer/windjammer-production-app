@@ -129,18 +129,18 @@ export default function Budgets() {
     ;(async () => {
       try {
         const [b, l, m, vb, s] = await Promise.all([
-          api.get('/api/budgets'),
-          api.get('/api/labor'),
-          api.get('/api/maintenance'),
-          api.get('/api/vendor-bookings').catch(() => ({ data: [] })),
-          api.get('/api/shows'),
+          api.get('/budgets'),
+          api.get('/labor'),
+          api.get('/maintenance'),
+          api.get('/vendor-bookings').catch(() => ({ data: { data: [] } })),
+          api.get('/shows'),
         ])
         if (cancelled) return
-        setBudgets(b.data || [])
-        setLabor(l.data || [])
-        setMaint(m.data || [])
-        setVendorBookings(vb.data || [])
-        setShows(s.data || [])
+        setBudgets(b.data.data || [])
+        setLabor(l.data.data || [])
+        setMaint(m.data.data || [])
+        setVendorBookings(vb.data.data || [])
+        setShows(s.data.data || [])
       } finally {
         if (!cancelled) setLoading(false)
       }
@@ -231,13 +231,13 @@ export default function Budgets() {
       const totalAllocated = Object.values(allocations).reduce((s, v) => s + (parseFloat(v) || 0), 0)
       if (yearBudget) {
         const patch = { categories, totalAllocated, updatedAt: new Date().toISOString() }
-        await api.put(`/api/budgets/${yearBudget.id}`, patch)
+        await api.put(`/budgets/${yearBudget.id}`, patch)
         setBudgets(list => list.map(b => b.id === yearBudget.id ? { ...b, ...patch } : b))
       } else {
-        const res = await api.post('/api/budgets', {
+        const res = await api.post('/budgets', {
           scope: 'year', scopeKey: year, categories, totalAllocated,
         })
-        setBudgets(list => [...list, res.data])
+        setBudgets(list => [...list, res.data.data])
       }
       setYearDraft(null)
     } finally {
@@ -254,13 +254,13 @@ export default function Budgets() {
       const totalAllocated = Object.values(allocations).reduce((s, v) => s + (parseFloat(v) || 0), 0)
       if (existing) {
         const patch = { categories, totalAllocated, updatedAt: new Date().toISOString() }
-        await api.put(`/api/budgets/${existing.id}`, patch)
+        await api.put(`/budgets/${existing.id}`, patch)
         setBudgets(list => list.map(b => b.id === existing.id ? { ...b, ...patch } : b))
       } else {
-        const res = await api.post('/api/budgets', {
+        const res = await api.post('/budgets', {
           scope: 'show', scopeKey: showId, categories, totalAllocated,
         })
-        setBudgets(list => [...list, res.data])
+        setBudgets(list => [...list, res.data.data])
       }
       setShowDrafts(d => { const n = { ...d }; delete n[showId]; return n })
     } finally {

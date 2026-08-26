@@ -108,14 +108,14 @@ export default function Financials() {
     ;(async () => {
       try {
         const [l, s, e] = await Promise.all([
-          api.get('/api/labor'),
-          api.get('/api/shows'),
-          api.get('/api/events').catch(() => ({ data: [] })),
+          api.get('/labor'),
+          api.get('/shows'),
+          api.get('/events').catch(() => ({ data: { data: [] } })),
         ])
         if (cancelled) return
-        setLabor(l.data || [])
-        setShows(s.data || [])
-        setEvents(e.data || [])
+        setLabor(l.data.data || [])
+        setShows(s.data.data || [])
+        setEvents(e.data.data || [])
       } finally {
         if (!cancelled) setLoading(false)
       }

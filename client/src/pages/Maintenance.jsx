@@ -128,12 +128,12 @@ export default function Maintenance() {
     ;(async () => {
       try {
         const [m, v] = await Promise.all([
-          api.get('/api/maintenance'),
-          api.get('/api/vendors').catch(() => ({ data: [] })),
+          api.get('/maintenance'),
+          api.get('/vendors').catch(() => ({ data: { data: [] } })),
         ])
         if (cancelled) return
-        setItems((m.data || []).map(row => ({ ...row, quotes: parseQuotes(row.quotes) })))
-        setVendors(v.data || [])
+        setItems((m.data.data || []).map(row => ({ ...row, quotes: parseQuotes(row.quotes) })))
+        setVendors(v.data.data || [])
       } finally {
         if (!cancelled) setLoading(false)
       }
@@ -261,12 +261,13 @@ export default function Maintenance() {
       // Auto-stamp completedDate when the user flips status to complete without picking a date.
       if (payload.status === 'complete' && !payload.completedDate) payload.completedDate = today()
       if (editing) {
-        const res = await api.put(`/api/maintenance/${editing.id}`, payload)
-        const updated = { ...editing, ...res.data, quotes: parseQuotes(res.data.quotes ?? editing.quotes) }
+        await api.put(`/maintenance/${editing.id}`, payload)
+        const updated = { ...editing, ...payload, quotes: parseQuotes(payload.quotes ?? editing.quotes) }
         setItems(list => list.map(x => x.id === editing.id ? updated : x))
       } else {
-        const res = await api.post('/api/maintenance', { ...payload, quotes: '[]' })
-        setItems(list => [...list, { ...res.data, quotes: parseQuotes(res.data.quotes) }])
+        const res = await api.post('/maintenance', { ...payload, quotes: '[]' })
+        const created = res.data.data
+        setItems(list => [...list, { ...created, quotes: parseQuotes(created.quotes) }])
       }
       setModal(false)
     } finally {
@@ -276,15 +277,15 @@ export default function Maintenance() {
 
   async function deleteItem(row) {
     if (!confirm(`Delete "${row.title}"? This cannot be undone.`)) return
-    await api.delete(`/api/maintenance/${row.id}`)
+    await api.delete(`/maintenance/${row.id}`)
     setItems(list => list.filter(x => x.id !== row.id))
     if (expanded === row.id) setExpanded(null)
   }
 
   async function persistQuotes(row, newQuotes) {
-    const res = await api.put(`/api/maintenance/${row.id}`, { quotes: JSON.stringify(newQuotes) })
+    await api.put(`/maintenance/${row.id}`, { quotes: JSON.stringify(newQuotes) })
     setItems(list => list.map(x => x.id === row.id
-      ? { ...x, ...res.data, quotes: parseQuotes(res.data.quotes ?? newQuotes) }
+      ? { ...x, quotes: newQuotes }
       : x))
   }
 
@@ -319,9 +320,9 @@ export default function Maintenance() {
     const patch = { quotes: JSON.stringify(next) }
     if (winner) patch.approvedCost = winner.amount
     if (row.status === 'open' || row.status === 'quoting') patch.status = 'approved'
-    const res = await api.put(`/api/maintenance/${row.id}`, patch)
+    await api.put(`/maintenance/${row.id}`, patch)
     setItems(list => list.map(x => x.id === row.id
-      ? { ...x, ...res.data, quotes: parseQuotes(res.data.quotes ?? next) }
+      ? { ...x, ...patch, quotes: next }
       : x))
   }
 
@@ -342,9 +343,9 @@ export default function Maintenance() {
     } else if (decision === 'under_review') {
       patch.status = 'under_review'
     }
-    const res = await api.put(`/api/maintenance/${row.id}`, patch)
+    await api.put(`/maintenance/${row.id}`, patch)
     setItems(list => list.map(x => x.id === row.id
-      ? { ...x, ...res.data, quotes: parseQuotes(res.data.quotes ?? x.quotes) }
+      ? { ...x, ...patch }
       : x))
     setRejectDraft(d => ({ ...d, [row.id]: '' }))
   }
