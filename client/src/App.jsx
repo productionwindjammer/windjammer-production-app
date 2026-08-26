@@ -9,6 +9,7 @@ import Dashboard from './pages/Dashboard'
 import Shows from './pages/Shows'
 import ShowDetail from './pages/ShowDetail'
 import Events from './pages/Events'
+import EventSchedule from './pages/EventSchedule'
 import Advancing from './pages/Advancing'
 import DayOfShow from './pages/DayOfShow'
 import Labor from './pages/Labor'
@@ -46,6 +47,7 @@ export default function App() {
             <Route path="/shows"       element={<Shows />} />
             <Route path="/shows/:id"   element={<ShowDetail />} />
             <Route path="/events"      element={<Events />} />
+            <Route path="/events/:id/schedule" element={<EventSchedule />} />
             <Route path="/calendar"    element={<Calendar />} />
             <Route path="/artists"     element={<Artists />} />
             <Route path="/artists/:id" element={<Artists />} />

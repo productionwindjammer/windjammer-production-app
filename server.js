@@ -915,6 +915,35 @@ app.post('/api/events/:id/detach-show', requireAuth, requireRole('admin', 'produ
   }
 });
 
+// Event-wide schedule: merges rows tagged with this eventId with any per-show
+// day-sheet rows whose showId belongs to a show in the event.
+app.get('/api/events/:id/schedule', requireAuth, async (req, res) => {
+  try {
+    const eventId = String(req.params.id);
+    const [events, shows, schedule] = await Promise.all([
+      sheets.getRows(config.googleSheets.sheets.events),
+      sheets.getRows(config.googleSheets.sheets.shows),
+      sheets.getRows(config.googleSheets.sheets.schedule),
+    ]);
+    const event = events.find(e => String(e.id) === eventId);
+    if (!event) return res.status(404).json({ success: false, message: 'Event not found' });
+    const eventShows = shows.filter(s => String(s.eventId || '') === eventId);
+    const showIds = new Set(eventShows.map(s => String(s.id)));
+    const items = schedule.filter(r =>
+      String(r.eventId || '') === eventId || showIds.has(String(r.showId || ''))
+    );
+    items.sort((a, b) => {
+      const d = (a.date || '').localeCompare(b.date || '');
+      if (d !== 0) return d;
+      return (a.time || '').localeCompare(b.time || '');
+    });
+    res.json({ success: true, data: { event, shows: eventShows, items } });
+  } catch (err) {
+    console.error('[events schedule]', err.message);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 // ── Artist defaults: shared helpers ──────────────────────────────────────────
 // The artist registry now owns long-term production info (rider, production
 // needs, backline, hospitality, catering, advance contact). Per-show Advancing
@@ -1033,7 +1062,7 @@ app.put('/api/settings/venue', requireAuth, requireRole('admin', 'production_man
   }
 });
 
-crudRoutes(app, '/api/schedule',        'schedule');
+crudRoutes(app, '/api/schedule',        'schedule',  ['admin','production_manager','venue_management','promoter']);
 crudRoutes(app, '/api/labor',           'labor',     ['admin','production_manager','stage_manager'], { afterCreate: notifyShiftAssigned });
 
 // Stage managers can create/edit maintenance items and project proposals, but

@@ -171,9 +171,15 @@ export default function Events() {
                 </div>
                 {canEdit && (
                   <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                    <button className="btn btn-ghost btn-sm" onClick={() => navigate(`/events/${ev.id}/schedule`)}>📅 Schedule</button>
                     <button className="btn btn-ghost btn-sm" onClick={() => openAttach(ev)}>+ Add Shows</button>
                     <button className="btn btn-ghost btn-sm" onClick={() => openEdit(ev)}>Edit</button>
                     <button className="btn btn-danger btn-sm" onClick={() => handleDelete(ev)}>Delete</button>
+                  </div>
+                )}
+                {!canEdit && (
+                  <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                    <button className="btn btn-ghost btn-sm" onClick={() => navigate(`/events/${ev.id}/schedule`)}>📅 Schedule</button>
                   </div>
                 )}
               </div>
