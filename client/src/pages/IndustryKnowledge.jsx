@@ -96,7 +96,7 @@ export default function IndustryKnowledge() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
         <div>
           <h1 style={{ margin: 0 }}>Industry Knowledge</h1>
-          <div style={{ color: '#666', marginTop: 4, fontSize: 13 }}>
+          <div style={{ color: 'var(--text-muted)', marginTop: 4, fontSize: 13 }}>
             Live-concert domain ontology. Venue policy and user rules override industry standard. Unknown stays unknown — nothing here is fabricated.
           </div>
         </div>
@@ -150,10 +150,10 @@ function DomainsView({ domains, concepts, onOpen }) {
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 12 }}>
       {domains.map(d => (
         <div key={d.id} onClick={() => onOpen(d.id)}
-             style={{ border: '1px solid #ddd', borderRadius: 8, padding: 14, cursor: 'pointer', background: '#fff' }}>
+             style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 14, cursor: 'pointer', background: 'var(--bg-card)' }}>
           <div style={{ fontWeight: 600 }}>{d.label}</div>
-          {d.parent && <div style={{ fontSize: 11, color: '#888' }}>subdomain of {d.parent}</div>}
-          <div style={{ marginTop: 8, fontSize: 12, color: '#555' }}>{count(d.id)} concepts</div>
+          {d.parent && <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>subdomain of {d.parent}</div>}
+          <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text-muted)' }}>{count(d.id)} concepts</div>
         </div>
       ))}
     </div>
@@ -171,20 +171,20 @@ function ConceptsView({ concepts, domains, selectedDomain, onDomain }) {
             {domains.map(d => <option key={d.id} value={d.id}>{d.label}</option>)}
           </select>
         </div>
-        <div style={{ border: '1px solid #ddd', borderRadius: 6, maxHeight: '70vh', overflow: 'auto' }}>
+        <div style={{ border: '1px solid var(--border)', borderRadius: 6, maxHeight: '70vh', overflow: 'auto' }}>
           {concepts.map(c => (
             <div key={c.id} onClick={() => setSelected(c)}
                  style={{ padding: '8px 10px', borderBottom: '1px solid #eee', cursor: 'pointer',
                           background: selected?.id === c.id ? '#eef4fa' : '#fff' }}>
               <div style={{ fontWeight: 500, fontSize: 13 }}>{c.label}</div>
-              <div style={{ fontSize: 11, color: '#888' }}>{c.kind} · {c.domain}</div>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{c.kind} · {c.domain}</div>
             </div>
           ))}
-          {concepts.length === 0 && <div style={{ padding: 10, color: '#888' }}>No concepts.</div>}
+          {concepts.length === 0 && <div style={{ padding: 10, color: 'var(--text-muted)' }}>No concepts.</div>}
         </div>
       </div>
-      <div style={{ border: '1px solid #ddd', borderRadius: 8, padding: 16, background: '#fff' }}>
-        {selected ? <ConceptDetail concept={selected} /> : <div style={{ color: '#888' }}>Select a concept.</div>}
+      <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 16, background: 'var(--bg-card)' }}>
+        {selected ? <ConceptDetail concept={selected} /> : <div style={{ color: 'var(--text-muted)' }}>Select a concept.</div>}
       </div>
     </div>
   )
@@ -194,7 +194,7 @@ function ConceptDetail({ concept }) {
   return (
     <div>
       <div style={{ fontSize: 20, fontWeight: 600 }}>{concept.label}</div>
-      <div style={{ color: '#666', fontSize: 12 }}>
+      <div style={{ color: 'var(--text-muted)', fontSize: 12 }}>
         {concept.kind} · {concept.domain} · tier: industry_standard
       </div>
       <p style={{ marginTop: 12 }}>{concept.description}</p>
@@ -227,7 +227,7 @@ function ConceptDetail({ concept }) {
 function Row({ label, children }) {
   return (
     <div style={{ marginTop: 12 }}>
-      <div style={{ fontSize: 11, color: '#888', textTransform: 'uppercase', letterSpacing: 0.5 }}>{label}</div>
+      <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.5 }}>{label}</div>
       <div style={{ marginTop: 4 }}>{children}</div>
     </div>
   )
@@ -237,13 +237,13 @@ function WorkflowsView({ workflows }) {
   return (
     <div>
       {workflows.map(wf => (
-        <div key={wf.id} style={{ border: '1px solid #ddd', borderRadius: 8, padding: 16, marginBottom: 12, background: '#fff' }}>
+        <div key={wf.id} style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 16, marginBottom: 12, background: 'var(--bg-card)' }}>
           <div style={{ fontSize: 18, fontWeight: 600 }}>{wf.label}</div>
-          {wf.description && <div style={{ color: '#555', marginTop: 4 }}>{wf.description}</div>}
+          {wf.description && <div style={{ color: 'var(--text-muted)', marginTop: 4 }}>{wf.description}</div>}
           {wf.stages?.length > 0 && (
             <Row label="Stages">
               <table style={{ width: '100%', fontSize: 13 }}>
-                <thead><tr style={{ textAlign: 'left', color: '#666' }}>
+                <thead><tr style={{ textAlign: 'left', color: 'var(--text-muted)' }}>
                   <th>Stage</th><th>Owner</th><th>Window</th><th>Notes</th>
                 </tr></thead>
                 <tbody>
@@ -294,7 +294,7 @@ function WorkflowsView({ workflows }) {
 function ResolveView({ input, onChange, onRun, result }) {
   return (
     <div style={{ maxWidth: 720 }}>
-      <p style={{ color: '#555' }}>
+      <p style={{ color: 'var(--text-muted)' }}>
         Try any term or acronym. Ambiguous acronyms (PM, TM, plot, rider, push) require context — the resolver will refuse to guess.
       </p>
       <form onSubmit={onRun} style={{ display: 'grid', gap: 8 }}>
@@ -306,8 +306,8 @@ function ResolveView({ input, onChange, onRun, result }) {
         <div><button className="btn primary" type="submit">Resolve</button></div>
       </form>
       {result && (
-        <div style={{ marginTop: 16, border: '1px solid #ddd', borderRadius: 8, padding: 14, background: '#fff' }}>
-          <div style={{ fontSize: 13, color: '#666' }}>Result</div>
+        <div style={{ marginTop: 16, border: '1px solid var(--border)', borderRadius: 8, padding: 14, background: 'var(--bg-card)' }}>
+          <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>Result</div>
           <div style={{ marginTop: 6, fontSize: 15 }}>
             <strong>Resolved:</strong> {result.resolved ? 'yes' : 'no'}<br/>
             <strong>Concept:</strong> {result.conceptId || '(none)'}<br/>
@@ -316,7 +316,7 @@ function ResolveView({ input, onChange, onRun, result }) {
           </div>
           {result.alternatives?.length > 0 && (
             <div style={{ marginTop: 8 }}>
-              <div style={{ fontSize: 12, color: '#888' }}>Alternatives (could not disambiguate)</div>
+              <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>Alternatives (could not disambiguate)</div>
               <div>{result.alternatives.join(', ')}</div>
             </div>
           )}
@@ -330,30 +330,30 @@ function RulesView({ rules, draft, onDraft, onAdd, onDelete, error, concepts }) 
   const kindHint = RULE_KINDS.find(k => k.value === draft.kind)?.hint
   return (
     <div>
-      <div style={{ border: '1px solid #ddd', borderRadius: 8, padding: 16, background: '#fff', marginBottom: 16 }}>
+      <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 16, background: 'var(--bg-card)', marginBottom: 16 }}>
         <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 8 }}>Add a rule</div>
-        <p style={{ color: '#555', fontSize: 13, marginTop: 0 }}>
+        <p style={{ color: 'var(--text-muted)', fontSize: 13, marginTop: 0 }}>
           User rules override industry standard. Venue policy still overrides authoritative facts.
         </p>
         <form onSubmit={onAdd} style={{ display: 'grid', gap: 8, maxWidth: 720 }}>
-          <label style={{ fontSize: 12, color: '#666' }}>Kind
+          <label style={{ fontSize: 12, color: 'var(--text-muted)' }}>Kind
             <select className="input" value={draft.kind} onChange={e => onDraft({ ...draft, kind: e.target.value })}>
               {RULE_KINDS.map(k => <option key={k.value} value={k.value}>{k.label}</option>)}
             </select>
           </label>
-          {kindHint && <div style={{ fontSize: 12, color: '#888' }}>{kindHint}</div>}
-          <label style={{ fontSize: 12, color: '#666' }}>Subject (term or concept id)
+          {kindHint && <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{kindHint}</div>}
+          <label style={{ fontSize: 12, color: 'var(--text-muted)' }}>Subject (term or concept id)
             <input className="input" value={draft.subject} onChange={e => onDraft({ ...draft, subject: e.target.value })} />
           </label>
-          <label style={{ fontSize: 12, color: '#666' }}>Statement
+          <label style={{ fontSize: 12, color: 'var(--text-muted)' }}>Statement
             <input className="input" placeholder={draft.kind === 'term_disambiguation' || draft.kind === 'synonym' ? 'concept id, e.g. production_manager_venue' : 'text or JSON'}
                    value={draft.statement} onChange={e => onDraft({ ...draft, statement: e.target.value })} />
           </label>
-          <label style={{ fontSize: 12, color: '#666' }}>Scope
+          <label style={{ fontSize: 12, color: 'var(--text-muted)' }}>Scope
             <input className="input" placeholder="venue-wide  |  context:settlement  |  context:advance"
                    value={draft.scope} onChange={e => onDraft({ ...draft, scope: e.target.value })} />
           </label>
-          <label style={{ fontSize: 12, color: '#666' }}>Note (optional)
+          <label style={{ fontSize: 12, color: 'var(--text-muted)' }}>Note (optional)
             <input className="input" value={draft.note} onChange={e => onDraft({ ...draft, note: e.target.value })} />
           </label>
           {error && <div style={{ color: '#c00' }}>{error}</div>}
@@ -361,10 +361,10 @@ function RulesView({ rules, draft, onDraft, onAdd, onDelete, error, concepts }) 
         </form>
       </div>
 
-      <div style={{ border: '1px solid #ddd', borderRadius: 8, background: '#fff' }}>
+      <div style={{ border: '1px solid var(--border)', borderRadius: 8, background: 'var(--bg-card)' }}>
         <div style={{ padding: 12, fontWeight: 600 }}>Active rules ({rules.length})</div>
         <table style={{ width: '100%', fontSize: 13 }}>
-          <thead><tr style={{ textAlign: 'left', background: '#f8f8f8' }}>
+          <thead><tr style={{ textAlign: 'left', background: 'var(--bg-sidebar)' }}>
             <th style={{ padding: 8 }}>Kind</th>
             <th style={{ padding: 8 }}>Subject</th>
             <th style={{ padding: 8 }}>Statement</th>
@@ -379,12 +379,12 @@ function RulesView({ rules, draft, onDraft, onAdd, onDelete, error, concepts }) 
                 <td style={{ padding: 8 }}>{r.subject}</td>
                 <td style={{ padding: 8, fontFamily: 'monospace', fontSize: 11 }}>{r.statement}</td>
                 <td style={{ padding: 8 }}>{r.scope}</td>
-                <td style={{ padding: 8, fontSize: 11, color: '#666' }}>{r.addedBy} · {r.addedAt?.slice(0, 10)}</td>
+                <td style={{ padding: 8, fontSize: 11, color: 'var(--text-muted)' }}>{r.addedBy} · {r.addedAt?.slice(0, 10)}</td>
                 <td style={{ padding: 8 }}><button className="btn small" onClick={() => onDelete(r.id)}>Delete</button></td>
               </tr>
             ))}
             {rules.length === 0 && (
-              <tr><td colSpan={6} style={{ padding: 16, color: '#888', textAlign: 'center' }}>
+              <tr><td colSpan={6} style={{ padding: 16, color: 'var(--text-muted)', textAlign: 'center' }}>
                 No user rules yet. The industry-standard seed is in effect.
               </td></tr>
             )}
@@ -398,12 +398,12 @@ function RulesView({ rules, draft, onDraft, onAdd, onDelete, error, concepts }) 
 function TiersView() {
   return (
     <div style={{ maxWidth: 820 }}>
-      <p style={{ color: '#555' }}>
+      <p style={{ color: 'var(--text-muted)' }}>
         The knowledge layer stratifies information into six tiers. For factual questions (like "what is the curfew tonight?"),
         we walk the tiers from top to bottom and use the first authoritative answer. Unknown never overrides anything.
       </p>
-      <table style={{ width: '100%', fontSize: 14, background: '#fff', border: '1px solid #ddd', borderRadius: 8 }}>
-        <thead><tr style={{ background: '#f8f8f8', textAlign: 'left' }}>
+      <table style={{ width: '100%', fontSize: 14, background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8 }}>
+        <thead><tr style={{ background: 'var(--bg-sidebar)', textAlign: 'left' }}>
           <th style={{ padding: 10 }}>#</th>
           <th style={{ padding: 10 }}>Tier</th>
           <th style={{ padding: 10 }}>What it is</th>
@@ -418,7 +418,7 @@ function TiersView() {
           ))}
         </tbody>
       </table>
-      <div style={{ marginTop: 12, color: '#555', fontSize: 13 }}>
+      <div style={{ marginTop: 12, color: 'var(--text-muted)', fontSize: 13 }}>
         Precedence for facts (top wins): show_specific → user_instructed → venue_policy → historical_observation → industry_standard → unknown.<br/>
         Precedence for terminology (top wins): user_instructed → venue_policy → industry_standard.
       </div>

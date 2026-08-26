@@ -72,7 +72,7 @@ export default function VenueKnowledgeReview() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
         <div>
           <h1 style={{ margin: 0 }}>Venue Knowledge Review</h1>
-          <div style={{ color: '#666', marginTop: 4, fontSize: 13, maxWidth: 700 }}>
+          <div style={{ color: 'var(--text-muted)', marginTop: 4, fontSize: 13, maxWidth: 700 }}>
             Repeated PM corrections surface here as <em>candidate rules</em>. Nothing becomes authoritative until you accept it.
             Version history is preserved automatically when a candidate is accepted.
           </div>
@@ -110,7 +110,7 @@ export default function VenueKnowledgeReview() {
           <div style={{ display: 'flex', gap: 4, marginBottom: 12 }}>
             {STATUS_TABS.map(([k, l]) => (
               <button key={k} onClick={() => setTab(k)}
-                style={{ padding: '6px 10px', border: '1px solid #ddd',
+                style={{ padding: '6px 10px', border: '1px solid var(--border)',
                          background: tab === k ? '#333' : '#fff', color: tab === k ? '#fff' : '#333',
                          borderRadius: 4, cursor: 'pointer', fontSize: 12 }}>
                 {l}
@@ -156,12 +156,12 @@ function makeEditDraft(c) {
 }
 
 function CandidateTable({ candidates, onSelect }) {
-  if (candidates.length === 0) return <div style={{ color: '#888', padding: 20 }}>No candidates in this status.</div>
+  if (candidates.length === 0) return <div style={{ color: 'var(--text-muted)', padding: 20 }}>No candidates in this status.</div>
   return (
-    <div style={{ border: '1px solid #ddd', borderRadius: 8, overflow: 'hidden', background: '#fff' }}>
+    <div style={{ border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden', background: 'var(--bg-card)' }}>
       <table style={{ width: '100%', fontSize: 13 }}>
         <thead>
-          <tr style={{ background: '#f8f8f8', textAlign: 'left' }}>
+          <tr style={{ background: 'var(--bg-sidebar)', textAlign: 'left' }}>
             <th style={{ padding: 10 }}>Field</th>
             <th style={{ padding: 10 }}>Proposed value</th>
             <th style={{ padding: 10 }}>Suggested scope</th>
@@ -184,10 +184,10 @@ function CandidateTable({ candidates, onSelect }) {
                     Potential {classificationLabel(c.suggestedClassification)} detected
                   </span>
                 </td>
-                <td style={{ padding: 10, color: '#555' }}>{c.scopeValue || '(any)'}</td>
+                <td style={{ padding: 10, color: 'var(--text-muted)' }}>{c.scopeValue || '(any)'}</td>
                 <td style={{ padding: 10 }}>{c.occurrences}</td>
                 <td style={{ padding: 10 }}>{showCount}</td>
-                <td style={{ padding: 10, color: '#666', fontSize: 11 }}>{(c.updatedAt || c.at || '').slice(0, 16).replace('T', ' ')}</td>
+                <td style={{ padding: 10, color: 'var(--text-muted)', fontSize: 11 }}>{(c.updatedAt || c.at || '').slice(0, 16).replace('T', ' ')}</td>
                 <td style={{ padding: 10 }}>
                   <button className="btn small" onClick={() => onSelect(c)}>Review</button>
                 </td>
@@ -218,14 +218,14 @@ function ReviewModal({ candidate, editDraft, onEditDraft, onClose, onReject, onE
   const [rejectNote, setRejectNote] = useState('')
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
-      <div style={{ background: '#fff', width: 720, maxHeight: '90vh', overflow: 'auto', borderRadius: 8, padding: 20 }}>
+      <div style={{ background: 'var(--bg-card)', width: 720, maxHeight: '90vh', overflow: 'auto', borderRadius: 8, padding: 20 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
           <div>
             <h2 style={{ margin: 0 }}>Review candidate</h2>
-            <div style={{ color: '#666', marginTop: 4 }}>
+            <div style={{ color: 'var(--text-muted)', marginTop: 4 }}>
               <code>{candidate.field}</code> = <strong>{candidate.value}</strong>
             </div>
-            <div style={{ marginTop: 6, fontSize: 13, color: '#555' }}>
+            <div style={{ marginTop: 6, fontSize: 13, color: 'var(--text-muted)' }}>
               Detected as <strong>{classificationLabel(candidate.suggestedClassification)}</strong>
               {' '}from {candidate.occurrences} correction(s) across {showIds.length} show(s){candidate.scopeValue ? ` for ${candidate.scopeValue}` : ''}.
               This is a proposal — nothing is authoritative until you accept.
@@ -264,14 +264,14 @@ function ReviewModal({ candidate, editDraft, onEditDraft, onClose, onReject, onE
             <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
               <input type="checkbox" checked={editDraft.authoritative}
                      onChange={e => onEditDraft({ ...editDraft, authoritative: e.target.checked })} />
-              <span style={{ fontSize: 13, color: '#555' }}>Full-confidence venue rule</span>
+              <span style={{ fontSize: 13, color: 'var(--text-muted)' }}>Full-confidence venue rule</span>
             </label>
           </Field>
           <Field label="Temporary">
             <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
               <input type="checkbox" checked={editDraft.temporary}
                      onChange={e => onEditDraft({ ...editDraft, temporary: e.target.checked })} />
-              <span style={{ fontSize: 13, color: '#555' }}>Retire on expiration</span>
+              <span style={{ fontSize: 13, color: 'var(--text-muted)' }}>Retire on expiration</span>
             </label>
           </Field>
         </div>
@@ -283,7 +283,7 @@ function ReviewModal({ candidate, editDraft, onEditDraft, onClose, onReject, onE
 
         <hr style={{ margin: '16px 0' }} />
         <h3 style={{ margin: '0 0 8px' }}>Supporting evidence</h3>
-        <div style={{ fontSize: 13, color: '#555' }}>
+        <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>
           {supporting.length} correction row(s) in <code>AiCorrections</code>. Shows: {showIds.join(', ') || '—'}
         </div>
 
@@ -306,12 +306,12 @@ function ReviewModal({ candidate, editDraft, onEditDraft, onClose, onReject, onE
 }
 
 function CorrectionsTable({ corrections }) {
-  if (corrections.length === 0) return <div style={{ color: '#888', padding: 20 }}>No corrections yet.</div>
+  if (corrections.length === 0) return <div style={{ color: 'var(--text-muted)', padding: 20 }}>No corrections yet.</div>
   return (
-    <div style={{ border: '1px solid #ddd', borderRadius: 8, overflow: 'auto', background: '#fff' }}>
+    <div style={{ border: '1px solid var(--border)', borderRadius: 8, overflow: 'auto', background: 'var(--bg-card)' }}>
       <table style={{ width: '100%', fontSize: 12 }}>
         <thead>
-          <tr style={{ background: '#f8f8f8', textAlign: 'left' }}>
+          <tr style={{ background: 'var(--bg-sidebar)', textAlign: 'left' }}>
             <th style={{ padding: 8 }}>When</th>
             <th style={{ padding: 8 }}>Actor</th>
             <th style={{ padding: 8 }}>Show</th>
@@ -325,16 +325,16 @@ function CorrectionsTable({ corrections }) {
         <tbody>
           {corrections.map(c => (
             <tr key={c.id} style={{ borderTop: '1px solid #eee' }}>
-              <td style={{ padding: 8, color: '#666' }}>{(c.at || '').slice(0, 16).replace('T', ' ')}</td>
+              <td style={{ padding: 8, color: 'var(--text-muted)' }}>{(c.at || '').slice(0, 16).replace('T', ' ')}</td>
               <td style={{ padding: 8 }}>{c.actor}</td>
               <td style={{ padding: 8 }}>{c.showId}</td>
               <td style={{ padding: 8 }}><code>{c.field}</code></td>
-              <td style={{ padding: 8, textDecoration: 'line-through', color: '#888' }}>{c.aiValue}</td>
+              <td style={{ padding: 8, textDecoration: 'line-through', color: 'var(--text-muted)' }}>{c.aiValue}</td>
               <td style={{ padding: 8, fontWeight: 500 }}>{c.correctedValue}</td>
               <td style={{ padding: 8 }}>
                 <span style={{ padding: '2px 6px', background: '#f0f0f0', borderRadius: 4, fontSize: 11 }}>{c.correctionType}</span>
               </td>
-              <td style={{ padding: 8, color: '#555' }}>{c.reason}</td>
+              <td style={{ padding: 8, color: 'var(--text-muted)' }}>{c.reason}</td>
             </tr>
           ))}
         </tbody>
@@ -346,7 +346,7 @@ function CorrectionsTable({ corrections }) {
 function Field({ label, children }) {
   return (
     <label style={{ display: 'block', marginTop: 8 }}>
-      <div style={{ fontSize: 11, color: '#666', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 3 }}>{label}</div>
+      <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 3 }}>{label}</div>
       {children}
     </label>
   )

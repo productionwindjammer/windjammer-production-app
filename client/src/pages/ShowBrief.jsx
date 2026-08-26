@@ -94,15 +94,15 @@ function AiDisclosureBanner() {
 function Header({ brief, onRefresh }) {
   const s = brief.show || {}
   return (
-    <div style={{ border: '1px solid #ddd', borderRadius: 8, padding: 16, background: '#fff' }}>
+    <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 16, background: 'var(--bg-card)' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
         <div>
-          <div style={{ fontSize: 12, color: '#888' }}>
+          <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
             <Link to={`/shows/${s.id}`}>← Show page</Link> ·
             <Link to={`/email-intel?showId=${s.id}`} style={{ marginLeft: 6 }}>Email Intel</Link>
           </div>
           <h1 style={{ margin: '4px 0 0' }}>{s.artist || s.eventName || 'Show'} — {s.date}</h1>
-          <div style={{ color: '#555', marginTop: 6, fontSize: 14 }}>{brief.aiShowBrief?.text}</div>
+          <div style={{ color: 'var(--text-muted)', marginTop: 6, fontSize: 14 }}>{brief.aiShowBrief?.text}</div>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
           <StatusPill status={brief.status} />
@@ -120,9 +120,9 @@ function StatusPill({ status }) {
     in_progress:          { bg: '#fff4e0', color: '#a06000' },
     ready_pending_review: { bg: '#eef4fa', color: '#1a4a7a' },
     advanced:             { bg: '#eaf6ea', color: '#2a6b2a' },
-    not_started:          { bg: '#f4f4f4', color: '#555' },
+    not_started:          { bg: '#f4f4f4', color: 'var(--text-muted)' },
   }
-  const c = colors[status] || { bg: '#f0f0f0', color: '#333' }
+  const c = colors[status] || { bg: '#f0f0f0', color: 'var(--text)' }
   return (
     <span style={{ padding: '4px 10px', borderRadius: 12, background: c.bg, color: c.color, fontSize: 12, fontWeight: 600 }}>
       {String(status || '').replace(/_/g, ' ') || 'unknown'}
@@ -153,7 +153,7 @@ function ReadinessBar({ readiness }) {
 
 function SectionCard({ title, children }) {
   return (
-    <div style={{ border: '1px solid #ddd', borderRadius: 8, padding: 14, background: '#fff' }}>
+    <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 14, background: 'var(--bg-card)' }}>
       <div style={{ fontSize: 12, fontWeight: 600, color: '#1a4a7a', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 }}>
         {title}
       </div>
@@ -165,7 +165,7 @@ function SectionCard({ title, children }) {
 function renderSection(key, brief, setDrill) {
   const items = brief[key]
   if (!items || (Array.isArray(items) && items.length === 0)) {
-    return <div style={{ color: '#888', fontSize: 13 }}>No items.</div>
+    return <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>No items.</div>
   }
   switch (key) {
     case 'whatChanged':         return <ChangeList items={items} setDrill={setDrill} />
@@ -186,7 +186,7 @@ function renderSection(key, brief, setDrill) {
 }
 
 function TinyMeta({ text }) {
-  return <span style={{ fontSize: 11, color: '#888' }}>{text}</span>
+  return <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{text}</span>
 }
 
 // Epistemic label — mirrors the CLAIM_TYPES exported by showBrief.js. The
@@ -239,7 +239,7 @@ function RuleList({ items, setDrill, showTier }) {
         <ClaimBadge type={i.claimType} />
         {showTier && <TierBadge tier={i.tier} />} {i.title}
       </div>
-      <div style={{ fontSize: 12, color: '#555' }}>{i.text}</div>
+      <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{i.text}</div>
       {i.action && <div style={{ fontSize: 12, color: '#1a4a7a', marginTop: 2 }}>→ {i.action}</div>}
       {i.deadline && <TinyMeta text={`due ${i.deadline}`} />}
       <SourcesLink item={i} setDrill={setDrill} />
@@ -260,7 +260,7 @@ function ConflictList({ items, setDrill }) {
       <div style={{ fontSize: 13, fontWeight: 500, color: '#900' }}>
         <ClaimBadge type={i.claimType} />{i.title}
       </div>
-      <div style={{ fontSize: 12, color: '#555' }}>{i.text}</div>
+      <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{i.text}</div>
       {i.action && <div style={{ fontSize: 12, color: '#1a4a7a' }}>→ {i.action}</div>}
       <SourcesLink item={i} setDrill={setDrill} />
     </div>
@@ -298,7 +298,7 @@ function ContactsList({ items }) {
           <ClaimBadge type={i.claimType} />
           <strong>{i.role}:</strong> {i.name || '—'}
           {i.isPrimary && <span style={{ marginLeft: 6, fontSize: 10, background: '#eaf6ea', color: '#2a6b2a', padding: '1px 5px', borderRadius: 3 }}>PRIMARY</span>}
-          <div style={{ fontSize: 12, color: '#555', marginLeft: 60 }}>
+          <div style={{ fontSize: 12, color: 'var(--text-muted)', marginLeft: 60 }}>
             {i.phone && <span>📞 {i.phone}</span>}
             {i.phone && i.email && <span> · </span>}
             {i.email && <span>✉ {i.email}</span>}
@@ -339,7 +339,7 @@ function IntelList({ items, setDrill }) {
   return items.map(i => (
     <div key={i.id} style={{ padding: '6px 0', borderTop: '1px solid #f0f0f0' }}>
       <div style={{ fontSize: 13 }}><ClaimBadge type={i.claimType} />{i.text}</div>
-      {i.excerpt && <div style={{ fontSize: 12, color: '#555', fontStyle: 'italic', marginTop: 2 }}>“{i.excerpt}”</div>}
+      {i.excerpt && <div style={{ fontSize: 12, color: 'var(--text-muted)', fontStyle: 'italic', marginTop: 2 }}>“{i.excerpt}”</div>}
       <TinyMeta text={(i.at || '').replace('T', ' ').slice(0, 16)} />
       <SourcesLink item={i} setDrill={setDrill} />
     </div>
@@ -359,7 +359,7 @@ function ProposalList({ items, setDrill }) {
   ))
 }
 function RiskBadge({ risk }) {
-  const map = { high:{bg:'#fee',color:'#900'}, low:{bg:'#eaf6ea',color:'#2a6b2a'}, unknown:{bg:'#f4f4f4',color:'#666'} }
+  const map = { high:{bg:'#fee',color:'#900'}, low:{bg:'#eaf6ea',color:'#2a6b2a'}, unknown:{bg:'#f4f4f4',color: 'var(--text-muted)'} }
   const c = map[risk] || map.unknown
   return <span style={{ marginLeft: 6, padding: '1px 6px', borderRadius: 3, background: c.bg, color: c.color, fontSize: 10 }}>{risk}</span>
 }
@@ -413,22 +413,22 @@ function SourceDrawer({ title, sources, onClose }) {
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}
          onClick={onClose}>
-      <div style={{ background: '#fff', width: 640, maxHeight: '85vh', overflow: 'auto', borderRadius: 8, padding: 20 }}
+      <div style={{ background: 'var(--bg-card)', width: 640, maxHeight: '85vh', overflow: 'auto', borderRadius: 8, padding: 20 }}
            onClick={e => e.stopPropagation()}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
           <h3 style={{ margin: 0 }}>Sources</h3>
           <button className="btn" onClick={onClose}>Close</button>
         </div>
-        <div style={{ fontSize: 13, color: '#555', marginTop: 4 }}>{title}</div>
+        <div style={{ fontSize: 13, color: 'var(--text-muted)', marginTop: 4 }}>{title}</div>
         <div style={{ marginTop: 16, display: 'grid', gap: 10 }}>
           {sources.map((s, i) => (
-            <div key={i} style={{ border: '1px solid #eee', borderRadius: 6, padding: 10 }}>
+            <div key={i} style={{ border: '1px solid var(--border)', borderRadius: 6, padding: 10 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <div style={{ fontSize: 12, color: '#888', textTransform: 'uppercase', letterSpacing: 0.5 }}>{s.kind}</div>
-                {s.at && <div style={{ fontSize: 11, color: '#888' }}>{String(s.at).replace('T', ' ').slice(0, 16)}</div>}
+                <div style={{ fontSize: 12, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.5 }}>{s.kind}</div>
+                {s.at && <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{String(s.at).replace('T', ' ').slice(0, 16)}</div>}
               </div>
               {s.from && <div style={{ fontSize: 13, marginTop: 4 }}>from <strong>{s.from}</strong></div>}
-              {s.excerpt && <div style={{ marginTop: 6, padding: 8, background: '#fafafa', borderLeft: '3px solid #ddd', fontSize: 13, fontStyle: 'italic' }}>“{s.excerpt}”</div>}
+              {s.excerpt && <div style={{ marginTop: 6, padding: 8, background: 'var(--bg-sidebar)', borderLeft: '3px solid var(--border)', fontSize: 13, fontStyle: 'italic' }}>“{s.excerpt}”</div>}
               {s.label && !s.excerpt && <div style={{ fontSize: 13, marginTop: 4 }}>{s.label}</div>}
               <div style={{ marginTop: 8, display: 'flex', gap: 8, fontSize: 12 }}>
                 {s.ref && <Link to={s.ref}>Open →</Link>}
@@ -437,7 +437,7 @@ function SourceDrawer({ title, sources, onClose }) {
               </div>
             </div>
           ))}
-          {sources.length === 0 && <div style={{ color: '#888' }}>No sources.</div>}
+          {sources.length === 0 && <div style={{ color: 'var(--text-muted)' }}>No sources.</div>}
         </div>
       </div>
     </div>
