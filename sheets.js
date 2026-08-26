@@ -55,34 +55,65 @@ async function getSheetsClient() {
   return google.sheets({ version: 'v4', auth: client });
 }
 
+// Short-lived read cache + in-flight coalescing. A single page load fires
+// 6-10 parallel getRows() across the same handful of sheets; without this,
+// each becomes a separate Google Sheets API call and easily trips rate limits
+// (429 -> withRetry backoff -> slow -> eventually 500). With this, a burst
+// of concurrent reads for the same sheet shares one API call, and reads that
+// arrive within a few seconds of each other are served from memory.
+const READ_TTL_MS = Number(process.env.SHEETS_READ_TTL_MS || 5000);
+const readCache  = new Map(); // sheetName -> { at, rows }
+const inFlight   = new Map(); // sheetName -> Promise<rows>
+
+function invalidateSheet(sheetName) {
+  readCache.delete(sheetName);
+}
+
 async function getRows(sheetName) {
-  const api = await getSheetsClient();
-  let response;
-  try {
-    response = await withRetry(() => api.spreadsheets.values.get({
-      spreadsheetId: SPREADSHEET_ID,
-      range: sheetName,
-    }), `getRows(${sheetName})`);
-  } catch (err) {
-    if (String(err.message || '').includes('Unable to parse range')) return [];
-    throw err;
+  const cached = readCache.get(sheetName);
+  if (cached && Date.now() - cached.at < READ_TTL_MS) {
+    return cached.rows.map(r => ({ ...r }));
   }
-  const [headers, ...rows] = response.data.values || [];
-  if (!headers) return [];
-  return rows.map(row => {
-    const obj = {};
-    headers.forEach((h, i) => {
-      let v = row[i] !== undefined ? row[i] : '';
-      // Google Sheets auto-coerces the strings "true"/"false" into boolean
-      // cells when we write with valueInputOption: 'USER_ENTERED', then
-      // returns them as "TRUE"/"FALSE" on read. Normalize back to lowercase
-      // so the many `x === 'true'` comparisons across the client still work.
-      if (v === 'TRUE') v = 'true';
-      else if (v === 'FALSE') v = 'false';
-      obj[h] = v;
+  const already = inFlight.get(sheetName);
+  if (already) return (await already).map(r => ({ ...r }));
+
+  const promise = (async () => {
+    const api = await getSheetsClient();
+    let response;
+    try {
+      response = await withRetry(() => api.spreadsheets.values.get({
+        spreadsheetId: SPREADSHEET_ID,
+        range: sheetName,
+      }), `getRows(${sheetName})`);
+    } catch (err) {
+      if (String(err.message || '').includes('Unable to parse range')) return [];
+      throw err;
+    }
+    const [headers, ...rows] = response.data.values || [];
+    if (!headers) return [];
+    return rows.map(row => {
+      const obj = {};
+      headers.forEach((h, i) => {
+        let v = row[i] !== undefined ? row[i] : '';
+        // Google Sheets auto-coerces "true"/"false" written with
+        // valueInputOption 'USER_ENTERED' into booleans, then returns them
+        // as "TRUE"/"FALSE". Normalize so === 'true' checks still match.
+        if (v === 'TRUE') v = 'true';
+        else if (v === 'FALSE') v = 'false';
+        obj[h] = v;
+      });
+      return obj;
     });
-    return obj;
-  });
+  })();
+
+  inFlight.set(sheetName, promise);
+  try {
+    const rows = await promise;
+    readCache.set(sheetName, { at: Date.now(), rows });
+    return rows.map(r => ({ ...r }));
+  } finally {
+    inFlight.delete(sheetName);
+  }
 }
 
 async function appendRow(sheetName, data) {
@@ -100,6 +131,7 @@ async function appendRow(sheetName, data) {
     valueInputOption: 'USER_ENTERED',
     resource: { values: [row] },
   }), `appendRow(${sheetName})`);
+  invalidateSheet(sheetName);
 }
 
 // Append many rows in a single API call. Ensures headers once.
@@ -116,6 +148,7 @@ async function appendRows(sheetName, dataArr) {
     valueInputOption: 'USER_ENTERED',
     resource: { values },
   }), `appendRows(${sheetName}, n=${dataArr.length})`);
+  invalidateSheet(sheetName);
   return dataArr.length;
 }
 
@@ -141,6 +174,7 @@ async function updateRowById(sheetName, id, data) {
     valueInputOption: 'USER_ENTERED',
     resource: { values: [updatedRow] },
   }), `updateRowById.write(${sheetName})`);
+  invalidateSheet(sheetName);
 }
 
 // Make sure a tab with the given title exists in the spreadsheet. Idempotent.
@@ -218,6 +252,7 @@ async function deleteRowById(sheetName, id) {
       }]
     }
   }), `deleteRowById.write(${sheetName})`);
+  invalidateSheet(sheetName);
 }
 
 // Root folder (or Shared Drive) ID where this app's files live.
@@ -323,4 +358,4 @@ async function getDriveClient() {
   return drive;
 }
 
-module.exports = { getRows, appendRow, appendRows, updateRowById, deleteRowById, getDriveClient, getDriveRoot, ensureHeaders, ensureSheet, withRetry, _isRetryable: isRetryable };
+module.exports = { getRows, appendRow, appendRows, updateRowById, deleteRowById, getDriveClient, getDriveRoot, ensureHeaders, ensureSheet, withRetry, invalidateSheet, _isRetryable: isRetryable };
