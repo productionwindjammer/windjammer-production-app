@@ -59,11 +59,19 @@ export default function AdvancementDashboard() {
   }
 
   async function openRules(showId) {
+    setRules(null)
+    setRulesOpen(true)
     try {
       const { data } = await api.get(`/advancement/${showId}/rules`)
-      setRules(data.data)
-      setRulesOpen(true)
-    } catch (err) { alert(err.response?.data?.message || err.message) }
+      const audit = Array.isArray(data?.data) ? data.data : []
+      if (!Array.isArray(data?.data)) {
+        console.warn('[rules-audit] unexpected response shape:', data)
+      }
+      setRules(audit)
+    } catch (err) {
+      console.error('[rules-audit] fetch failed:', err)
+      setRules({ error: err.response?.data?.message || err.message || 'Failed to load rules audit.' })
+    }
   }
 
   const grouped = useMemo(() => {
@@ -96,7 +104,7 @@ export default function AdvancementDashboard() {
       </Modal>
 
       <Modal isOpen={rulesOpen} onClose={() => setRulesOpen(false)} title="Why each requirement did or did not fire" size="large">
-        {rules ? <RulesAudit rules={rules} /> : null}
+        <RulesAudit rules={rules} />
       </Modal>
     </div>
   )
@@ -338,6 +346,23 @@ function RuleList({ rules }) {
 }
 
 function RulesAudit({ rules }) {
+  if (rules === null || rules === undefined) {
+    return <div style={{ color: '#94a3b8', padding: 8 }}>Loading rules audit…</div>
+  }
+  if (rules && !Array.isArray(rules) && rules.error) {
+    return (
+      <div style={{ color: '#fca5a5', padding: 8 }}>
+        Could not load the rules audit: {rules.error}
+      </div>
+    )
+  }
+  if (!Array.isArray(rules) || rules.length === 0) {
+    return (
+      <div style={{ color: '#94a3b8', padding: 8 }}>
+        No rules were returned for this show. This usually means the advancement engine could not build state for it (missing show record or backend error). Try refreshing the dashboard.
+      </div>
+    )
+  }
   const applied = rules.filter(r => r.applies)
   const skipped = rules.filter(r => !r.applies)
   return (
@@ -346,19 +371,19 @@ function RulesAudit({ rules }) {
         Every rule is evaluated for every show. This shows which fired for THIS show and which were skipped, so nothing is applied silently.
       </div>
       <Section title={`✓ APPLIED (${applied.length})`}>
-        {applied.map(r => (
+        {applied.length === 0 ? <div style={{ color: '#64748b', fontSize: 12 }}>No rules applied to this show.</div> : applied.map(r => (
           <div key={r.id} style={rowBox}>
             <div style={{ display: 'flex', justifyContent: 'space-between' }}>
               <strong>{r.title}</strong>
               <span style={{ color: TIER_COLOR[r.tier], fontSize: 11, fontWeight: 700 }}>{TIER_LABEL[r.tier]} · {r.category}</span>
             </div>
-            <div style={{ fontSize: 12, color: '#cbd5e1' }}>Because: {r.because}</div>
+            <div style={{ fontSize: 12, color: '#cbd5e1' }}>Because: {r.because || <em style={{ color: '#64748b' }}>no reason recorded</em>}</div>
             <div style={{ fontSize: 11, color: '#64748b' }}>{r.id}</div>
           </div>
         ))}
       </Section>
       <Section title={`⊘ SKIPPED (${skipped.length})`}>
-        {skipped.map(r => (
+        {skipped.length === 0 ? <div style={{ color: '#64748b', fontSize: 12 }}>No rules were skipped.</div> : skipped.map(r => (
           <div key={r.id} style={{ ...rowBox, opacity: 0.6 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between' }}>
               <strong>{r.title}</strong>
