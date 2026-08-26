@@ -582,6 +582,7 @@ async function evaluate(state) {
     importantCommunications: importantComms,
     recommendedActions,
     appliedRuleCount: applied.length,
+    linkedEmailCount: (state.linkedEmails || []).length,
   };
 }
 
@@ -643,7 +644,7 @@ function collectImportantComms(state) {
 // ── State builder ───────────────────────────────────────────────────────────
 
 async function buildShowState(showId, { sheetsAdapter = sheetsReal, now = null } = {}) {
-  const [shows, advances, schedule, labor, vendorBookings, emailFacts, emailIssues, venueRuleRows] = await Promise.all([
+  const [shows, advances, schedule, labor, vendorBookings, emailFacts, emailIssues, venueRuleRows, emails] = await Promise.all([
     sheetsAdapter.getRows(SHEETS.shows),
     sheetsAdapter.getRows(SHEETS.advancing),
     sheetsAdapter.getRows(SHEETS.schedule),
@@ -652,6 +653,7 @@ async function buildShowState(showId, { sheetsAdapter = sheetsReal, now = null }
     sheetsAdapter.getRows(SHEETS.emailFacts).catch(() => []),
     sheetsAdapter.getRows(SHEETS.emailIssues).catch(() => []),
     sheetsAdapter.getRows(SHEETS.venueKnowledge).catch(() => []),
+    sheetsAdapter.getRows(SHEETS.emails).catch(() => []),
   ]);
 
   const show    = shows.find(s => String(s.id) === String(showId));
@@ -669,6 +671,9 @@ async function buildShowState(showId, { sheetsAdapter = sheetsReal, now = null }
     .map(f => ({ ...f, newValue: safeParse(f.newValue), previousValue: safeParse(f.previousValue), conflicts: safeParse(f.conflicts, []) }));
 
   const showIssues = emailIssues.filter(i => String(i.showId) === String(showId));
+  const linkedEmails = emails
+    .filter(e => String(e.showId) === String(showId))
+    .sort((a, b) => (b.date || '').localeCompare(a.date || ''));
 
   const activeVenue = venueRuleRows
     .filter(r => r.kind === 'rule' && r.status === 'active')
@@ -682,6 +687,7 @@ async function buildShowState(showId, { sheetsAdapter = sheetsReal, now = null }
     vendorBookings: vendorBookings.filter(b => String(b.showId) === String(showId)),
     approvedFacts, pendingFacts, recentFacts,
     emailIssues: showIssues,
+    linkedEmails,
     venueRules: activeVenue,
     now: now || new Date().toISOString(),
   };

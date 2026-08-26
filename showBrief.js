@@ -463,7 +463,9 @@ function buildRecentEmailIntel(state) {
   const facts = (state.recentFacts || []).slice().sort((a, b) => (b.sourceDate || '').localeCompare(a.sourceDate || ''));
   const issues = (state.emailIssues || []).slice().sort((a, b) => (b.date || '').localeCompare(a.date || ''));
   const items = [];
+  const seenThreads = new Set();
   for (const f of facts.slice(0, 8)) {
+    if (f.threadId) seenThreads.add(f.threadId);
     items.push({
       id: `intel:fact:${f.id}`,
       claimType: CLAIM.FACT,
@@ -474,12 +476,34 @@ function buildRecentEmailIntel(state) {
     });
   }
   for (const i of issues.slice(0, 6)) {
+    if (i.threadId) seenThreads.add(i.threadId);
     items.push({
       id: `intel:issue:${i.id}`,
       claimType: CLAIM.INFERENCE,
       text: `${i.kind}: ${i.excerpt || i.phrase || ''}`,
       at: i.date,
       sources: [issueSource(i)],
+    });
+  }
+  // Surface linked emails that haven't produced structured facts/issues yet
+  // so the PM sees the bot IS aware of them as source material. Grouped by
+  // gmailThreadId → one row per thread with the newest subject/from/snippet.
+  const linked = (state.linkedEmails || []).slice();
+  const byThread = new Map();
+  for (const e of linked) {
+    const tid = e.gmailThreadId || e.threadId || e.id;
+    if (!tid || seenThreads.has(tid)) continue;
+    const cur = byThread.get(tid);
+    if (!cur || (e.date || '') > (cur.date || '')) byThread.set(tid, e);
+  }
+  for (const e of [...byThread.values()].sort((a, b) => (b.date || '').localeCompare(a.date || '')).slice(0, 6)) {
+    items.push({
+      id: `intel:email:${e.id}`,
+      claimType: CLAIM.UNKNOWN,
+      text: `Linked email — ${e.subject || '(no subject)'} — ${e.from || 'unknown sender'}`,
+      excerpt: e.snippet || '',
+      at: e.date,
+      sources: [emailSource(e)],
     });
   }
   return items;
@@ -692,6 +716,11 @@ function composeSummary(state, evaluation, sections) {
   if (bullets.length) parts.push(bullets.join('; ') + '.');
   else                parts.push('No open items surface at this time.');
 
+  const linkedCount = (state.linkedEmails || []).length;
+  if (linkedCount) {
+    parts.push(`${linkedCount} email${linkedCount === 1 ? '' : 's'} linked to this show inform this brief.`);
+  }
+
   return { claimType: CLAIM.INFERENCE, text: parts.join(' '), asOf: state.now };
 }
 
@@ -736,6 +765,14 @@ function issueSource(i) {
     kind: 'issue', id: i.id, threadId: i.threadId || '',
     excerpt: i.excerpt || i.phrase || '', at: i.date,
     ref: i.threadId ? `/email?thread=${encodeURIComponent(i.threadId)}` : '',
+  };
+}
+function emailSource(e) {
+  const tid = e.gmailThreadId || e.threadId || '';
+  return {
+    kind: 'email', id: e.id, threadId: tid, messageId: e.gmailMessageId || '',
+    excerpt: e.snippet || '', from: e.from || '', at: e.date || '',
+    ref: tid ? `/email?thread=${encodeURIComponent(tid)}` : `/email`,
   };
 }
 

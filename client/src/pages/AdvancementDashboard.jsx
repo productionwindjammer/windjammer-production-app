@@ -313,7 +313,7 @@ function DetailView({ data, onRules }) {
       ) : null}
 
       <div style={{ fontSize: 11, color: '#64748b', marginTop: 20 }}>
-        {data.appliedRuleCount} rules applied to this show • evaluated {data.evaluatedAt}
+        {data.appliedRuleCount} rules applied to this show • {data.linkedEmailCount || 0} linked email{data.linkedEmailCount === 1 ? '' : 's'} feeding the bot • evaluated {data.evaluatedAt}
       </div>
     </div>
   )
