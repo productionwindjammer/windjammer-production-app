@@ -93,6 +93,22 @@ function AiDisclosureBanner() {
 
 function Header({ brief, onRefresh }) {
   const s = brief.show || {}
+  const [analyzing, setAnalyzing] = useState(false)
+  const [analyzeMsg, setAnalyzeMsg] = useState('')
+  async function reanalyze() {
+    if (analyzing) return
+    setAnalyzing(true); setAnalyzeMsg('')
+    try {
+      const r = await api.post(`/advancement/${encodeURIComponent(s.id)}/reanalyze-emails`, {})
+      const d = r.data || {}
+      setAnalyzeMsg(`Analyzed ${d.analyzed || 0} thread(s), ${d.proposed || 0} new proposal(s).`)
+      onRefresh?.()
+    } catch (e) {
+      setAnalyzeMsg(e.response?.data?.message || e.message)
+    } finally {
+      setAnalyzing(false)
+    }
+  }
   return (
     <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 16, background: 'var(--bg-card)' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
@@ -107,7 +123,18 @@ function Header({ brief, onRefresh }) {
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
           <StatusPill status={brief.status} />
           <ReadinessBar readiness={brief.readiness} />
-          <button className="btn" onClick={onRefresh}>Refresh</button>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <button className="btn" onClick={onRefresh}>Refresh</button>
+            <button
+              className="btn"
+              onClick={reanalyze}
+              disabled={analyzing}
+              title="Re-run the AI extractor on every email linked to this show. New proposals appear in Email Intel; existing ones aren't duplicated."
+            >
+              {analyzing ? 'Analyzing…' : 'Re-analyze linked emails'}
+            </button>
+          </div>
+          {analyzeMsg && <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{analyzeMsg}</div>}
         </div>
       </div>
     </div>

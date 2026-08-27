@@ -3161,6 +3161,90 @@ app.post('/api/emails/save-to-drive', requireAuth, async (req, res) => {
   }
 });
 
+// POST /api/emails/save-to-artist  — pull a Gmail attachment and add it to
+// an artist's document library (ArtistDocuments + the artist's Drive folder).
+// Body: { messageId, attachmentId, filename, mimeType,
+//         artistId?, showId?, type?, notes?, year? }
+// If artistId is missing but showId is provided, we resolve the artist from
+// the show (same logic used by the email assign handler).
+app.post('/api/emails/save-to-artist',
+  requireAuth, requireRole('admin','production_manager','stage_manager'),
+  async (req, res) => {
+    try {
+      const {
+        messageId, attachmentId, filename, mimeType,
+        artistId: bodyArtistId, showId, type, notes, year,
+      } = req.body || {};
+      if (!messageId || !attachmentId || !filename)
+        return res.status(400).json({ success: false, message: 'messageId, attachmentId, filename required' });
+
+      let artistId = bodyArtistId || '';
+      let showDate = '';
+      if (!artistId && showId) {
+        const [shows, artists] = await Promise.all([
+          sheets.getRows(config.googleSheets.sheets.shows),
+          sheets.getRows(config.googleSheets.sheets.artists).catch(() => []),
+        ]);
+        const show = shows.find(s => s.id === showId);
+        if (!show) return res.status(404).json({ success: false, message: 'Show not found' });
+        const artist = findArtistForShow(show, artists);
+        if (!artist) return res.status(400).json({ success: false, message: 'Show has no linked artist — pick an artist explicitly.' });
+        artistId = artist.id;
+        showDate = show.date || '';
+      }
+      if (!artistId) return res.status(400).json({ success: false, message: 'artistId or showId required' });
+
+      const { artist, folderId } = await ensureArtistFolder(artistId);
+      if (!artist) return res.status(404).json({ success: false, message: 'Artist not found' });
+
+      const base64 = await gmail.getAttachmentData(messageId, attachmentId);
+      const buffer = Buffer.from(base64, 'base64');
+      const readable = Readable.from(buffer);
+
+      const drive = await sheets.getDriveClient();
+      const uploaded = await drive.files.create({
+        requestBody: {
+          name:    filename,
+          mimeType: mimeType || 'application/octet-stream',
+          parents: [folderId],
+        },
+        media: { mimeType: mimeType || 'application/octet-stream', body: readable },
+        fields: 'id,webViewLink',
+      });
+      await drive.permissions.create({
+        fileId: uploaded.data.id,
+        requestBody: { role: 'reader', type: 'anyone' },
+      });
+
+      const record = {
+        id:          Date.now().toString(),
+        artistId,
+        artistName:  artist.name || '',
+        name:        filename,
+        type:        type || 'email-attachment',
+        year:        year ? String(year) : '',
+        notes:       notes || `Saved from email (Gmail message ${messageId})`,
+        showId:      showId || '',
+        showDate,
+        console:     '',
+        consoleFirmware: '',
+        engineerRole:    '',
+        mimeType:    mimeType || 'application/octet-stream',
+        driveFileId: uploaded.data.id,
+        webViewLink: uploaded.data.webViewLink || `https://drive.google.com/file/d/${uploaded.data.id}/view`,
+        uploadedBy:  req.user?.name || req.user?.email || '',
+        createdAt:   new Date().toISOString(),
+      };
+      await sheets.appendRow(config.googleSheets.sheets.artistDocuments, record);
+
+      res.json({ success: true, data: record });
+    } catch (err) {
+      console.error('Save-to-artist error:', err.message);
+      res.status(500).json({ success: false, message: err.message });
+    }
+  }
+);
+
 // ── Artist Registry — Document storage (Drive-backed) ────────────────────────
 // One folder per artist (lazily created). Each document is a row in the
 // ArtistDocuments sheet referencing a Drive fileId. Everyone can read; PM+
@@ -3519,6 +3603,39 @@ async function getStoredEmails() {
   }
 }
 
+// Fetch full bodies for every stored message on a thread and (re-)run the
+// analyzer with the given showId so freshly-linked emails produce pending
+// facts the bot can actually use. proposeFromAnalysis dedupes by
+// (messageId, field, scope, showId), so replays never spam duplicates.
+// Best-effort — callers must not fail if this throws.
+async function analyzeLinkedThread({ threadId, showId, shows, allEmails, actor }) {
+  if (!threadId || !showId) return { analyzed: 0, proposed: 0, skipped: 'missing_ids' };
+  if (!gmail.isConfigured())  return { analyzed: 0, proposed: 0, skipped: 'gmail_not_configured' };
+  const rows = allEmails.filter(e => e.gmailThreadId === threadId && e.gmailMessageId);
+  if (rows.length === 0) return { analyzed: 0, proposed: 0, skipped: 'no_messages' };
+  const messages = [];
+  for (const r of rows) {
+    try {
+      const raw = await gmail.getMessage(r.gmailMessageId);
+      const parsed = gmail.parseMessage(raw);
+      messages.push({
+        id:       r.gmailMessageId,
+        threadId: threadId,
+        from:     parsed.from || r.from || '',
+        subject:  parsed.subject || r.subject || '',
+        date:     parsed.date || r.date || '',
+        body:     parsed.textBody || (parsed.htmlBody || '').replace(/<[^>]+>/g, ' '),
+      });
+    } catch (err) {
+      console.warn(`[analyzeLinkedThread] fetch ${r.gmailMessageId} failed: ${err.message}`);
+    }
+  }
+  if (messages.length === 0) return { analyzed: 0, proposed: 0, skipped: 'body_fetch_failed' };
+  const analysis = await emailIntel.analyzeThread({ messages, shows, threadContext: { showId } });
+  const written  = await emailIntel.proposeFromAnalysis(analysis, { actor: actor || 'manual-link' });
+  return { analyzed: 1, proposed: (written?.written || []).length };
+}
+
 // ── Windjammer relevance filter ───────────────────────────────────────────────
 // Every Gmail query is AND-ed with this so we only ingest show-related mail.
 const WINDJAMMER_KEYWORDS = [
@@ -3820,32 +3937,52 @@ app.post('/api/emails/:id/assign', requireAuth, requireRole('admin', 'production
 
     await sheets.updateRowById(config.googleSheets.sheets.emails, id, updates);
 
+    // The Emails sheet stores the Gmail thread ID under gmailThreadId, but
+    // EmailFacts / EmailIssues store the same underlying value under
+    // threadId — both come from Gmail's thread id.
+    const gTid = email.gmailThreadId || email.threadId || '';
+
     // Propagate the assignment to EmailFacts + EmailIssues so the show brief,
     // waiting-on tracker, and email-intel views actually see the newly linked
     // thread. Without this step, facts extracted at scrape time keep their
     // old (often empty) showId and remain invisible to the show.
     let factsUpdated = 0;
     let issuesUpdated = 0;
-    if (showId && email.threadId) {
+    if (showId && gTid) {
       try {
         const [facts, issues] = await Promise.all([
           sheets.getRows(config.googleSheets.sheets.emailFacts).catch(() => []),
           sheets.getRows(config.googleSheets.sheets.emailIssues).catch(() => []),
         ]);
         for (const f of facts) {
-          if (f.threadId === email.threadId && f.showId !== showId) {
+          if (f.threadId === gTid && f.showId !== showId) {
             await sheets.updateRowById(config.googleSheets.sheets.emailFacts, f.id, { showId });
             factsUpdated++;
           }
         }
         for (const i of issues) {
-          if (i.threadId === email.threadId && i.showId !== showId) {
+          if (i.threadId === gTid && i.showId !== showId) {
             await sheets.updateRowById(config.googleSheets.sheets.emailIssues, i.id, { showId });
             issuesUpdated++;
           }
         }
       } catch (err) {
         console.warn('[assign email] fact/issue propagation failed:', err.message);
+      }
+    }
+
+    // Auto-analyze the freshly-linked thread so the bot pulls real facts out
+    // of it — even if it was never analyzed at scrape time. Best-effort.
+    let autoAnalyzed = 0, autoProposed = 0;
+    if (showId && gTid) {
+      try {
+        const r = await analyzeLinkedThread({
+          threadId: gTid, showId, shows, allEmails: all, actor: 'manual-link:' + req.user.id,
+        });
+        autoAnalyzed = r.analyzed || 0;
+        autoProposed = r.proposed || 0;
+      } catch (err) {
+        console.warn('[assign email] auto-analyze failed:', err.message);
       }
     }
 
@@ -3875,6 +4012,8 @@ app.post('/api/emails/:id/assign', requireAuth, requireRole('admin', 'production
       advanceEmailSet,
       factsUpdated,
       issuesUpdated,
+      autoAnalyzed,
+      autoProposed,
     });
   } catch (err) {
     console.error('Assign email error:', err.message);
@@ -3932,9 +4071,16 @@ app.post('/api/emails/assign-bulk', requireAuth, requireRole('admin', 'productio
     // this, previously-scraped facts/issues stay tagged to their old showId
     // (often empty) and never appear in the show brief.
     let factsUpdated = 0, issuesUpdated = 0;
+    let threadIds = new Set();
     if (showId && valid.length) {
       try {
-        const threadIds = new Set(valid.map(id => (all.find(e => e.id === id) || {}).threadId).filter(Boolean));
+        threadIds = new Set(
+          valid
+            .map(id => all.find(e => e.id === id))
+            .filter(Boolean)
+            .map(e => e.gmailThreadId || e.threadId)
+            .filter(Boolean),
+        );
         const [facts, issues] = await Promise.all([
           sheets.getRows(config.googleSheets.sheets.emailFacts).catch(() => []),
           sheets.getRows(config.googleSheets.sheets.emailIssues).catch(() => []),
@@ -3956,6 +4102,24 @@ app.post('/api/emails/assign-bulk', requireAuth, requireRole('admin', 'productio
       }
     }
 
+    // Auto-analyze each newly-linked thread so the bot pulls real facts from
+    // the underlying Gmail bodies. Best-effort per thread — one bad thread
+    // must not kill the batch response.
+    let autoAnalyzed = 0, autoProposed = 0;
+    if (showId && threadIds.size) {
+      for (const tid of threadIds) {
+        try {
+          const r = await analyzeLinkedThread({
+            threadId: tid, showId, shows, allEmails: all, actor: 'manual-link-bulk:' + req.user.id,
+          });
+          autoAnalyzed += r.analyzed || 0;
+          autoProposed += r.proposed || 0;
+        } catch (err) {
+          console.warn(`[bulk assign email] auto-analyze thread ${tid} failed: ${err.message}`);
+        }
+      }
+    }
+
     res.json({
       success: true,
       showId: updates.showId || '',
@@ -3966,9 +4130,52 @@ app.post('/api/emails/assign-bulk', requireAuth, requireRole('admin', 'productio
       missing,
       factsUpdated,
       issuesUpdated,
+      autoAnalyzed,
+      autoProposed,
     });
   } catch (err) {
     console.error('Bulk assign email error:', err.message);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// POST /api/advancement/:showId/reanalyze-emails — re-run the AI analyzer
+// on every email currently linked to this show. Useful for shows whose
+// emails were linked before auto-analyze-on-assign existed, or when the
+// PM wants to refresh proposals after re-linking. proposeFromAnalysis
+// dedupes so replays never spam duplicates.
+app.post('/api/advancement/:showId/reanalyze-emails', requireAuth, requireShowAccess, requireRole('admin','production_manager','stage_manager'), async (req, res) => {
+  try {
+    const { showId } = req.params;
+    const [shows, allEmails] = await Promise.all([
+      sheets.getRows(config.googleSheets.sheets.shows),
+      getStoredEmails(),
+    ]);
+    const show = shows.find(s => s.id === showId);
+    if (!show) return res.status(404).json({ success: false, message: 'Show not found' });
+
+    const threadIds = new Set(
+      allEmails.filter(e => e.showId === showId).map(e => e.gmailThreadId).filter(Boolean),
+    );
+    if (threadIds.size === 0) {
+      return res.json({ success: true, threads: 0, analyzed: 0, proposed: 0, message: 'No linked emails on this show.' });
+    }
+
+    let analyzed = 0, proposed = 0;
+    for (const tid of threadIds) {
+      try {
+        const r = await analyzeLinkedThread({
+          threadId: tid, showId, shows, allEmails, actor: 'reanalyze:' + req.user.id,
+        });
+        analyzed += r.analyzed || 0;
+        proposed += r.proposed || 0;
+      } catch (err) {
+        console.warn(`[reanalyze] thread ${tid}: ${err.message}`);
+      }
+    }
+    res.json({ success: true, threads: threadIds.size, analyzed, proposed });
+  } catch (err) {
+    console.error('Reanalyze emails error:', err.message);
     res.status(500).json({ success: false, message: err.message });
   }
 });
