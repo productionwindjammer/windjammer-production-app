@@ -57,14 +57,18 @@ function validateAtStartup({ log = console, env = null } = {}) {
 
 function publicStatus({ env = null } = {}) {
   const llm = config.llm || {};
+  const src = env || process.env;
   const key         = env ? (env.ANTHROPIC_API_KEY || '') : (llm.anthropicKey || '');
   const miscasedKey = env ? detectMiscased(env) : (llm.miscasedKey || null);
+  const autoSyncMinutes = Number(src.AUTO_SYNC_MINUTES || 0) || 0;
   return {
     provider: llm.provider || 'anthropic',
     model:    llm.model,
     configured: Boolean(key),
     keyPreview: key ? mask(key) : null,
     miscasedKey: miscasedKey || null,
+    autoSyncMinutes,
+    autoSyncEnabled: autoSyncMinutes > 0,
   };
 }
 

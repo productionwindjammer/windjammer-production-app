@@ -90,14 +90,17 @@ test('validateAtStartup · warns when key shape looks wrong', () => {
 test('publicStatus · shape sent to the admin UI never includes the key', () => {
   const { publicStatus } = loadFresh();
   const key = 'sk-ant-api03-' + 'B'.repeat(40) + '-Q4';
-  const s = publicStatus({ env: env({ ANTHROPIC_API_KEY: key }) });
-  assert.deepEqual(Object.keys(s).sort(), ['configured', 'keyPreview', 'miscasedKey', 'model', 'provider'].sort());
+  const s = publicStatus({ env: env({ ANTHROPIC_API_KEY: key, AUTO_SYNC_MINUTES: '15' }) });
+  const required = ['configured', 'keyPreview', 'miscasedKey', 'model', 'provider'];
+  for (const k of required) assert.ok(k in s, `missing required key: ${k}`);
   for (const [k, v] of Object.entries(s)) {
     assert.ok(!String(v ?? '').includes(key), `${k} must not contain the full key`);
   }
   assert.equal(s.configured, true);
   assert.equal(s.provider, 'anthropic');
   assert.ok(s.keyPreview.endsWith('-Q4'));
+  assert.equal(s.autoSyncMinutes, 15);
+  assert.equal(s.autoSyncEnabled, true);
 });
 
 test('AnthropicProvider · errors never echo the api key', async () => {

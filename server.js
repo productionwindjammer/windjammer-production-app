@@ -3852,6 +3852,7 @@ async function syncEmailsForShow(showId, advanceEmail, showName, client = null, 
 
   let newCount = 0;
   const toAppend = [];
+  const analyzable = [];
   for (const ref of messageRefs) {
     if (storedKeys.has(dupKey(ref.id))) continue;
     try {
@@ -3884,6 +3885,19 @@ async function syncEmailsForShow(showId, advanceEmail, showName, client = null, 
       };
 
       toAppend.push(emailRecord);
+      if (direction === 'inbound' && showId) {
+        analyzable.push({
+          showId,
+          parsed: {
+            id:       parsed.gmailMessageId,
+            threadId: parsed.gmailThreadId,
+            from:     parsed.from,
+            subject:  parsed.subject,
+            date:     parsed.date,
+            body:     parsed.textBody || (parsed.htmlBody || '').replace(/<[^>]+>/g, ' '),
+          },
+        });
+      }
       storedKeys.add(dupKey(ref.id));
       newCount++;
     } catch (e) {
@@ -3893,7 +3907,43 @@ async function syncEmailsForShow(showId, advanceEmail, showName, client = null, 
   if (toAppend.length) {
     await sheets.appendRows(config.googleSheets.sheets.emails, toAppend);
   }
+  // Charter-safe: staged as pending — PM must approve. Same guardrails as auto-sync.
+  if (analyzable.length) {
+    try {
+      const shows = await sheets.getRows(config.googleSheets.sheets.shows);
+      await analyzeInboundThreads(analyzable, shows, 'sync-for-show');
+    } catch (err) {
+      console.error(`[sync-for-show] analyze failed for show=${showId}: ${err.message}`);
+    }
+  }
   return newCount;
+}
+
+// Group a list of {showId, parsed} into (showId,threadId) buckets and run
+// the LLM extractor on each. proposeFromAnalysis dedupes so re-runs are safe.
+async function analyzeInboundThreads(analyzable, shows, actor) {
+  if (!analyzable || !analyzable.length) return { threads: 0, proposed: 0 };
+  const groups = new Map();
+  for (const a of analyzable) {
+    const key = `${a.showId}|${a.parsed.threadId}`;
+    if (!groups.has(key)) groups.set(key, { showId: a.showId, parsed: [] });
+    groups.get(key).parsed.push(a.parsed);
+  }
+  let proposed = 0;
+  for (const { showId, parsed } of groups.values()) {
+    try {
+      const analysis = await productionExtractor.extractOrFallback({
+        messages: parsed, shows, showId, config: config.llm,
+      });
+      const written = await emailIntel.proposeFromAnalysis(analysis, { actor });
+      const n = (written?.written || []).length;
+      proposed += n;
+      console.log(`[${actor}] analyzed show=${showId} thread=${parsed[0]?.threadId} source=${analysis.source} proposed=${n}`);
+    } catch (err) {
+      console.error(`[${actor}] analyze failed for show=${showId} thread=${parsed[0]?.threadId}: ${err.message}`);
+    }
+  }
+  return { threads: groups.size, proposed };
 }
 
 // GET /api/emails?showId=xxx | ?artistId=xxx  — list stored emails
@@ -4196,6 +4246,46 @@ app.post('/api/advancement/:showId/reanalyze-emails', requireAuth, requireShowAc
     res.json({ success: true, threads: threadIds.size, analyzed, proposed });
   } catch (err) {
     console.error('Reanalyze emails error:', err.message);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// POST /api/email-intel/reanalyze-all — one-click catch-up. Runs the LLM
+// extractor on EVERY (show, thread) pair currently stored. Throttled to be
+// gentle on Anthropic. Admin only. proposeFromAnalysis dedupes so re-running
+// is a safe no-op if nothing changed.
+app.post('/api/email-intel/reanalyze-all', requireAuth, requireRole('admin'), async (req, res) => {
+  try {
+    const [shows, allEmails] = await Promise.all([
+      sheets.getRows(config.googleSheets.sheets.shows),
+      getStoredEmails(),
+    ]);
+    const bucket = new Map(); // showId -> Set(threadId)
+    for (const e of allEmails) {
+      if (!e.showId || !e.gmailThreadId) continue;
+      if (!bucket.has(e.showId)) bucket.set(e.showId, new Set());
+      bucket.get(e.showId).add(e.gmailThreadId);
+    }
+    let shows_touched = 0, threads = 0, analyzed = 0, proposed = 0;
+    for (const [showId, tids] of bucket.entries()) {
+      shows_touched++;
+      for (const tid of tids) {
+        threads++;
+        try {
+          const r = await analyzeLinkedThread({
+            threadId: tid, showId, shows, allEmails, actor: 'reanalyze-all:' + req.user.id,
+          });
+          analyzed += r.analyzed || 0;
+          proposed += r.proposed || 0;
+        } catch (err) {
+          console.warn(`[reanalyze-all] show=${showId} thread=${tid}: ${err.message}`);
+        }
+        await new Promise(r => setTimeout(r, 200));
+      }
+    }
+    res.json({ success: true, shows: shows_touched, threads, analyzed, proposed });
+  } catch (err) {
+    console.error('Reanalyze-all error:', err.message);
     res.status(500).json({ success: false, message: err.message });
   }
 });
@@ -4598,28 +4688,13 @@ async function runAutoSync() {
       // re-syncs never produce duplicate proposals. One bad thread must not
       // stop the sync; each is wrapped independently.
       if (analyzable.length) {
-        const groups = new Map(); // key = `${showId}|${threadId}` → parsed[]
-        for (const a of analyzable) {
-          const key = `${a.showId}|${a.parsed.threadId}`;
-          if (!groups.has(key)) groups.set(key, { showId: a.showId, parsed: [] });
-          groups.get(key).parsed.push(a.parsed);
-        }
-        console.log(`[auto-sync] ${user.gmailEmail}: analyzing ${groups.size} thread(s) from ${analyzable.length} inbound message(s).`);
-        for (const { showId, parsed } of groups.values()) {
-          try {
-            const analysis = await productionExtractor.extractOrFallback({
-              messages: parsed,
-              shows,
-              showId,
-              config: config.llm,
-            });
-            const written = await emailIntel.proposeFromAnalysis(analysis, { actor: 'auto-sync' });
-            grandAnalyzed += 1;
-            grandProposed += (written && written.written) ? written.written.length : 0;
-            console.log(`[auto-sync] analyzed show=${showId} thread=${parsed[0]?.threadId} source=${analysis.source} proposed=${(written?.written || []).length}`);
-          } catch (err) {
-            console.error(`[auto-sync] analyze failed for show=${showId} thread=${parsed[0]?.threadId}: ${err.message}`);
-          }
+        try {
+          const r = await analyzeInboundThreads(analyzable, shows, 'auto-sync');
+          grandAnalyzed += r.threads;
+          grandProposed += r.proposed;
+          console.log(`[auto-sync] ${user.gmailEmail}: analyzed ${r.threads} thread(s) from ${analyzable.length} inbound message(s), proposed=${r.proposed}.`);
+        } catch (err) {
+          console.error(`[auto-sync] analyze batch failed for ${user.gmailEmail}: ${err.message}`);
         }
       }
       grandTotal  += toAppend.length;
