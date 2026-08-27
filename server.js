@@ -1278,6 +1278,9 @@ app.post('/api/venue-knowledge/analyze', requireAuth, requireRole(...AI_READ_ROL
 // stages every change as a PROPOSAL for PM review. Nothing is auto-applied.
 // See emailIntelligence.js for the full contract.
 const emailIntel = require('./emailIntelligence');
+// Real LLM-backed extractor (Anthropic by default). Falls back to rules-v1
+// when unconfigured or on any provider failure. Same Analysis shape.
+const productionExtractor = require('./productionExtractor');
 // Maps approved AI facts back into the existing Shows/Advancing/Schedule forms
 // and writes to the immutable AiChangeLog audit trail.
 const factMapping = require('./factMapping');
@@ -3631,9 +3634,12 @@ async function analyzeLinkedThread({ threadId, showId, shows, allEmails, actor }
     }
   }
   if (messages.length === 0) return { analyzed: 0, proposed: 0, skipped: 'body_fetch_failed' };
-  const analysis = await emailIntel.analyzeThread({ messages, shows, threadContext: { showId } });
+  const analysis = await productionExtractor.extractOrFallback({
+    messages, shows, showId,
+    config: config.llm,
+  });
   const written  = await emailIntel.proposeFromAnalysis(analysis, { actor: actor || 'manual-link' });
-  return { analyzed: 1, proposed: (written?.written || []).length };
+  return { analyzed: 1, proposed: (written?.written || []).length, source: analysis.source, extractor: analysis.extractor };
 }
 
 // ── Windjammer relevance filter ───────────────────────────────────────────────

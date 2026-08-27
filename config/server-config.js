@@ -2,6 +2,12 @@ module.exports = {
   port: process.env.PORT || 3001,
   jwtSecret: process.env.JWT_SECRET || 'windjammer-dev-secret-change-in-production',
 
+  llm: {
+    provider:     process.env.LLM_PROVIDER   || 'anthropic',
+    model:        process.env.LLM_MODEL      || 'claude-sonnet-4-20250514',
+    anthropicKey: process.env.ANTHROPIC_API_KEY || '',
+  },
+
   stages: {
     inside: { id: 'inside', name: 'Inside Stage', color: '#1a4a7a', capacity: 500  },
     beach:  { id: 'beach',  name: 'Beach Stage',  color: '#1a6b4a', capacity: 1200 },

@@ -824,6 +824,9 @@ function flattenFact(fact, { threadId, showId, actor }) {
     sourceExcerpt:   fact.provenance.sourceExcerpt,
     sourceFrom:      fact.provenance.sourceFrom,
     sourceDate:      fact.provenance.sourceDate || '',
+    sourceMessageId: fact.provenance.sourceMessageId || fact.messageId || '',
+    sourceThreadId:  fact.provenance.sourceThreadId  || threadId || '',
+    extractedAt:     fact.provenance.extractedAt     || '',
     extractor:       fact.provenance.extractor,
     reasoningSummary:fact.reasoningSummary,
     conflicts:       JSON.stringify(fact.conflicts || []),
@@ -955,6 +958,9 @@ module.exports = {
   proposeFromAnalysis,
   listQueue, getFactById, approveFact, rejectFact,
   identifySender, identifyShow, classifyIntents,
+  // Shared with the LLM extractor so both paths produce identical fact shapes.
+  buildFact, detectConflicts, emptyAnalysis, uniqueParticipants,
+  FIELD_VOCAB, EXTRACTOR,
   // Exposed for tests
   _internals: {
     FIELD_VOCAB, CORRECTION_MARKERS, REQUEST_MARKERS, CONFIRM_MARKERS, DEADLINE_REGEX,
