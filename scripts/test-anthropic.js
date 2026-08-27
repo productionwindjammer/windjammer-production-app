@@ -88,9 +88,33 @@ const { validateAtStartup, mask } = require('../llm/configCheck');
       process.exit(2);
     }
     if (err.status === 404) {
-      console.error(`   Model "${config.llm.model}" not found for this key. Set LLM_MODEL to a model the key can call.`);
+      console.error(`   Model "${config.llm.model}" not found for this key.`);
+      await printAvailableModels(config.llm.anthropicKey);
       process.exit(2);
     }
     process.exit(2);
   }
 })();
+
+async function printAvailableModels(apiKey) {
+  try {
+    const res = await fetch('https://api.anthropic.com/v1/models?limit=100', {
+      headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+    });
+    if (!res.ok) {
+      console.error(`   (couldn't list models: HTTP ${res.status})`);
+      return;
+    }
+    const body = await res.json();
+    const ids = (body.data || []).map(m => m.id).filter(Boolean);
+    if (!ids.length) {
+      console.error('   This key has no models allow-listed. Contact your Anthropic workspace admin.');
+      return;
+    }
+    console.error('   Models this key CAN call:');
+    for (const id of ids) console.error(`     • ${id}`);
+    console.error('   Set LLM_MODEL in .env to one of the above, then re-run.');
+  } catch (e) {
+    console.error(`   (couldn't list models: ${e.message})`);
+  }
+}

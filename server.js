@@ -1329,7 +1329,11 @@ app.post('/api/email-intel/analyze', requireAuth, requireRole(...AI_READ_ROLES),
   try {
     let { messages = [], shows, existingShowData, threadContext } = req.body || {};
     if (!Array.isArray(shows)) shows = await sheets.getRows(config.googleSheets.sheets.shows);
-    const analysis = await emailIntel.analyzeThread({ messages, shows, existingShowData, threadContext });
+    const analysis = await productionExtractor.extractOrFallback({
+      messages, shows, existingShowData,
+      showId: threadContext?.showId || null,
+      config: config.llm,
+    });
     res.json({ success: true, data: analysis });
   } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 });
@@ -1356,7 +1360,7 @@ app.post('/api/email-intel/analyze-gmail-thread', requireAuth, requireRole('admi
       };
     });
     const shows = await sheets.getRows(config.googleSheets.sheets.shows);
-    const analysis = await emailIntel.analyzeThread({ messages, shows });
+    const analysis = await productionExtractor.extractOrFallback({ messages, shows, config: config.llm });
     const written  = await emailIntel.proposeFromAnalysis(analysis, { actor: 'user:' + req.user.id });
     res.json({ success: true, data: { analysis, written } });
   } catch (err) {
@@ -1371,7 +1375,7 @@ app.post('/api/email-intel/propose', requireAuth, requireRole('admin','productio
     let { analysis, messages, shows } = req.body || {};
     if (!analysis) {
       if (!Array.isArray(shows)) shows = await sheets.getRows(config.googleSheets.sheets.shows);
-      analysis = await emailIntel.analyzeThread({ messages: messages || [], shows });
+      analysis = await productionExtractor.extractOrFallback({ messages: messages || [], shows, config: config.llm });
     }
     const written = await emailIntel.proposeFromAnalysis(analysis, { actor: 'user:' + req.user.id });
     res.json({ success: true, data: written });
@@ -4575,6 +4579,14 @@ async function runAutoSync() {
         } catch (err) {
           console.error(`[auto-sync] append failed for ${user.gmailEmail}: ${err.message}`);
         }
+        if (analyzable.length === 0) {
+          // Every "new email(s), analyzed 0 thread(s)" report ends up here.
+          // Emit the *why* so the operator doesn't have to guess.
+          const inbound  = toAppend.filter(r => r.direction === 'inbound').length;
+          const outbound = toAppend.length - inbound;
+          const unlinked = toAppend.filter(r => r.direction === 'inbound' && !r.showId).length;
+          console.log(`[auto-sync] ${user.gmailEmail}: 0 threads analyzable — inbound=${inbound} outbound=${outbound} inbound-without-show=${unlinked}. Only inbound emails auto-linked to a show are analyzed.`);
+        }
       }
       // ── Charter-safe auto-analysis ─────────────────────────────────────
       // Group new inbound messages by (showId, gmailThreadId) and stage
@@ -4592,16 +4604,19 @@ async function runAutoSync() {
           if (!groups.has(key)) groups.set(key, { showId: a.showId, parsed: [] });
           groups.get(key).parsed.push(a.parsed);
         }
+        console.log(`[auto-sync] ${user.gmailEmail}: analyzing ${groups.size} thread(s) from ${analyzable.length} inbound message(s).`);
         for (const { showId, parsed } of groups.values()) {
           try {
-            const analysis = await emailIntel.analyzeThread({
+            const analysis = await productionExtractor.extractOrFallback({
               messages: parsed,
               shows,
-              threadContext: { showId },
+              showId,
+              config: config.llm,
             });
             const written = await emailIntel.proposeFromAnalysis(analysis, { actor: 'auto-sync' });
             grandAnalyzed += 1;
             grandProposed += (written && written.written) ? written.written.length : 0;
+            console.log(`[auto-sync] analyzed show=${showId} thread=${parsed[0]?.threadId} source=${analysis.source} proposed=${(written?.written || []).length}`);
           } catch (err) {
             console.error(`[auto-sync] analyze failed for show=${showId} thread=${parsed[0]?.threadId}: ${err.message}`);
           }

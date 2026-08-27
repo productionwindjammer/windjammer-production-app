@@ -3,10 +3,10 @@ module.exports = {
   jwtSecret: process.env.JWT_SECRET || 'windjammer-dev-secret-change-in-production',
 
   llm: {
-    provider:     process.env.LLM_PROVIDER   || 'anthropic',
-    model:        process.env.LLM_MODEL      || 'claude-sonnet-4-20250514',
+    provider:     (process.env.LLM_PROVIDER || 'anthropic').trim(),
+    model:        (process.env.LLM_MODEL    || 'claude-sonnet-4-20250514').trim(),
     // Read from the ONE canonical env var. Never expose this outside server code.
-    anthropicKey: process.env.ANTHROPIC_API_KEY || '',
+    anthropicKey: (process.env.ANTHROPIC_API_KEY || '').trim(),
     // Node/Railway env vars are case-sensitive on Linux. If the user set a
     // legacy lower/mixed-case variant, note it so the startup check can warn
     // clearly (without ever printing the value).
