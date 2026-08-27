@@ -63,8 +63,8 @@ class AnthropicProvider extends LLMProvider {
       body: JSON.stringify(body),
     });
     if (!res.ok) {
-      const detail = await safeText(res);
-      const err = new Error(`anthropic_http_${res.status}: ${detail.slice(0, 300)}`);
+      const detail = scrubSecrets(await safeText(res), this.apiKey).slice(0, 300);
+      const err = new Error(`anthropic_http_${res.status}: ${detail}`);
       err.status = res.status;
       throw err;
     }
@@ -82,6 +82,15 @@ class AnthropicProvider extends LLMProvider {
 }
 
 async function safeText(res) { try { return await res.text(); } catch { return ''; } }
+
+// Defense-in-depth: any error body from Anthropic (or a proxy in front of
+// it) may reflect request headers back to us. Never let the key end up in
+// an Error we might later log or send in an HTTP response.
+function scrubSecrets(text, apiKey) {
+  let s = String(text || '');
+  if (apiKey) s = s.split(apiKey).join('sk-ant-****');
+  return s.replace(/sk-ant-[A-Za-z0-9_-]{10,}/g, 'sk-ant-****');
+}
 
 /**
  * Test/CI provider. Emits whatever `program` returns. Never touches network.

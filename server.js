@@ -1285,6 +1285,16 @@ const productionExtractor = require('./productionExtractor');
 // and writes to the immutable AiChangeLog audit trail.
 const factMapping = require('./factMapping');
 
+// Admin-only LLM status. Never returns the API key value — only whether the
+// backend is configured, the provider/model, and a masked preview for
+// human identification.
+app.get('/api/llm/status', requireAuth, requireRole('admin'), (_req, res) => {
+  try {
+    const { publicStatus } = require('./llm/configCheck');
+    res.json({ success: true, data: publicStatus() });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+
 // Live-concert industry knowledge ontology + venue-extensible rules.
 // Six-tier stratified knowledge model. Never fabricates values.
 const industry = require('./industryKnowledge');
@@ -5499,5 +5509,11 @@ app.listen(PORT, () => {
     checkGoogleAuth().catch(err => console.error('[auth-check] unexpected:', err.message));
   } catch (err) {
     console.error('[auth-check] failed to load:', err.message);
+  }
+  // LLM key sanity check — never prints the key value.
+  try {
+    require('./llm/configCheck').validateAtStartup();
+  } catch (err) {
+    console.error('[llm] startup check failed:', err.message);
   }
 });

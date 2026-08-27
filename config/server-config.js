@@ -5,7 +5,12 @@ module.exports = {
   llm: {
     provider:     process.env.LLM_PROVIDER   || 'anthropic',
     model:        process.env.LLM_MODEL      || 'claude-sonnet-4-20250514',
+    // Read from the ONE canonical env var. Never expose this outside server code.
     anthropicKey: process.env.ANTHROPIC_API_KEY || '',
+    // Node/Railway env vars are case-sensitive on Linux. If the user set a
+    // legacy lower/mixed-case variant, note it so the startup check can warn
+    // clearly (without ever printing the value).
+    miscasedKey:  detectMiscasedAnthropicKey(process.env),
   },
 
   stages: {
@@ -53,3 +58,14 @@ module.exports = {
     }
   }
 };
+
+// Look for the correct env var under a wrong casing (Linux is case-sensitive).
+// Returns the offending name (e.g. 'anthropic_API_KEY') or null. Never
+// returns the value.
+function detectMiscasedAnthropicKey(env) {
+  if (env.ANTHROPIC_API_KEY) return null;
+  for (const k of Object.keys(env)) {
+    if (k !== 'ANTHROPIC_API_KEY' && k.toUpperCase() === 'ANTHROPIC_API_KEY' && env[k]) return k;
+  }
+  return null;
+}
