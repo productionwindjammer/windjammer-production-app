@@ -227,6 +227,7 @@ export default function EmailIntel() {
           onBatchApprove={runBatchApprove}
           batching={batching}
           onOpen={openDetail}
+          onDecide={decide}
         />
       ) : tab === 'threads' ? (
         <ThreadsView threads={threads} />
@@ -293,7 +294,7 @@ export default function EmailIntel() {
 }
 
 // ── Queue grouped by thread ────────────────────────────────────────────────
-function QueueView({ byThread, threads, filterShowId, setFilterShowId, previews, checked, batchable, canDecide, onToggleCheck, onToggleAll, onBatchApprove, batching, onOpen }) {
+function QueueView({ byThread, threads, filterShowId, setFilterShowId, previews, checked, batchable, canDecide, onToggleCheck, onToggleAll, onBatchApprove, batching, onOpen, onDecide }) {
   const threadIds = Object.keys(byThread)
   if (threadIds.length === 0) return (
     <div className="card">
@@ -369,6 +370,7 @@ function QueueView({ byThread, threads, filterShowId, setFilterShowId, previews,
                     canCheck={batchable?.has(f.id)}
                     onToggleCheck={onToggleCheck}
                     onOpen={onOpen}
+                    onDecide={onDecide}
                   />
                 ))}
               </tbody>
@@ -396,7 +398,8 @@ function ThreadHeader({ thread, tid, count }) {
   )
 }
 
-function QueueRow({ fact, preview, canDecide, checked, canCheck, onToggleCheck, onOpen }) {
+function QueueRow({ fact, preview, canDecide, checked, canCheck, onToggleCheck, onOpen, onDecide }) {
+  const [busy, setBusy] = useState(null) // 'approve' | 'reject' | null
   const conflicts = safeJson(fact.conflicts, [])
   const conf = preview?.confidence?.level || fact.kind || 'medium'
   const confBadge = conf === 'high' ? 'confirmed' : conf === 'low' ? 'cancelled' : 'pending'
@@ -406,6 +409,21 @@ function QueueRow({ fact, preview, canDecide, checked, canCheck, onToggleCheck, 
                     : preview?.status === 'no_change' ? '= No change'
                     : preview?.status === 'unmapped'  ? '❔ Unmapped'
                     : conflicts.length ? '⚡ Conflict' : '● Ready'
+  const canQuickDecide = canDecide && fact.status === 'proposed' && typeof onDecide === 'function'
+  async function quickApprove(e) {
+    e.stopPropagation()
+    if (!canQuickDecide || busy) return
+    setBusy('approve')
+    try { await onDecide(fact.id, 'approve', {}) } finally { setBusy(null) }
+  }
+  async function quickReject(e) {
+    e.stopPropagation()
+    if (!canQuickDecide || busy) return
+    const note = window.prompt('Reason for rejection (optional):', '') // null = user cancelled
+    if (note === null) return
+    setBusy('reject')
+    try { await onDecide(fact.id, 'reject', { note }) } finally { setBusy(null) }
+  }
   return (
     <tr>
       {canDecide && (
@@ -455,7 +473,30 @@ function QueueRow({ fact, preview, canDecide, checked, canCheck, onToggleCheck, 
       </td>
       <td style={{ fontSize: 12 }}>{statusLabel}</td>
       <td>
-        <button className="btn btn-ghost btn-sm" onClick={() => onOpen(fact)}>Review</button>
+        <div className="flex gap-1" style={{ justifyContent: 'flex-end' }}>
+          {canQuickDecide && (
+            <>
+              <button
+                className="btn btn-primary btn-sm"
+                onClick={quickApprove}
+                disabled={!!busy}
+                title="Approve this proposed change"
+              >
+                {busy === 'approve' ? '…' : '✓ Approve'}
+              </button>
+              <button
+                className="btn btn-ghost btn-sm"
+                onClick={quickReject}
+                disabled={!!busy}
+                title="Reject this proposed change"
+                style={{ color: '#e04a4a' }}
+              >
+                {busy === 'reject' ? '…' : '✕ Reject'}
+              </button>
+            </>
+          )}
+          <button className="btn btn-ghost btn-sm" onClick={() => onOpen(fact)} disabled={!!busy}>Review</button>
+        </div>
       </td>
     </tr>
   )
