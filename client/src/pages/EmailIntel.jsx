@@ -44,8 +44,11 @@ export default function EmailIntel() {
   const [analyzeResult, setAnalyzeResult] = useState(null)
   const [analyzing, setAnalyzing] = useState(false)
   const [deciding, setDeciding]   = useState(false)
-  const [checked, setChecked]     = useState(new Set()) // for batch approve
+  const [checked, setChecked]     = useState(new Set()) // for batch approve/reject
   const [batching, setBatching]   = useState(false)
+  const [batchRejecting, setBatchRejecting] = useState(false)
+  const [batchRejectOpen, setBatchRejectOpen] = useState(false)
+  const [batchRejectNote, setBatchRejectNote] = useState('')
 
   useEffect(() => { load() }, [])
 
@@ -182,6 +185,55 @@ export default function EmailIntel() {
     }
   }
 
+  async function runBatchReject() {
+    if (checked.size === 0) return
+    setBatchRejecting(true)
+    const ids = [...checked]
+    const note = batchRejectNote
+    const backup = queue.filter(f => ids.includes(f.id))
+    setQueue(prev => prev.filter(f => !ids.includes(f.id)))
+    setChecked(new Set())
+    setBatchRejectOpen(false)
+    setBatchRejectNote('')
+    try {
+      const { data } = await api.post('/email-intel/facts/batch-reject', { ids, note })
+      const failed = (data.data || []).filter(r => !r.ok)
+      if (failed.length) {
+        alert(`Rejected ${(data.data.length - failed.length)}/${data.data.length}. ${failed.length} skipped:\n` +
+          failed.map(f => `• ${f.id}: ${f.reason || f.message}`).join('\n'))
+        await fetchAll()
+      } else {
+        quietRefresh()
+      }
+    } catch (err) {
+      setQueue(prev => [...backup, ...prev])
+      alert(err.response?.data?.message || err.message)
+    } finally { setBatchRejecting(false) }
+  }
+
+  async function rejectThread(threadId, note = '') {
+    const facts = queue.filter(f => f.threadId === threadId && f.status === 'proposed')
+    if (facts.length === 0) return
+    const ids = facts.map(f => f.id)
+    const backup = [...facts]
+    setQueue(prev => prev.filter(f => !ids.includes(f.id)))
+    setChecked(prev => { const n = new Set(prev); ids.forEach(id => n.delete(id)); return n })
+    try {
+      const { data } = await api.post('/email-intel/facts/batch-reject', { ids, note })
+      const failed = (data.data || []).filter(r => !r.ok)
+      if (failed.length) {
+        alert(`Rejected ${(data.data.length - failed.length)}/${data.data.length}. ${failed.length} skipped:\n` +
+          failed.map(f => `• ${f.reason || f.message}`).join('\n'))
+        await fetchAll()
+      } else {
+        quietRefresh()
+      }
+    } catch (err) {
+      setQueue(prev => [...backup, ...prev])
+      alert(err.response?.data?.message || err.message)
+    }
+  }
+
   async function openDetail(fact) {
     setSelected(fact); setSelectedPreview(null); setModal('detail')
     try {
@@ -283,9 +335,16 @@ export default function EmailIntel() {
           onSelectAllShown={selectAllShown}
           onBatchApprove={runBatchApprove}
           batching={batching}
+          batchRejectOpen={batchRejectOpen}
+          setBatchRejectOpen={setBatchRejectOpen}
+          batchRejectNote={batchRejectNote}
+          setBatchRejectNote={setBatchRejectNote}
+          onBatchReject={runBatchReject}
+          batchRejecting={batchRejecting}
           onOpen={openDetail}
           onDecide={decide}
           onApproveThread={approveThread}
+          onRejectThread={rejectThread}
         />
       ) : tab === 'threads' ? (
         <ThreadsView threads={threads} />
@@ -352,7 +411,7 @@ export default function EmailIntel() {
 }
 
 // ── Queue grouped by thread ────────────────────────────────────────────────
-function QueueView({ byThread, threads, filterShowId, setFilterShowId, previews, checked, autoBatchable, checkable, canDecide, onToggleCheck, onSelectAllSafe, onSelectAllShown, onBatchApprove, batching, onOpen, onDecide, onApproveThread }) {
+function QueueView({ byThread, threads, filterShowId, setFilterShowId, previews, checked, autoBatchable, checkable, canDecide, onToggleCheck, onSelectAllSafe, onSelectAllShown, onBatchApprove, batching, batchRejectOpen, setBatchRejectOpen, batchRejectNote, setBatchRejectNote, onBatchReject, batchRejecting, onOpen, onDecide, onApproveThread, onRejectThread }) {
   const threadIds = Object.keys(byThread)
   if (threadIds.length === 0) return (
     <div className="card">
@@ -366,6 +425,7 @@ function QueueView({ byThread, threads, filterShowId, setFilterShowId, previews,
     </div>
   )
   const highRiskInSelection = [...checked].filter(id => !autoBatchable.has(id)).length
+  const anyBatchBusy = batching || batchRejecting
   return (
     <>
       <div className="flex gap-2 mb-2" style={{ alignItems: 'center', flexWrap: 'wrap' }}>
@@ -396,19 +456,61 @@ function QueueView({ byThread, threads, filterShowId, setFilterShowId, previews,
             <button
               className="btn btn-primary btn-sm"
               onClick={onBatchApprove}
-              disabled={batching || checked.size === 0}
+              disabled={anyBatchBusy || checked.size === 0}
               title="Server enforces safety rules per fact — high-risk items are skipped and stay in the queue for individual review."
             >
-              {batching ? 'Approving…' : `Approve Selected (${checked.size})`}
+              {batching ? 'Approving…' : `✓ Approve Selected (${checked.size})`}
+            </button>
+            <button
+              className="btn btn-ghost btn-sm"
+              onClick={() => setBatchRejectOpen(v => !v)}
+              disabled={anyBatchBusy || checked.size === 0}
+              title="Reject every currently checked row"
+              style={{ color: '#e04a4a' }}
+            >
+              ✕ Reject Selected ({checked.size})
             </button>
             {highRiskInSelection > 0 && (
               <span className="text-muted" style={{ fontSize: 12 }}>
-                ⚠ {highRiskInSelection} high-risk item{highRiskInSelection===1?'':'s'} in selection will be skipped
+                ⚠ {highRiskInSelection} high-risk item{highRiskInSelection===1?'':'s'} in selection will be skipped by Approve
               </span>
             )}
           </>
         )}
       </div>
+      {canDecide && batchRejectOpen && checked.size > 0 && (
+        <div className="card" style={{ marginBottom: 12, padding: 12, borderLeft: '3px solid #e04a4a' }}>
+          <div style={{ fontWeight: 600, marginBottom: 6 }}>
+            Reject {checked.size} selected change{checked.size === 1 ? '' : 's'}
+          </div>
+          <textarea
+            className="input"
+            rows={2}
+            placeholder="Optional — one reason applied to all rejections (helps improve the bot)"
+            value={batchRejectNote}
+            onChange={e => setBatchRejectNote(e.target.value)}
+            autoFocus
+            style={{ fontSize: 13 }}
+          />
+          <div className="flex gap-2" style={{ marginTop: 8 }}>
+            <button
+              className="btn btn-primary btn-sm"
+              onClick={onBatchReject}
+              disabled={batchRejecting}
+              style={{ background: '#e04a4a', borderColor: '#e04a4a' }}
+            >
+              {batchRejecting ? 'Rejecting…' : `✕ Confirm reject ${checked.size}`}
+            </button>
+            <button
+              className="btn btn-ghost btn-sm"
+              onClick={() => { setBatchRejectOpen(false); setBatchRejectNote('') }}
+              disabled={batchRejecting}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
       {threadIds.map(tid => {
         const proposedInThread = byThread[tid].filter(f => f.status === 'proposed').length
         return (
@@ -420,6 +522,7 @@ function QueueView({ byThread, threads, filterShowId, setFilterShowId, previews,
               proposedCount={proposedInThread}
               canDecide={canDecide}
               onApproveThread={onApproveThread}
+              onRejectThread={onRejectThread}
             />
             <div className="table-wrap">
               <table>
@@ -461,29 +564,82 @@ function QueueView({ byThread, threads, filterShowId, setFilterShowId, previews,
   )
 }
 
-function ThreadHeader({ thread, tid, count, proposedCount, canDecide, onApproveThread }) {
+function ThreadHeader({ thread, tid, count, proposedCount, canDecide, onApproveThread, onRejectThread }) {
+  const [rejectMode, setRejectMode] = useState(false)
+  const [rejectNote, setRejectNote] = useState('')
+  const [busy, setBusy] = useState(false)
+  async function confirmReject() {
+    setBusy(true)
+    try { await onRejectThread(tid, rejectNote) }
+    finally { setBusy(false); setRejectMode(false); setRejectNote('') }
+  }
   return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 8, gap: 12 }}>
-      <div>
-        <div style={{ fontWeight: 600 }}>{thread?.subject || '(no subject)'}</div>
-        <div className="text-muted" style={{ fontSize: 12 }}>
-          Thread <code>{tid}</code>
-          {thread?.showId ? <> · assigned to show <code>{thread.showId}</code></> : <> · <span style={{ color: '#e6aa1e' }}>unassigned</span></>}
-          {thread?.messageCount && <> · {thread.messageCount} messages</>}
+    <div style={{ marginBottom: 8 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12 }}>
+        <div>
+          <div style={{ fontWeight: 600 }}>{thread?.subject || '(no subject)'}</div>
+          <div className="text-muted" style={{ fontSize: 12 }}>
+            Thread <code>{tid}</code>
+            {thread?.showId ? <> · assigned to show <code>{thread.showId}</code></> : <> · <span style={{ color: '#e6aa1e' }}>unassigned</span></>}
+            {thread?.messageCount && <> · {thread.messageCount} messages</>}
+          </div>
+        </div>
+        <div className="flex gap-2" style={{ alignItems: 'center' }}>
+          <div className="text-muted" style={{ fontSize: 12 }}>{count} proposed change{count===1?'':'s'}</div>
+          {canDecide && proposedCount > 0 && !rejectMode && (
+            <>
+              <button
+                className="btn btn-primary btn-sm"
+                onClick={() => onApproveThread(tid)}
+                title="Batch-approve every proposed change in this thread. High-risk items will be skipped."
+              >
+                ✓ Approve thread ({proposedCount})
+              </button>
+              <button
+                className="btn btn-ghost btn-sm"
+                onClick={() => setRejectMode(true)}
+                title="Reject every proposed change in this thread"
+                style={{ color: '#e04a4a' }}
+              >
+                ✕ Reject thread ({proposedCount})
+              </button>
+            </>
+          )}
         </div>
       </div>
-      <div className="flex gap-2" style={{ alignItems: 'center' }}>
-        <div className="text-muted" style={{ fontSize: 12 }}>{count} proposed change{count===1?'':'s'}</div>
-        {canDecide && proposedCount > 0 && (
-          <button
-            className="btn btn-primary btn-sm"
-            onClick={() => onApproveThread(tid)}
-            title="Batch-approve every proposed change in this thread. High-risk items will be skipped."
-          >
-            ✓ Approve thread ({proposedCount})
-          </button>
-        )}
-      </div>
+      {rejectMode && (
+        <div style={{ marginTop: 8, padding: 10, borderLeft: '3px solid #e04a4a', background: 'rgba(224,74,74,0.06)' }}>
+          <div style={{ fontWeight: 600, marginBottom: 6, fontSize: 13 }}>
+            Reject all {proposedCount} proposed change{proposedCount === 1 ? '' : 's'} in this thread
+          </div>
+          <textarea
+            className="input"
+            rows={2}
+            placeholder="Optional reason applied to all"
+            value={rejectNote}
+            onChange={e => setRejectNote(e.target.value)}
+            autoFocus
+            style={{ fontSize: 13 }}
+          />
+          <div className="flex gap-2" style={{ marginTop: 6 }}>
+            <button
+              className="btn btn-primary btn-sm"
+              onClick={confirmReject}
+              disabled={busy}
+              style={{ background: '#e04a4a', borderColor: '#e04a4a' }}
+            >
+              {busy ? '…' : `✕ Confirm reject ${proposedCount}`}
+            </button>
+            <button
+              className="btn btn-ghost btn-sm"
+              onClick={() => { setRejectMode(false); setRejectNote('') }}
+              disabled={busy}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

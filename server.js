@@ -1497,6 +1497,26 @@ app.post('/api/email-intel/facts/:id/reject', requireAuth, requireRole('admin','
   }
 });
 
+// Batch reject — safe for any proposed fact; server refuses non-proposed with a per-fact reason.
+app.post('/api/email-intel/facts/batch-reject', requireAuth, requireRole('admin','production_manager'), async (req, res) => {
+  try {
+    const ids  = Array.isArray(req.body?.ids) ? req.body.ids : [];
+    const note = req.body?.note || '';
+    if (ids.length === 0) return res.status(400).json({ success: false, message: 'no ids' });
+    const results = [];
+    for (const id of ids) {
+      try {
+        const out = await emailIntel.rejectFact(id, 'user:' + req.user.id, note);
+        results.push({ id, ok: true, status: out.status });
+      } catch (err) {
+        const reason = err.code === 'not_found' ? 'not_found' : err.code === 'invalid_state' ? 'invalid_state' : 'error';
+        results.push({ id, ok: false, reason, message: err.message });
+      }
+    }
+    res.json({ success: true, data: results });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+
 // AI change audit log — every fact approval writes here. Never edited/deleted.
 app.get('/api/ai-changes', requireAuth, requireRole(...AI_AUDIT_ROLES), async (req, res) => {
   try {
