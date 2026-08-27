@@ -4272,54 +4272,108 @@ app.post('/api/advancement/:showId/reanalyze-emails', requireAuth, requireShowAc
   }
 });
 
-// POST /api/email-intel/reanalyze-all — one-click catch-up. Runs the LLM
-// extractor on EVERY (show, thread) pair currently stored. Throttled to be
-// gentle on Anthropic. Admin only. proposeFromAnalysis dedupes so re-running
-// is a safe no-op if nothing changed.
+// POST /api/email-intel/reanalyze-all — kick off a background job that runs
+// the LLM extractor on every (show, thread) pair currently stored. Returns
+// immediately with a jobId so Railway's proxy timeout can't kill it.
+// Progress is polled via GET /api/email-intel/reanalyze-status/:jobId.
+// proposeFromAnalysis dedupes so re-runs are safe no-ops if nothing changed.
+const reanalyzeJobs = new Map();
+setInterval(() => {
+  const cutoff = Date.now() - 60 * 60 * 1000; // 1h
+  for (const [id, j] of reanalyzeJobs) if (j.finishedAt && j.finishedAt < cutoff) reanalyzeJobs.delete(id);
+}, 15 * 60 * 1000).unref?.();
+
 app.post('/api/email-intel/reanalyze-all', requireAuth, requireRole('admin', 'production_manager'), async (req, res) => {
-  try {
-    const [shows, allEmails, users] = await Promise.all([
-      sheets.getRows(config.googleSheets.sheets.shows),
-      getStoredEmails(),
-      sheets.getRows(config.googleSheets.sheets.users).catch(() => []),
-    ]);
-    const bucket = new Map(); // showId -> Set(threadId)
-    for (const e of allEmails) {
-      if (!e.showId || !e.gmailThreadId) continue;
-      if (!bucket.has(e.showId)) bucket.set(e.showId, new Set());
-      bucket.get(e.showId).add(e.gmailThreadId);
-    }
-    const clientCache = new Map();
-    const skipReasons = {};
-    let shows_touched = 0, threads = 0, analyzed = 0, proposed = 0;
-    for (const [showId, tids] of bucket.entries()) {
-      shows_touched++;
-      for (const tid of tids) {
-        threads++;
-        try {
-          const r = await analyzeLinkedThread({
-            threadId: tid, showId, shows, allEmails, users, clientCache,
-            actor: 'reanalyze-all:' + req.user.id,
-          });
-          analyzed += r.analyzed || 0;
-          proposed += r.proposed || 0;
-          if (r.skipped) {
-            skipReasons[r.skipped] = (skipReasons[r.skipped] || 0) + 1;
-            if (r.skipped === 'body_fetch_failed' && r.errors) {
-              console.warn(`[reanalyze-all] show=${showId} thread=${tid} body_fetch_failed: ${r.errors.join(' | ')}`);
-            }
-          }
-        } catch (err) {
-          console.warn(`[reanalyze-all] show=${showId} thread=${tid}: ${err.message}`);
-        }
-        await new Promise(r => setTimeout(r, 200));
+  // If a job for this user is already running, return that one.
+  const existing = [...reanalyzeJobs.values()].find(j => j.userId === req.user.id && !j.finishedAt);
+  if (existing) return res.json({ success: true, jobId: existing.id, alreadyRunning: true });
+
+  const jobId = `job_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const job = {
+    id: jobId, userId: req.user.id, startedAt: Date.now(), finishedAt: null,
+    total: 0, done: 0, analyzed: 0, proposed: 0,
+    skipReasons: {}, currentShowId: null, currentThreadId: null,
+    error: null,
+  };
+  reanalyzeJobs.set(jobId, job);
+  res.json({ success: true, jobId });
+
+  // Do NOT await — run in the background. Errors go on the job, not the response.
+  (async () => {
+    try {
+      const [shows, allEmails, users] = await Promise.all([
+        sheets.getRows(config.googleSheets.sheets.shows),
+        getStoredEmails(),
+        sheets.getRows(config.googleSheets.sheets.users).catch(() => []),
+      ]);
+      const bucket = new Map();
+      for (const e of allEmails) {
+        if (!e.showId || !e.gmailThreadId) continue;
+        if (!bucket.has(e.showId)) bucket.set(e.showId, new Set());
+        bucket.get(e.showId).add(e.gmailThreadId);
       }
+      job.total = [...bucket.values()].reduce((n, s) => n + s.size, 0);
+      const clientCache = new Map();
+      for (const [showId, tids] of bucket.entries()) {
+        job.currentShowId = showId;
+        for (const tid of tids) {
+          job.currentThreadId = tid;
+          try {
+            const r = await analyzeLinkedThread({
+              threadId: tid, showId, shows, allEmails, users, clientCache,
+              actor: 'reanalyze-all:' + req.user.id,
+            });
+            job.analyzed += r.analyzed || 0;
+            job.proposed += r.proposed || 0;
+            if (r.skipped) {
+              job.skipReasons[r.skipped] = (job.skipReasons[r.skipped] || 0) + 1;
+              if (r.skipped === 'body_fetch_failed' && r.errors) {
+                console.warn(`[reanalyze-all] show=${showId} thread=${tid} body_fetch_failed: ${r.errors.join(' | ')}`);
+              }
+            }
+          } catch (err) {
+            console.warn(`[reanalyze-all] show=${showId} thread=${tid}: ${err.message}`);
+            job.skipReasons.error = (job.skipReasons.error || 0) + 1;
+          }
+          job.done++;
+          // Throttle: 750 ms between threads keeps Sheets writes well under 60/min
+          // and gives Anthropic breathing room.
+          await new Promise(r => setTimeout(r, 750));
+        }
+      }
+    } catch (err) {
+      console.error('Reanalyze-all job error:', err.message);
+      job.error = err.message;
+    } finally {
+      job.finishedAt = Date.now();
+      job.currentShowId = null;
+      job.currentThreadId = null;
+      console.log(`[reanalyze-all] job ${jobId} done — analyzed=${job.analyzed}/${job.total} proposed=${job.proposed}`);
     }
-    res.json({ success: true, shows: shows_touched, threads, analyzed, proposed, skipReasons });
-  } catch (err) {
-    console.error('Reanalyze-all error:', err.message);
-    res.status(500).json({ success: false, message: err.message });
-  }
+  })();
+});
+
+// GET /api/email-intel/reanalyze-status/:jobId — poll progress of a background job.
+app.get('/api/email-intel/reanalyze-status/:jobId', requireAuth, requireRole('admin', 'production_manager'), (req, res) => {
+  const job = reanalyzeJobs.get(req.params.jobId);
+  if (!job) return res.status(404).json({ success: false, message: 'Job not found or expired' });
+  res.json({
+    success: true,
+    data: {
+      jobId: job.id,
+      running: !job.finishedAt,
+      total: job.total,
+      done: job.done,
+      analyzed: job.analyzed,
+      proposed: job.proposed,
+      skipReasons: job.skipReasons,
+      error: job.error,
+      startedAt: job.startedAt,
+      finishedAt: job.finishedAt,
+      currentShowId: job.currentShowId,
+      currentThreadId: job.currentThreadId,
+    },
+  });
 });
 
 // POST /api/emails/relink-all  — clear all show links and re-classify every

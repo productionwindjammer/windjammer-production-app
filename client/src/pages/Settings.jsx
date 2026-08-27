@@ -390,6 +390,7 @@ function AdminToolsCard() {
   const [reanalyzing, setReanalyzing] = useState(false)
   const [reanalyzeResult, setReanalyzeResult] = useState(null)
   const [reanalyzeError,  setReanalyzeError]  = useState(null)
+  const [reanalyzeProgress, setReanalyzeProgress] = useState(null)
   const [llmStatus, setLlmStatus] = useState(null)
 
   useEffect(() => {
@@ -408,11 +409,29 @@ function AdminToolsCard() {
   }
 
   async function reanalyzeAll() {
-    if (!confirm('Re-run the AI extractor on every (show, thread) pair currently stored. Safe to re-run — pending proposals are deduped. This can take a few minutes and will consume Anthropic tokens.')) return
-    setReanalyzing(true); setReanalyzeResult(null); setReanalyzeError(null)
+    if (!confirm('Re-run the AI extractor on every (show, thread) pair currently stored. Safe to re-run — pending proposals are deduped. This runs in the background; you can navigate away and come back.')) return
+    setReanalyzing(true); setReanalyzeResult(null); setReanalyzeError(null); setReanalyzeProgress(null)
     try {
       const r = await api.post('/email-intel/reanalyze-all')
-      setReanalyzeResult(r.data)
+      const jobId = r.data?.jobId
+      if (!jobId) throw new Error('No jobId returned')
+      // Poll every 2 s until the job finishes.
+      let last
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        await new Promise(res => setTimeout(res, 2000))
+        try {
+          const s = await api.get(`/email-intel/reanalyze-status/${jobId}`)
+          last = s.data?.data
+          if (last) setReanalyzeProgress(last)
+          if (last && !last.running) break
+        } catch (err) {
+          // Transient 5xx during the run — keep polling; the job survives.
+          if (err.response?.status && err.response.status < 500) throw err
+        }
+      }
+      setReanalyzeResult(last)
+      if (last?.error) setReanalyzeError(last.error)
     } catch (err) {
       setReanalyzeError(err.response?.data?.message || err.message)
     } finally { setReanalyzing(false) }
@@ -448,19 +467,28 @@ function AdminToolsCard() {
           >
             {reanalyzing ? 'Reanalyzing… (this can take a few minutes)' : 'Reanalyze all emails now'}
           </button>
-          {reanalyzeResult && (
+          {reanalyzing && reanalyzeProgress && (
+            <div style={{ marginTop: 10, fontSize: 12, color: 'var(--text-muted)' }}>
+              Progress: {reanalyzeProgress.done}/{reanalyzeProgress.total} thread(s) ·
+              {' '}analyzed {reanalyzeProgress.analyzed} · staged {reanalyzeProgress.proposed} proposal(s)
+              {reanalyzeProgress.currentShowId && (
+                <div>Currently: show <code>{reanalyzeProgress.currentShowId}</code></div>
+              )}
+            </div>
+          )}
+          {reanalyzeResult && !reanalyzing && (
             <div style={{ marginTop: 10, fontSize: 12 }}>
               <div style={{ color: 'var(--success)' }}>
-                Analyzed {reanalyzeResult.analyzed || 0} of {reanalyzeResult.threads || 0} thread(s)
-                across {reanalyzeResult.shows || 0} show(s); staged {reanalyzeResult.proposed || 0} new proposal(s).
+                Analyzed {reanalyzeResult.analyzed || 0} of {reanalyzeResult.total || 0} thread(s);
+                staged {reanalyzeResult.proposed || 0} new proposal(s).
               </div>
-              {reanalyzeResult.skipped && (
+              {reanalyzeResult.skipReasons && Object.keys(reanalyzeResult.skipReasons).length > 0 && (
                 <details style={{ marginTop: 6 }}>
                   <summary style={{ cursor: 'pointer', color: 'var(--text-muted)' }}>
                     Skip breakdown
                   </summary>
                   <ul style={{ margin: '6px 0 0 18px', color: 'var(--text-muted)' }}>
-                    {Object.entries(reanalyzeResult.skipped).map(([reason, n]) => (
+                    {Object.entries(reanalyzeResult.skipReasons).map(([reason, n]) => (
                       <li key={reason}><code>{reason}</code>: {n}</li>
                     ))}
                   </ul>
