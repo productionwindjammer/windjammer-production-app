@@ -22,6 +22,7 @@ export default function Email() {
   const [syncing, setSyncing]           = useState(false)
   const [sending, setSending]           = useState(false)
   const [savingToDrive, setSavingToDrive] = useState(new Set())
+  const [savingToArtist, setSavingToArtist] = useState(new Set())
   const [facilityDocs, setFacilityDocs]   = useState(null)
   const [loadingFacDocs, setLoadingFacDocs] = useState(false)
   const [loading, setLoading]           = useState(true)
@@ -536,6 +537,27 @@ export default function Email() {
     }
   }
 
+  // ── Save attachment to Artist Documents ─────────────────────────────────────
+  async function handleSaveToArtist(email, att) {
+    const key = `${email.gmailMessageId}-${att.attachmentId}`
+    setSavingToArtist(prev => new Set([...prev, key]))
+    try {
+      const r = await api.post('/emails/save-to-artist', {
+        messageId:    email.gmailMessageId,
+        attachmentId: att.attachmentId,
+        filename:     att.filename,
+        mimeType:     att.mimeType || 'application/octet-stream',
+        artistId:     email.artistId || undefined,
+        showId:       email.showId   || selected?.showId || undefined,
+      })
+      alert(`✅ "${att.filename}" saved to ${r.data?.data?.artistName || 'artist'}'s documents.`)
+    } catch (err) {
+      alert('Could not save to artist. ' + (err.response?.data?.message || err.message))
+    } finally {
+      setSavingToArtist(prev => { const next = new Set(prev); next.delete(key); return next })
+    }
+  }
+
   // ── Facility doc quick-attach ────────────────────────────────────────────────
   async function loadFacilityDocs() {
     if (facilityDocs !== null) return facilityDocs
@@ -985,6 +1007,16 @@ export default function Email() {
                                             onClick={() => handleSaveToDrive(email, att)} disabled={savingToDrive.has(driveKey)} title="Save to show Drive folder">
                                             {savingToDrive.has(driveKey) ? '⏳' : '💾 Drive'}
                                           </button>
+                                          {(email.artistId || email.showId || selected?.showId) && (
+                                            <button className="btn btn-ghost btn-sm" style={{ fontSize: 11, padding: '3px 8px' }}
+                                              onClick={() => handleSaveToArtist(email, att)}
+                                              disabled={savingToArtist.has(driveKey)}
+                                              title={email.artistId
+                                                ? `Save to ${email.artistName || 'artist'}'s documents`
+                                                : 'Save to the show artist\'s documents'}>
+                                              {savingToArtist.has(driveKey) ? '⏳' : '🎤 Artist'}
+                                            </button>
+                                          )}
                                         </div>
                                       )
                                     })}
@@ -1189,6 +1221,19 @@ export default function Email() {
                                               title="Save to show Drive folder"
                                             >
                                               {savingToDrive.has(driveKey) ? '⏳' : '💾 Drive'}
+                                            </button>
+                                          )}
+                                          {(email.artistId || email.showId || selected?.showId) && (
+                                            <button
+                                              className="btn btn-ghost btn-sm"
+                                              style={{ fontSize: 11, padding: '3px 8px' }}
+                                              onClick={() => handleSaveToArtist(email, att)}
+                                              disabled={savingToArtist.has(driveKey)}
+                                              title={email.artistId
+                                                ? `Save to ${email.artistName || 'artist'}'s documents`
+                                                : 'Save to the show artist\'s documents'}
+                                            >
+                                              {savingToArtist.has(driveKey) ? '⏳' : '🎤 Artist'}
                                             </button>
                                           )}
                                         </div>
