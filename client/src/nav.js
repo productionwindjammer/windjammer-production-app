@@ -24,6 +24,7 @@ export const NAV_ITEMS = [
   { label: 'Industry Knowledge', path: '/industry-knowledge', icon: '📚', roles: ['admin', 'production_manager', 'venue_management', 'stage_manager'] },
   { label: 'Email',        path: '/email',         icon: '✉️', roles: ['admin', 'production_manager', 'stage_manager'] },
   { label: 'Email Intel',  path: '/email-intel',   icon: '🧠', roles: ['admin', 'production_manager', 'stage_manager'] },
+  { label: 'Advance Intel', path: '/advance-intel', icon: '🎯', roles: ['admin', 'production_manager'] },
   { label: 'Email Templates', path: '/email-templates', icon: '📝', sub: true, roles: ['admin', 'production_manager'] },
   { label: 'Settings',     path: '/settings',      icon: '⚙️' },
 ]

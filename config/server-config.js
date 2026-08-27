@@ -55,6 +55,7 @@ module.exports = {
       knowledgeCandidates:   'KnowledgeCandidates',
       showContacts:          'ShowContacts',
       showAsks:              'ShowAsks',
+      advanceFacts:          'AdvanceFacts',
     }
   }
 };

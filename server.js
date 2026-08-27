@@ -1281,6 +1281,10 @@ const emailIntel = require('./emailIntelligence');
 // Real LLM-backed extractor (Anthropic by default). Falls back to rules-v1
 // when unconfigured or on any provider failure. Same Analysis shape.
 const productionExtractor = require('./productionExtractor');
+// Comprehensive Advance Intelligence pipeline — runs alongside the narrow
+// field extractor to capture EVERY operationally meaningful atom, with
+// reconciliation, show-state diff, venue-impact analysis, and PM view.
+const advanceIntelligence = require('./advanceIntelligence');
 // Maps approved AI facts back into the existing Shows/Advancing/Schedule forms
 // and writes to the immutable AiChangeLog audit trail.
 const factMapping = require('./factMapping');
@@ -3675,7 +3679,38 @@ async function analyzeLinkedThread({ threadId, showId, shows, allEmails, actor, 
     config: config.llm,
   });
   const written  = await emailIntel.proposeFromAnalysis(analysis, { actor: actor || 'manual-link' });
-  return { analyzed: 1, proposed: (written?.written || []).length, source: analysis.source, extractor: analysis.extractor };
+
+  // Additionally run the comprehensive Advance Intelligence pipeline. It
+  // reuses the same messages and does NOT touch authoritative sheets. If it
+  // fails, the narrow field-fact flow above is unaffected.
+  let advance = null;
+  try {
+    advance = await advanceIntelligence.processThread({
+      messages, shows, showId,
+      existingShowData: (shows.find(s => String(s.id) === String(showId)) || {}),
+      actor: actor || 'manual-link',
+    });
+  } catch (err) {
+    console.warn(`[analyzeLinkedThread] advance-intel failed for thread=${threadId}: ${err.message}`);
+  }
+  return {
+    analyzed: 1,
+    proposed: (written?.written || []).length,
+    source: analysis.source,
+    extractor: analysis.extractor,
+    advance: advance ? {
+      llmOk: advance.llmOk,
+      persisted: advance.persisted,
+      reconciliation: {
+        agreements: advance.reconciliation?.agreements?.length || 0,
+        conflicts:  advance.reconciliation?.conflicts?.length  || 0,
+        llmOnly:    advance.reconciliation?.llmOnly?.length    || 0,
+        rulesOnly:  advance.reconciliation?.rulesOnly?.length  || 0,
+      },
+      stateDiffChanges: advance.stateDiff?.changes?.length || 0,
+      venueImpacts:     advance.venueImpacts?.length || 0,
+    } : null,
+  };
 }
 
 // ── Windjammer relevance filter ───────────────────────────────────────────────
@@ -4374,6 +4409,76 @@ app.get('/api/email-intel/reanalyze-status/:jobId', requireAuth, requireRole('ad
       currentThreadId: job.currentThreadId,
     },
   });
+});
+
+// ── Advance Intelligence ─────────────────────────────────────────────────
+// GET /api/advance/:showId — aggregate PM view for a show, assembled from
+// every persisted AdvanceFact plus latest reconciliation state.
+app.get('/api/advance/:showId', requireAuth, requireRole('admin', 'production_manager'), async (req, res) => {
+  try {
+    const showId = String(req.params.showId);
+    const facts  = await advanceIntelligence.listAdvanceFacts({ showId });
+    // Bucket by category so the frontend can render sections directly.
+    const by = {};
+    for (const cat of require('./llm/comprehensiveSchema').CATEGORIES) by[cat] = [];
+    for (const f of facts) {
+      if (by[f.category]) by[f.category].push({
+        id: f.id, category: f.category, path: f.path,
+        status: f.status, confidence: f.confidence,
+        quotedText: f.quotedText, sourceEmailId: f.sourceEmailId,
+        sender: f.sender, senderEmail: f.senderEmail,
+        model: f.model, extractedAt: f.extractedAt,
+        payload: f.payload,
+      });
+    }
+    res.json({ success: true, data: { showId, counts: Object.fromEntries(Object.entries(by).map(([k, v]) => [k, v.length])), facts: by } });
+  } catch (err) {
+    console.error('Advance view error:', err.message);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// POST /api/advance/demo — run the synthetic demo email end-to-end through the
+// full pipeline (LLM comprehensive + rules-v1 + reconcile + state diff +
+// venue impact + PM view). Does NOT persist to AdvanceFacts (dry-run) so
+// admins can safely inspect the output shape.
+app.post('/api/advance/demo', requireAuth, requireRole('admin', 'production_manager'), async (req, res) => {
+  try {
+    const provider = advanceIntelligence._internals
+      ? require('./llm/provider').getProviderFromConfig(config.llm || {})
+      : null;
+    if (!provider || !provider.isConfigured()) {
+      return res.status(400).json({ success: false, message: 'LLM not configured (ANTHROPIC_API_KEY missing).' });
+    }
+    const demo = advanceIntelligence.SYNTHETIC_DEMO_EMAIL;
+    // Extract only; do not persist (persistAdvanceFacts writes to Sheets).
+    const compr = await advanceIntelligence.extractComprehensive({
+      messages: demo.messages, shows: demo.shows, showId: demo.showId,
+      existingShowData: demo.existingShowData, venueContext: demo.venueContext,
+      provider,
+    });
+    const rulesAnalysis = await emailIntel.analyzeThread({
+      messages: demo.messages, shows: demo.shows, existingShowData: demo.existingShowData,
+      threadContext: { showId: demo.showId },
+    });
+    const reconciliation = advanceIntelligence.reconcile({
+      llmFieldFacts: compr.field_facts, rulesFacts: rulesAnalysis.facts,
+    });
+    const stateDiff    = advanceIntelligence.compareToShowState({ compr, existingShowData: demo.existingShowData });
+    const venueImpacts = await advanceIntelligence.analyzeVenueImpacts({ compr });
+    const pmView       = advanceIntelligence.assemblePmView({ compr, reconciliation, stateDiff, venueImpacts });
+    const coverage = {};
+    for (const cat of require('./llm/comprehensiveSchema').CATEGORIES) coverage[cat] = (compr[cat] || []).length;
+    coverage.field_facts = (compr.field_facts || []).length;
+    coverage.rules_facts = (rulesAnalysis.facts || []).length;
+    res.json({ success: true, data: {
+      coverage, reconciliation, stateDiff, venueImpacts, pmView,
+      comprehensive: compr, rulesAnalysis,
+    } });
+  } catch (err) {
+    console.error('Advance demo error:', err.message);
+    res.status(500).json({ success: false, message: err.message });
+  }
 });
 
 // POST /api/emails/relink-all  — clear all show links and re-classify every

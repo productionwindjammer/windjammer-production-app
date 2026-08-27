@@ -32,6 +32,7 @@ import Email from './pages/Email'
 import EmailIntel from './pages/EmailIntel'
 import EmailTemplates from './pages/EmailTemplates'
 import AdvancementDashboard from './pages/AdvancementDashboard'
+import AdvanceIntel from './pages/AdvanceIntel'
 import { SettingsProvider } from './context/SettingsContext'
 import { SplitProvider } from './context/SplitContext'
 import { VenueProvider } from './context/VenueContext'
@@ -74,6 +75,7 @@ export default function App() {
             <Route path="/industry-knowledge" element={<IndustryKnowledge />} />
             <Route path="/email"       element={<Email />} />
             <Route path="/email-intel" element={<EmailIntel />} />
+            <Route path="/advance-intel" element={<AdvanceIntel />} />
             <Route path="/email-templates" element={<EmailTemplates />} />
             <Route path="/advancement" element={<AdvancementDashboard />} />
             <Route path="/settings"    element={<Settings />} />

@@ -392,6 +392,9 @@ function AdminToolsCard() {
   const [reanalyzeError,  setReanalyzeError]  = useState(null)
   const [reanalyzeProgress, setReanalyzeProgress] = useState(null)
   const [llmStatus, setLlmStatus] = useState(null)
+  const [advanceDemoLoading, setAdvanceDemoLoading] = useState(false)
+  const [advanceDemoResult,  setAdvanceDemoResult]  = useState(null)
+  const [advanceDemoError,   setAdvanceDemoError]   = useState(null)
 
   useEffect(() => {
     api.get('/llm/status').then(r => setLlmStatus(r.data?.data || null)).catch(() => {})
@@ -435,6 +438,16 @@ function AdminToolsCard() {
     } catch (err) {
       setReanalyzeError(err.response?.data?.message || err.message)
     } finally { setReanalyzing(false) }
+  }
+
+  async function runAdvanceDemo() {
+    setAdvanceDemoLoading(true); setAdvanceDemoResult(null); setAdvanceDemoError(null)
+    try {
+      const r = await api.post('/advance/demo')
+      setAdvanceDemoResult(r.data?.data || null)
+    } catch (err) {
+      setAdvanceDemoError(err.response?.data?.message || err.message)
+    } finally { setAdvanceDemoLoading(false) }
   }
 
   return (
@@ -503,6 +516,48 @@ function AdminToolsCard() {
           )}
           {reanalyzeError && (
             <div style={{ marginTop: 10, fontSize: 12, color: 'var(--danger)' }}>Error: {reanalyzeError}</div>
+          )}
+        </div>
+
+        <div>
+          <div style={{ fontWeight: 600, marginBottom: 4 }}>Advance Intelligence — demo pipeline</div>
+          <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 8 }}>
+            Runs a rich synthetic email (multiple people, RF, rigging, catering, dietary, wheelchair access, a
+            correction, a venue capability mismatch, small details) through the full LLM + rules-v1 +
+            reconciliation + show-state diff + venue-impact pipeline. Nothing is written to sheets.
+          </div>
+          <button
+            className="btn btn-primary btn-sm"
+            onClick={runAdvanceDemo}
+            disabled={advanceDemoLoading || !llmStatus?.configured}
+            title={!llmStatus?.configured ? 'ANTHROPIC_API_KEY is not set on the server' : ''}
+          >
+            {advanceDemoLoading ? 'Running…' : 'Run Advance Intel demo'}
+          </button>
+          {advanceDemoResult && (
+            <div style={{ marginTop: 10, fontSize: 12 }}>
+              <div style={{ color: 'var(--success)', marginBottom: 6 }}>Coverage:</div>
+              <div style={{ fontFamily: 'monospace', fontSize: 11, color: 'var(--text-muted)' }}>
+                {Object.entries(advanceDemoResult.coverage || {}).filter(([, n]) => n > 0).map(([k, n]) => (
+                  <span key={k} style={{ marginRight: 10 }}>{k}: <strong>{n}</strong></span>
+                ))}
+              </div>
+              <details style={{ marginTop: 8 }}>
+                <summary style={{ cursor: 'pointer', color: 'var(--text-muted)' }}>PM view</summary>
+                <pre style={{ marginTop: 6, fontSize: 10, background: 'var(--bg)', padding: 8, borderRadius: 4, maxHeight: 400, overflow: 'auto' }}>
+                  {JSON.stringify(advanceDemoResult.pmView, null, 2)}
+                </pre>
+              </details>
+              <details style={{ marginTop: 6 }}>
+                <summary style={{ cursor: 'pointer', color: 'var(--text-muted)' }}>Full pipeline output (raw)</summary>
+                <pre style={{ marginTop: 6, fontSize: 10, background: 'var(--bg)', padding: 8, borderRadius: 4, maxHeight: 400, overflow: 'auto' }}>
+                  {JSON.stringify(advanceDemoResult, null, 2)}
+                </pre>
+              </details>
+            </div>
+          )}
+          {advanceDemoError && (
+            <div style={{ marginTop: 10, fontSize: 12, color: 'var(--danger)' }}>Error: {advanceDemoError}</div>
           )}
         </div>
 
