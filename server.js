@@ -3629,7 +3629,31 @@ async function getStoredEmails() {
 // facts the bot can actually use. proposeFromAnalysis dedupes by
 // (messageId, field, scope, showId), so replays never spam duplicates.
 // Best-effort — callers must not fail if this throws.
-async function analyzeLinkedThread({ threadId, showId, shows, allEmails, actor, users = null, clientCache = null }) {
+// Load PM-defined venue defaults + the full tech pack (both stages) so the
+// Advance Intelligence LLM has an authoritative baseline to compare against
+// and to detect venue-related facts that belong in the tech pack.
+async function loadAdvanceContext() {
+  const [venueDefaults, techpackRows] = await Promise.all([
+    getVenueDefaults().catch(() => null),
+    sheets.getRows(config.googleSheets.sheets.techpack).catch(() => []),
+  ]);
+  const techPacks = TECHPACK_STAGES.map(stage => {
+    const stageRows = techpackRows.filter(r => r.stage === stage);
+    const modern = stageRows.find(r => r.docType === 'stage');
+    const sections = modern
+      ? (techpackParseSections(modern.sections) || TECHPACK_DEFAULT_SECTIONS.map(s => ({ ...s, content: '' })))
+      : techpackBuildFromLegacy(stage, stageRows);
+    return {
+      stage,
+      sections,
+      pdfFilename:  modern?.pdfFilename  || '',
+      pdfUpdatedAt: modern?.pdfUpdatedAt || '',
+    };
+  });
+  return { venueDefaults, techPacks };
+}
+
+async function analyzeLinkedThread({ threadId, showId, shows, allEmails, actor, users = null, clientCache = null, advanceContext = null }) {
   if (!threadId || !showId) return { analyzed: 0, proposed: 0, skipped: 'missing_ids' };
   const rows = allEmails.filter(e => e.gmailThreadId === threadId && e.gmailMessageId);
   if (rows.length === 0) return { analyzed: 0, proposed: 0, skipped: 'no_messages' };
@@ -3685,9 +3709,12 @@ async function analyzeLinkedThread({ threadId, showId, shows, allEmails, actor, 
   // fails, the narrow field-fact flow above is unaffected.
   let advance = null;
   try {
+    if (!advanceContext) advanceContext = await loadAdvanceContext().catch(() => ({}));
     advance = await advanceIntelligence.processThread({
       messages, shows, showId,
       existingShowData: (shows.find(s => String(s.id) === String(showId)) || {}),
+      venueDefaults: advanceContext.venueDefaults || null,
+      techPacks:     advanceContext.techPacks     || null,
       actor: actor || 'manual-link',
     });
   } catch (err) {
@@ -4349,13 +4376,14 @@ app.post('/api/email-intel/reanalyze-all', requireAuth, requireRole('admin', 'pr
       }
       job.total = [...bucket.values()].reduce((n, s) => n + s.size, 0);
       const clientCache = new Map();
+      const advanceContext = await loadAdvanceContext().catch(() => ({}));
       for (const [showId, tids] of bucket.entries()) {
         job.currentShowId = showId;
         for (const tid of tids) {
           job.currentThreadId = tid;
           try {
             const r = await analyzeLinkedThread({
-              threadId: tid, showId, shows, allEmails, users, clientCache,
+              threadId: tid, showId, shows, allEmails, users, clientCache, advanceContext,
               actor: 'reanalyze-all:' + req.user.id,
             });
             job.analyzed += r.analyzed || 0;
@@ -4451,10 +4479,13 @@ app.post('/api/advance/demo', requireAuth, requireRole('admin', 'production_mana
       return res.status(400).json({ success: false, message: 'LLM not configured (ANTHROPIC_API_KEY missing).' });
     }
     const demo = advanceIntelligence.SYNTHETIC_DEMO_EMAIL;
+    const ctx = await loadAdvanceContext().catch(() => ({}));
     // Extract only; do not persist (persistAdvanceFacts writes to Sheets).
     const compr = await advanceIntelligence.extractComprehensive({
       messages: demo.messages, shows: demo.shows, showId: demo.showId,
       existingShowData: demo.existingShowData, venueContext: demo.venueContext,
+      venueDefaults: ctx.venueDefaults || null,
+      techPacks:     ctx.techPacks     || null,
       provider,
     });
     const rulesAnalysis = await emailIntel.analyzeThread({

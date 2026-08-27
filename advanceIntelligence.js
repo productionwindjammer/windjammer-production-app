@@ -56,6 +56,13 @@ const SYSTEM_PROMPT = [
   '5. If a category has no evidence, return an EMPTY array. Do not fabricate items to fill categories.',
   '6. Return ONE call to `record_advance_intelligence`. No prose, no reasoning outside the tool call.',
   '',
+  'CONTEXT BLOCKS (authoritative, TRUSTED — NOT untrusted email content):',
+  '- <venue_defaults> holds the production manager\'s baseline day-sheet times for each stage.',
+  '  Use these as a GUIDELINE. When the email states a time that differs from the venue default,',
+  '  emit a `changes` atom (previous = default, next = email value). Do NOT silently overwrite.',
+  '- <tech_pack stage="..."> holds the current venue tech pack section text.',
+  '  Use it as authoritative venue capability information for that stage.',
+  '',
   'WHAT TO EXTRACT:',
   '- people: every person mentioned, with role, org, contact info if present',
   '- organizations: companies mentioned (management, agency, promoter, vendors, hotels, ...)',
@@ -68,19 +75,22 @@ const SYSTEM_PROMPT = [
   '- responsibilities: who is responsible for what action, with deadline',
   '- tasks: actionable items the production manager should track',
   '- dependencies: A requires B (e.g. rigging plot → point approval → engineering → riggers)',
-  '- changes: new-vs-previous within the thread (this trip has 4 trucks, previously said 3)',
-  '- conflicts: contradictions between messages, or between tour and venue',
+  '- changes: new-vs-previous within the thread OR vs venue_defaults (this trip has 4 trucks, previously said 3; email load-in 08:00 vs venue default 15:00)',
+  '- conflicts: contradictions between messages, or between tour and venue tech pack capabilities',
   '- missing_information: things the tour would need to specify but has not',
   '- risks: operational risks (curfew tight, dock capacity, RF congestion, permits)',
   '- small_details: minor items with operational relevance (photographer at soundcheck, dietary note, storage need, wheelchair access, quiet room)',
   '- documents: attachments/documents referenced (rider, stage plot, input list, ...)',
   '- field_facts: legacy compact facts for downstream form population. `field` MUST be in the provided enum; do NOT invent field names.',
+  '- tech_pack_additions: venue-related facts stated in the email that are NOT already covered in the corresponding <tech_pack>.',
+  '  For each: pick the target stage (or "both" / "unknown"), the target `section` (overview | staging | power | audio | lighting | backline | stagePlot | loadIn | hospitality | other), a `proposed_text` (one-sentence factual addition ready to paste), and a short `gap_reason`. The proposed_text MUST be directly supported by the quoted email — do not paraphrase into new facts.',
   '',
   'GUARDRAILS:',
   '- Do not classify anything as "confirmed" unless the email explicitly confirms it.',
   '- Do not upgrade an inference to a confirmed fact.',
   '- If the same fact appears in multiple messages, prefer the LATER message; if it differs, EMIT A CHANGE entry rather than overwriting.',
   '- Small details that seem minor still get an atom — the production manager decides relevance.',
+  '- Venue capability statements (dock size, RF policy, power service, load-in dock rules, catering vendor exclusivity, hospitality policy) already in <tech_pack> should NOT be re-emitted as tech_pack_additions. Only NEW venue-scoped facts belong there.',
 ].join('\n');
 
 // ── LLM entry point ────────────────────────────────────────────────────────
@@ -102,11 +112,31 @@ function buildShowContext(shows, showId) {
   return out;
 }
 
-function buildUserText({ messages, showContext, venueContext, existingShowData }) {
+function buildUserText({ messages, showContext, venueContext, existingShowData, venueDefaults, techPacks }) {
   const parts = [];
   if (showContext) { parts.push('<show_context>', JSON.stringify(showContext), '</show_context>'); }
   if (venueContext && Object.keys(venueContext).length > 0) {
     parts.push('<venue_context>', JSON.stringify(venueContext), '</venue_context>');
+  }
+  if (venueDefaults && Object.keys(venueDefaults).length > 0) {
+    parts.push('<venue_defaults>', JSON.stringify(venueDefaults), '</venue_defaults>');
+  }
+  if (Array.isArray(techPacks)) {
+    for (const tp of techPacks) {
+      if (!tp || !tp.stage) continue;
+      parts.push(`<tech_pack stage="${tp.stage}">`);
+      // Prefer explicit section text; each section is truncated so a
+      // multi-page pack cannot dominate the LLM context window.
+      for (const s of (tp.sections || [])) {
+        const content = String(s.content || '').trim();
+        if (!content) continue;
+        parts.push(`## ${s.title || s.key}`);
+        parts.push(content.length > 1500 ? content.slice(0, 1500) + '\n…[section truncated]' : content);
+        parts.push('');
+      }
+      if (tp.pdfFilename) parts.push(`(pdf on file: ${tp.pdfFilename}${tp.pdfUpdatedAt ? ' — updated ' + tp.pdfUpdatedAt : ''})`);
+      parts.push('</tech_pack>');
+    }
   }
   if (existingShowData && Object.keys(existingShowData).length > 0) {
     parts.push('<current_form_values>', JSON.stringify(existingShowData), '</current_form_values>');
@@ -124,7 +154,7 @@ function buildUserText({ messages, showContext, venueContext, existingShowData }
   return parts.join('\n');
 }
 
-async function extractComprehensive({ messages, shows = [], showId = null, existingShowData = {}, venueContext = {}, provider }) {
+async function extractComprehensive({ messages, shows = [], showId = null, existingShowData = {}, venueContext = {}, venueDefaults = null, techPacks = null, provider }) {
   if (!provider || !provider.isConfigured()) {
     const err = new Error('llm_provider_not_configured');
     err.code = 'not_configured';
@@ -132,7 +162,7 @@ async function extractComprehensive({ messages, shows = [], showId = null, exist
   }
   const ordered = [...messages].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
   const showContext = buildShowContext(shows, showId);
-  const userText = buildUserText({ messages: ordered, showContext, venueContext, existingShowData });
+  const userText = buildUserText({ messages: ordered, showContext, venueContext, existingShowData, venueDefaults, techPacks });
 
   const { data, modelUsed, tokensIn, tokensOut, latencyMs } = await provider.extractStructured({
     system: SYSTEM_PROMPT,
@@ -455,7 +485,7 @@ async function listAdvanceFacts({ showId } = {}) {
 
 // ── Top-level orchestrator ────────────────────────────────────────────────
 
-async function processThread({ messages, shows = [], showId = null, existingShowData = {}, venueContext = {}, actor = 'ai:advance-intel', provider }) {
+async function processThread({ messages, shows = [], showId = null, existingShowData = {}, venueContext = {}, venueDefaults = null, techPacks = null, actor = 'ai:advance-intel', provider }) {
   if (!Array.isArray(messages) || messages.length === 0) {
     return { skipped: 'no_messages' };
   }
@@ -463,7 +493,7 @@ async function processThread({ messages, shows = [], showId = null, existingShow
 
   // Run LLM + rules-v1 in parallel (independent inputs).
   const llmPromise   = prov.isConfigured()
-    ? extractComprehensive({ messages, shows, showId, existingShowData, venueContext, provider: prov })
+    ? extractComprehensive({ messages, shows, showId, existingShowData, venueContext, venueDefaults, techPacks, provider: prov })
         .catch(err => ({ __error: err.message || String(err) }))
     : Promise.resolve({ __error: 'llm_not_configured' });
   const rulesPromise = emailIntel.analyzeThread({

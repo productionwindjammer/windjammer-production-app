@@ -19,11 +19,12 @@ const CATEGORY_LABELS = {
   risks: 'Risks',
   small_details: 'Small operational details',
   documents: 'Documents',
+  tech_pack_additions: 'Tech pack additions (proposed)',
   other: 'Other',
 }
 
 const CATEGORY_ORDER = [
-  'changes', 'conflicts', 'risks', 'venue_requirements', 'tasks',
+  'changes', 'conflicts', 'risks', 'venue_requirements', 'tech_pack_additions', 'tasks',
   'people', 'schedule', 'production', 'labor', 'hospitality',
   'transportation', 'responsibilities', 'dependencies',
   'missing_information', 'small_details', 'documents', 'organizations', 'other',
@@ -39,7 +40,7 @@ const STATUS_COLOR = {
 
 function AtomCard({ atom }) {
   const p = atom.payload || {}
-  const title = p.full_name || p.name || p.title || p.kind || p.department || p.category || p.requirement || p.description || p.text || p.path || atom.path
+  const title = p.full_name || p.name || p.title || p.kind || p.department || p.category || p.requirement || p.description || p.text || p.proposed_text || p.path || atom.path
   return (
     <div style={{ padding: 10, border: '1px solid var(--border)', borderRadius: 6, marginBottom: 8, background: 'var(--bg)' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
@@ -64,6 +65,15 @@ function AtomCard({ atom }) {
       {p.severity && <div style={{ fontSize: 12 }}>Severity: {p.severity}</div>}
       {p.previous && p.next && <div style={{ fontSize: 12 }}>{p.previous} → <strong>{p.next}</strong>{p.reason ? ` — ${p.reason}` : ''}</div>}
       {p.a && p.b && <div style={{ fontSize: 12 }}>{p.a} <span style={{ color: 'var(--danger)' }}>vs</span> {p.b}</div>}
+      {atom.category === 'tech_pack_additions' && (
+        <div style={{ fontSize: 12, marginTop: 4 }}>
+          Stage: <strong>{p.stage || '—'}</strong> · Section: <strong>{p.section || '—'}</strong>
+          {p.gap_reason && <div style={{ color: 'var(--text-muted)' }}>{p.gap_reason}</div>}
+          <div style={{ marginTop: 4 }}>
+            → <a href={`/tech-pack?stage=${encodeURIComponent(p.stage === 'beach' ? 'beach' : 'inside')}&section=${encodeURIComponent(p.section || 'overview')}`}>Open tech pack</a>
+          </div>
+        </div>
+      )}
       <details style={{ marginTop: 6 }}>
         <summary style={{ cursor: 'pointer', fontSize: 11, color: 'var(--text-muted)' }}>Source</summary>
         <div style={{ marginTop: 4, fontSize: 11, color: 'var(--text-muted)' }}>

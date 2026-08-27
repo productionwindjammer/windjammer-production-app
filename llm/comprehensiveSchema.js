@@ -256,6 +256,19 @@ const DOCUMENT = atom({
   },
 }, ['ref']);
 
+// New category: a venue-related fact the email discusses that the current
+// tech pack does NOT already cover. The LLM identifies these by comparing
+// each venue-scoped statement against the <tech_pack> context blocks.
+const TECH_PACK_ADDITION = atom({
+  stage:         { type: 'string', enum: ['inside', 'beach', 'both', 'unknown'] },
+  section:       {
+    type: 'string',
+    enum: ['overview', 'staging', 'power', 'audio', 'lighting', 'backline', 'stagePlot', 'loadIn', 'hospitality', 'other'],
+  },
+  proposed_text: { type: 'string', maxLength: 800, description: 'One-sentence factual addition ready to paste into the tech pack section. NEVER invent — must be directly supported by the quoted email text.' },
+  gap_reason:    { type: 'string', maxLength: 240, description: 'Why this is new/missing from the tech pack.' },
+}, ['section', 'proposed_text']);
+
 // Legacy field-enum fact so downstream approve UI keeps working.
 const FIELD_FACT = {
   type: 'object',
@@ -280,7 +293,7 @@ const COMPREHENSIVE_SCHEMA = {
     'people', 'organizations', 'schedule', 'production', 'labor',
     'hospitality', 'transportation', 'venue_requirements', 'responsibilities',
     'tasks', 'dependencies', 'changes', 'conflicts', 'missing_information',
-    'risks', 'small_details', 'documents', 'field_facts',
+    'risks', 'small_details', 'documents', 'field_facts', 'tech_pack_additions',
   ],
   properties: {
     people:              { type: 'array', items: PERSON,             maxItems: 40 },
@@ -301,6 +314,7 @@ const COMPREHENSIVE_SCHEMA = {
     small_details:       { type: 'array', items: SMALL_DETAIL,       maxItems: 40 },
     documents:           { type: 'array', items: DOCUMENT,           maxItems: 20 },
     field_facts:         { type: 'array', items: FIELD_FACT,         maxItems: 60 },
+    tech_pack_additions: { type: 'array', items: TECH_PACK_ADDITION, maxItems: 30 },
     other:               { type: 'array', items: atom({ text: { type: 'string', maxLength: 400 } }, ['text']), maxItems: 30 },
   },
 };
@@ -309,7 +323,7 @@ const CATEGORIES = [
   'people', 'organizations', 'schedule', 'production', 'labor', 'hospitality',
   'transportation', 'venue_requirements', 'responsibilities', 'tasks',
   'dependencies', 'changes', 'conflicts', 'missing_information', 'risks',
-  'small_details', 'documents', 'other',
+  'small_details', 'documents', 'tech_pack_additions', 'other',
 ];
 
 module.exports = { COMPREHENSIVE_SCHEMA, CATEGORIES, CONFIDENCE_ENUM, STATUS_ENUM, PARTY_ENUM };

@@ -162,6 +162,11 @@ function buildStubOutput() {
     documents: [
       { ref: 'rigging_plot_v2.pdf', kind: 'rigging_plot', status: 'confirmed', confidence: 'high', provenance: prov(msg1, 'Full rigging plot attached (rigging_plot_v2.pdf)') },
     ],
+    tech_pack_additions: [
+      { stage: 'inside', section: 'power',   proposed_text: 'Tours have requested 400A 3-phase at stage — verify service and note if not currently on tech pack.', gap_reason: 'Not on file', status: 'proposed', confidence: 'medium', provenance: prov(msg1, '400A 3-phase at stage') },
+      { stage: 'inside', section: 'loadIn',  proposed_text: 'Dock accepts 53\' tractor-trailers; confirm minimum arrival time.', gap_reason: 'Dock timing rule not documented', status: 'proposed', confidence: 'medium', provenance: prov(msg2, 'loading dock can accept a 53\' at 6 AM', 'Mark Rivera', 'mark@novafalls.tour') },
+      { stage: 'inside', section: 'hospitality', proposed_text: 'Barrier-free artist entrance requested for wheelchair access.', gap_reason: 'Accessibility path not currently in tech pack', status: 'proposed', confidence: 'medium', provenance: prov(msg1, 'need barrier-free artist entrance') },
+    ],
     field_facts: [
       { field: 'loadin_time',      value: '08:00', kind: 'confirmation', confidence: 0.95, source_message_id: msg1, source_excerpt: 'Load-in: 8:00 AM' },
       { field: 'soundcheck_time',  value: '15:30', kind: 'assertion',    confidence: 0.95, source_message_id: msg1, source_excerpt: 'Soundcheck: 3:30 PM' },
@@ -203,10 +208,33 @@ test('Advance Intelligence — full pipeline processes synthetic email, covers e
       // Both message ids must have made it into the user text (thread was ordered).
       assert.ok(userText.includes('<untrusted_email id="demo-msg-1">'));
       assert.ok(userText.includes('<untrusted_email id="demo-msg-2">'));
+      // Venue defaults + both tech-pack stages were passed in as context.
+      assert.ok(userText.includes('<venue_defaults>'),        'venue_defaults block sent to LLM');
+      assert.ok(userText.includes('<tech_pack stage="inside">'), 'inside tech pack sent to LLM');
+      assert.ok(userText.includes('<tech_pack stage="beach">'),  'beach tech pack sent to LLM');
+      assert.match(system, /tech_pack_additions/, 'system prompt describes tech_pack_additions');
+      assert.match(system, /venue_defaults/,      'system prompt describes venue_defaults');
       return buildStubOutput();
     },
     model: 'stub-advance-1',
   });
+
+  const venueDefaults = {
+    stages: {
+      inside: { capacity: 500, daySheet: { default: { loadIn: '15:00', soundCheck: '17:00', doors: '19:00' } } },
+      beach:  { capacity: 1200, daySheet: { default: { loadIn: '14:00', soundCheck: '16:30', doors: '18:00' } } },
+    },
+  };
+  const techPacks = [
+    { stage: 'inside', sections: [
+      { key: 'overview', title: 'Venue Overview', content: 'Windjammer Inside Stage. Cap 500.' },
+      { key: 'power',    title: 'Power',           content: '200A single-phase at stage. No 3-phase installed.' },
+      { key: 'loadIn',   title: 'Load-in',         content: 'Ground-level dock. Tractor-trailer access via alley.' },
+    ] },
+    { stage: 'beach', sections: [
+      { key: 'overview', title: 'Venue Overview', content: 'Windjammer Beach Stage. Cap 1200. Outdoor.' },
+    ] },
+  ];
 
   const result = await advance.processThread({
     messages:         demo.messages,
@@ -214,6 +242,8 @@ test('Advance Intelligence — full pipeline processes synthetic email, covers e
     showId:           demo.showId,
     existingShowData: demo.existingShowData,
     venueContext:     demo.venueContext,
+    venueDefaults,
+    techPacks,
     provider,
   });
 
@@ -241,6 +271,7 @@ test('Advance Intelligence — full pipeline processes synthetic email, covers e
   assert.ok(compr.risks.length          >= 2, 'risks extracted');
   assert.ok(compr.small_details.length  >= 5, 'small details extracted (photographer, wheelchair, etc.)');
   assert.ok(compr.documents.length      >= 1, 'documents extracted');
+  assert.ok(compr.tech_pack_additions.length >= 1, 'tech pack additions extracted (facts not in current tech pack)');
   assert.ok(compr.field_facts.length    >= 15, 'field facts extracted');
 
   // 3) Provenance intact on every atom.
@@ -283,7 +314,7 @@ test('Advance Intelligence — full pipeline processes synthetic email, covers e
   const stored = store.get('AdvanceFacts') || [];
   assert.ok(stored.length >= 40, `AdvanceFacts should contain many atoms; got ${stored.length}`);
   const catsSeen = new Set(stored.map(r => r.category));
-  for (const need of ['people', 'schedule', 'production', 'labor', 'hospitality', 'transportation', 'venue_requirements', 'tasks', 'small_details']) {
+  for (const need of ['people', 'schedule', 'production', 'labor', 'hospitality', 'transportation', 'venue_requirements', 'tasks', 'small_details', 'tech_pack_additions']) {
     assert.ok(catsSeen.has(need), `AdvanceFacts should include category ${need}`);
   }
   // Every stored row has provenance + confidence + status.
