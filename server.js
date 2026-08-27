@@ -3625,15 +3625,34 @@ async function getStoredEmails() {
 // facts the bot can actually use. proposeFromAnalysis dedupes by
 // (messageId, field, scope, showId), so replays never spam duplicates.
 // Best-effort — callers must not fail if this throws.
-async function analyzeLinkedThread({ threadId, showId, shows, allEmails, actor }) {
+async function analyzeLinkedThread({ threadId, showId, shows, allEmails, actor, users = null, clientCache = null }) {
   if (!threadId || !showId) return { analyzed: 0, proposed: 0, skipped: 'missing_ids' };
-  if (!gmail.isConfigured())  return { analyzed: 0, proposed: 0, skipped: 'gmail_not_configured' };
   const rows = allEmails.filter(e => e.gmailThreadId === threadId && e.gmailMessageId);
   if (rows.length === 0) return { analyzed: 0, proposed: 0, skipped: 'no_messages' };
+
+  // Each stored email row records the sourceUserId that fetched it. That
+  // user's OAuth token is the only one that can read the message body back
+  // (the service account can only see mail sent to/from itself).
+  if (!users) users = await sheets.getRows(config.googleSheets.sheets.users).catch(() => []);
+  if (!clientCache) clientCache = new Map();
+  function clientFor(sourceUserId) {
+    if (clientCache.has(sourceUserId)) return clientCache.get(sourceUserId);
+    const u = users.find(x => String(x.id) === String(sourceUserId));
+    let c = null;
+    if (u && u.gmailRefreshToken) {
+      try { c = gmail.getGmailClientForToken(u.gmailRefreshToken); } catch { c = null; }
+    }
+    clientCache.set(sourceUserId, c);
+    return c;
+  }
+
   const messages = [];
+  const fetchErrors = [];
   for (const r of rows) {
+    const client = clientFor(r.sourceUserId || '');
+    if (!client) { fetchErrors.push(`no_client_for_user:${r.sourceUserId || 'unknown'}`); continue; }
     try {
-      const raw = await gmail.getMessage(r.gmailMessageId);
+      const raw = await gmail.getMessage(r.gmailMessageId, client);
       const parsed = gmail.parseMessage(raw);
       messages.push({
         id:       r.gmailMessageId,
@@ -3644,10 +3663,13 @@ async function analyzeLinkedThread({ threadId, showId, shows, allEmails, actor }
         body:     parsed.textBody || (parsed.htmlBody || '').replace(/<[^>]+>/g, ' '),
       });
     } catch (err) {
-      console.warn(`[analyzeLinkedThread] fetch ${r.gmailMessageId} failed: ${err.message}`);
+      fetchErrors.push(err.message);
+      console.warn(`[analyzeLinkedThread] fetch ${r.gmailMessageId} (user=${r.sourceUserId}): ${err.message}`);
     }
   }
-  if (messages.length === 0) return { analyzed: 0, proposed: 0, skipped: 'body_fetch_failed' };
+  if (messages.length === 0) {
+    return { analyzed: 0, proposed: 0, skipped: 'body_fetch_failed', errors: fetchErrors.slice(0, 3) };
+  }
   const analysis = await productionExtractor.extractOrFallback({
     messages, shows, showId,
     config: config.llm,
@@ -4256,9 +4278,10 @@ app.post('/api/advancement/:showId/reanalyze-emails', requireAuth, requireShowAc
 // is a safe no-op if nothing changed.
 app.post('/api/email-intel/reanalyze-all', requireAuth, requireRole('admin'), async (req, res) => {
   try {
-    const [shows, allEmails] = await Promise.all([
+    const [shows, allEmails, users] = await Promise.all([
       sheets.getRows(config.googleSheets.sheets.shows),
       getStoredEmails(),
+      sheets.getRows(config.googleSheets.sheets.users).catch(() => []),
     ]);
     const bucket = new Map(); // showId -> Set(threadId)
     for (const e of allEmails) {
@@ -4266,6 +4289,8 @@ app.post('/api/email-intel/reanalyze-all', requireAuth, requireRole('admin'), as
       if (!bucket.has(e.showId)) bucket.set(e.showId, new Set());
       bucket.get(e.showId).add(e.gmailThreadId);
     }
+    const clientCache = new Map();
+    const skipReasons = {};
     let shows_touched = 0, threads = 0, analyzed = 0, proposed = 0;
     for (const [showId, tids] of bucket.entries()) {
       shows_touched++;
@@ -4273,17 +4298,24 @@ app.post('/api/email-intel/reanalyze-all', requireAuth, requireRole('admin'), as
         threads++;
         try {
           const r = await analyzeLinkedThread({
-            threadId: tid, showId, shows, allEmails, actor: 'reanalyze-all:' + req.user.id,
+            threadId: tid, showId, shows, allEmails, users, clientCache,
+            actor: 'reanalyze-all:' + req.user.id,
           });
           analyzed += r.analyzed || 0;
           proposed += r.proposed || 0;
+          if (r.skipped) {
+            skipReasons[r.skipped] = (skipReasons[r.skipped] || 0) + 1;
+            if (r.skipped === 'body_fetch_failed' && r.errors) {
+              console.warn(`[reanalyze-all] show=${showId} thread=${tid} body_fetch_failed: ${r.errors.join(' | ')}`);
+            }
+          }
         } catch (err) {
           console.warn(`[reanalyze-all] show=${showId} thread=${tid}: ${err.message}`);
         }
         await new Promise(r => setTimeout(r, 200));
       }
     }
-    res.json({ success: true, shows: shows_touched, threads, analyzed, proposed });
+    res.json({ success: true, shows: shows_touched, threads, analyzed, proposed, skipReasons });
   } catch (err) {
     console.error('Reanalyze-all error:', err.message);
     res.status(500).json({ success: false, message: err.message });
