@@ -7,7 +7,7 @@ import ArtistCombobox, { invalidateArtistCache } from '../components/ArtistCombo
 import { useSettings } from '../context/SettingsContext'
 import { useAuth } from '../context/AuthContext'
 import { useVenue } from '../context/VenueContext'
-import { formatTime } from '../utils/time'
+import { formatTime, byTime } from '../utils/time'
 import { getTicketStats } from '../utils/stages'
 import { hasFinancialAccess } from '../utils/roles'
 import AiProposalsBanner from '../components/AiProposalsBanner'
@@ -263,7 +263,7 @@ export default function ShowDetail() {
       setSchedule(
         (schedRes.data.data || [])
           .filter(s => s.showId === id)
-          .sort((a, b) => (a.time || '').localeCompare(b.time || ''))
+          .sort(byTime)
       )
       setLabor((laborRes.data.data || []).filter(l => l.showId === id))
       setStaff(staffRes.data.data || [])
@@ -420,7 +420,7 @@ export default function ShowDetail() {
     setSchedule(
       (res.data.data || [])
         .filter(s => s.showId === id)
-        .sort((a, b) => (a.time || '').localeCompare(b.time || ''))
+        .sort(byTime)
     )
   }
 

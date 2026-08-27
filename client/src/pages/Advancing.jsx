@@ -6,7 +6,7 @@ import AiProposalsBanner from '../components/AiProposalsBanner'
 import { useAuth } from '../context/AuthContext'
 import { useSettings } from '../context/SettingsContext'
 import { filterShowList } from '../utils/showFilters'
-import { formatTime } from '../utils/time'
+import { formatTime, byTime } from '../utils/time'
 
 const BLANK = {
   showId: '', showName: '', stage: 'inside',
@@ -195,7 +195,7 @@ export default function Advancing() {
           setSchedItems([])
         }
       } else {
-        setSchedItems(mine.sort((a, b) => (a.time || '').localeCompare(b.time || '')))
+        setSchedItems(mine.sort(byTime))
       }
     }).finally(() => setLoadingSchedule(false))
   }
@@ -227,7 +227,7 @@ export default function Advancing() {
       setSchedItems(
         (res.data.data || [])
           .filter(i => i.showId === viewRecord.showId)
-          .sort((a, b) => (a.time || '').localeCompare(b.time || ''))
+          .sort(byTime)
       )
       setSchedModal(false)
     } finally { setSchedSaving(false) }
@@ -240,7 +240,7 @@ export default function Advancing() {
     setSchedItems(
       (res.data.data || [])
         .filter(i => i.showId === viewRecord.showId)
-        .sort((a, b) => (a.time || '').localeCompare(b.time || ''))
+        .sort(byTime)
     )
   }
 
@@ -416,7 +416,7 @@ export default function Advancing() {
     const showLabel  = record.showName || getShowLabel(record)
 
     const scheduleRows = [...schedule]
-      .sort((a, b) => (a.time || '').localeCompare(b.time || ''))
+      .sort(byTime)
       .map(s => `<tr>
         <td style="padding:5px 12px 5px 0;border-bottom:1px solid #eee;white-space:nowrap">${formatTime(s.time, tf) || '—'}</td>
         <td style="padding:5px 12px 5px 0;border-bottom:1px solid #eee;font-weight:600">${s.label || s.eventType || '—'}</td>
@@ -529,7 +529,7 @@ export default function Advancing() {
     const sStageColor = sRec.stage === 'inside' ? '#1a4a7a' : '#1a6b4a'
     const sLabel      = sRec.showName || sShow.artist || sShow.eventName || '—'
     const sSchedRows = [...sSched]
-      .sort((a, b) => (a.time || '').localeCompare(b.time || ''))
+      .sort(byTime)
       .map(s => `<tr>
         <td style="padding:4px 12px 4px 0;border-bottom:1px solid #eee;white-space:nowrap">${formatTime(s.time, tf) || '—'}</td>
         <td style="padding:4px 12px 4px 0;border-bottom:1px solid #eee;font-weight:600">${s.label || s.eventType || '—'}</td>

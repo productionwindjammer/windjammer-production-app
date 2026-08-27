@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import api from '../api'
 import Modal from '../components/Modal'
 import { useAuth } from '../context/AuthContext'
-import { formatTime } from '../utils/time'
+import { formatTime, byTime } from '../utils/time'
 
 // Roles allowed to add/edit/delete items on the event schedule.
 const EDIT_ROLES = ['admin', 'production_manager', 'venue_management', 'promoter']
@@ -101,7 +101,7 @@ export default function EventSchedule() {
       if (!map.has(key)) map.set(key, [])
       map.get(key).push(it)
     }
-    for (const arr of map.values()) arr.sort((a, b) => (a.time || '').localeCompare(b.time || ''))
+    for (const arr of map.values()) arr.sort(byTime)
     return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0]))
   }, [filtered])
 

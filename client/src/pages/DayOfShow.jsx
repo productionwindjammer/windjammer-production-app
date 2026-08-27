@@ -3,7 +3,7 @@ import api from '../api'
 import Modal from '../components/Modal'
 import { filterShowList } from '../utils/showFilters'
 import { useSettings } from '../context/SettingsContext'
-import { formatTime } from '../utils/time'
+import { formatTime, byTime, byDateThenTime } from '../utils/time'
 
 const BLANK = {
   showId: '', showName: '', stage: 'inside', date: '',
@@ -144,24 +144,24 @@ export default function DayOfShow() {
   // "By Show" filter — supports either a single show id, or an "event:<id>"
   // pseudo-value that includes every show attached to the event.
   const filteredByShow = (() => {
-    if (!selectedShow) return items.slice().sort((a, b) => (a.time || '').localeCompare(b.time || ''))
+    if (!selectedShow) return items.slice().sort(byTime)
     if (selectedShow.startsWith('event:')) {
       const eventId = selectedShow.slice(6)
       const showIds = new Set(shows.filter(s => s.eventId === eventId).map(s => s.id))
       return items
         .filter(i => showIds.has(i.showId))
-        .sort((a, b) => (itemDate(a) || '').localeCompare(itemDate(b) || '') || (a.time || '').localeCompare(b.time || ''))
+        .sort((a, b) => (itemDate(a) || '').localeCompare(itemDate(b) || '') || byTime(a, b))
     }
     return items
       .filter(i => i.showId === selectedShow)
-      .sort((a, b) => (a.time || '').localeCompare(b.time || ''))
+      .sort(byTime)
   })()
 
   // "By Day" filter — every item on the selected date, regardless of show.
   const dayItems = useMemo(() => {
     return items
       .filter(i => itemDate(i) === dayDate)
-      .sort((a, b) => (a.time || '').localeCompare(b.time || ''))
+      .sort(byTime)
   }, [items, dayDate, showsById])
   const dayItemsByStage = useMemo(() => {
     const map = new Map(STAGES.map(s => [s.key, []]))
