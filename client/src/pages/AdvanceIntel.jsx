@@ -86,8 +86,19 @@ export default function AdvanceIntel() {
   useEffect(() => {
     api.get('/shows').then(r => {
       const list = r.data?.data || r.data?.shows || r.data || []
-      setShows(list)
-      if (list.length && !showId) setShowId(String(list[0].id))
+      // Only surface upcoming shows — past shows clutter the dropdown.
+      const today = new Date(); today.setHours(0, 0, 0, 0)
+      const upcoming = list
+        .filter(s => {
+          if (!s?.date) return false
+          const d = new Date(s.date)
+          if (Number.isNaN(d.getTime())) return false
+          d.setHours(0, 0, 0, 0)
+          return d >= today
+        })
+        .sort((a, b) => String(a.date).localeCompare(String(b.date)))
+      setShows(upcoming)
+      if (upcoming.length && !showId) setShowId(String(upcoming[0].id))
     }).catch(e => setError(e.response?.data?.message || e.message))
   }, [])
 
