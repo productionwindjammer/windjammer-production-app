@@ -9,7 +9,6 @@ export const NAV_ITEMS = [
   { label: 'Calendar',     path: '/calendar',      icon: '🗓️' },
   { label: 'Artists',      path: '/artists',       icon: '🎤' },
   { label: 'Advancing',    path: '/advancing',     icon: '📋', sub: true, roles: ['admin', 'production_manager', 'stage_manager', 'venue_management'] },
-  { label: 'Advancement',  path: '/advancement',   icon: '🎯', sub: true, roles: ['admin', 'production_manager', 'stage_manager'] },
   { label: 'Labor',        path: '/labor',         icon: '👷', sub: true, roles: ['admin', 'production_manager', 'stage_manager'] },
   { label: 'Financials',   path: '/financials',    icon: '💰', sub: true, roles: ['admin', 'production_manager'] },
   { label: 'Budgets',      path: '/budgets',       icon: '📊', sub: true, roles: ['admin', 'production_manager'] },
@@ -19,14 +18,21 @@ export const NAV_ITEMS = [
   { label: 'Staff',        path: '/staff',         icon: '👥', roles: ['admin', 'production_manager'] },
   { label: 'Users',        path: '/users',         icon: '🔐', roles: ['admin', 'production_manager'] },
   { label: 'Tech Pack',    path: '/tech-pack',     icon: '📁', roles: ['admin', 'production_manager', 'stage_manager', 'venue_management', 'crew', 'staff', 'tech'] },
-  { label: 'Venue Intel',  path: '/venue-knowledge', icon: '🏛️', roles: ['admin', 'production_manager', 'venue_management', 'stage_manager'] },
-  { label: 'Knowledge Review', path: '/venue-knowledge-review', icon: '🔎', roles: ['admin', 'production_manager'] },
-  { label: 'Industry Knowledge', path: '/industry-knowledge', icon: '📚', roles: ['admin', 'production_manager', 'venue_management', 'stage_manager'] },
   { label: 'Email',        path: '/email',         icon: '✉️', roles: ['admin', 'production_manager', 'stage_manager'] },
-  { label: 'Email Intel',  path: '/email-intel',   icon: '🧠', roles: ['admin', 'production_manager', 'stage_manager'] },
-  { label: 'Advance Intel', path: '/advance-intel', icon: '🎯', roles: ['admin', 'production_manager'] },
-  { label: 'Email Templates', path: '/email-templates', icon: '📝', sub: true, roles: ['admin', 'production_manager'] },
   { label: 'Settings',     path: '/settings',      icon: '⚙️' },
+]
+
+// Sub-tabs shown inside the Advancing hub. Role gating mirrors the former
+// top-level entries so users can't reach a page via URL that they couldn't see.
+export const ADVANCING_TABS = [
+  { path: '',                   label: 'Overview',           icon: '📋', roles: ['admin', 'production_manager', 'stage_manager', 'venue_management'] },
+  { path: 'advancement',        label: 'Advancement',        icon: '🎯', roles: ['admin', 'production_manager', 'stage_manager'] },
+  { path: 'advance-intel',      label: 'Advance Intel',      icon: '🤖', roles: ['admin', 'production_manager'] },
+  { path: 'email-intel',        label: 'Email Intel',        icon: '🧠', roles: ['admin', 'production_manager', 'stage_manager'] },
+  { path: 'email-templates',    label: 'Email Templates',    icon: '📝', roles: ['admin', 'production_manager'] },
+  { path: 'venue-intel',        label: 'Venue Intel',        icon: '🏛️', roles: ['admin', 'production_manager', 'venue_management', 'stage_manager'] },
+  { path: 'knowledge-review',   label: 'Knowledge Review',   icon: '🔎', roles: ['admin', 'production_manager'] },
+  { path: 'industry-knowledge', label: 'Industry Knowledge', icon: '📚', roles: ['admin', 'production_manager', 'venue_management', 'stage_manager'] },
 ]
 
 export function navForRole(role) {
@@ -35,6 +41,12 @@ export function navForRole(role) {
 
 export function canAccess(path, role) {
   const item = NAV_ITEMS.find(i => i.path === path)
-  if (!item) return true
-  return !item.roles || item.roles.includes(role)
+  if (item) return !item.roles || item.roles.includes(role)
+  // Advancing hub sub-paths — gate by the tab's roles.
+  const m = /^\/advancing\/([^/?#]+)/.exec(path)
+  if (m) {
+    const tab = ADVANCING_TABS.find(t => t.path === m[1])
+    if (tab) return !tab.roles || tab.roles.includes(role)
+  }
+  return true
 }

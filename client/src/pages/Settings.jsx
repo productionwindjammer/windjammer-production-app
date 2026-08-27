@@ -458,7 +458,7 @@ function AdminToolsCard() {
           <div style={{ fontWeight: 600, marginBottom: 4 }}>Reanalyze all emails with AI</div>
           <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 8 }}>
             Runs the LLM extractor on every stored email thread across every show. New pending
-            proposals appear in <a href="/email-intel">Email Intel</a>. Existing proposals aren't
+            proposals appear in <a href="/advancing/email-intel">Email Intel</a>. Existing proposals aren't
             duplicated — safe to re-run. Uses each thread's original mailbox owner's Gmail
             connection to fetch bodies; threads whose owner is not connected are skipped.
           </div>

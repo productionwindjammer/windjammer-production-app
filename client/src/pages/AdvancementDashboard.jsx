@@ -275,7 +275,7 @@ function DetailView({ data, onRules }) {
               return (
                 <Link
                   key={i}
-                  to={`/email-intel?showId=${encodeURIComponent(data.showId)}`}
+                  to={`/advancing/email-intel?showId=${encodeURIComponent(data.showId)}`}
                   style={{ ...rowBox, display: 'block', textDecoration: 'none', color: 'inherit' }}
                 >
                   {body}

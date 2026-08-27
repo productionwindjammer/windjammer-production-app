@@ -115,7 +115,7 @@ function Header({ brief, onRefresh }) {
         <div>
           <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
             <Link to={`/shows/${s.id}`}>← Show page</Link> ·
-            <Link to={`/email-intel?showId=${s.id}`} style={{ marginLeft: 6 }}>Email Intel</Link>
+            <Link to={`/advancing/email-intel?showId=${s.id}`} style={{ marginLeft: 6 }}>Email Intel</Link>
           </div>
           <h1 style={{ margin: '4px 0 0' }}>{s.artist || s.eventName || 'Show'} — {s.date}</h1>
           <div style={{ color: 'var(--text-muted)', marginTop: 6, fontSize: 14 }}>{brief.aiShowBrief?.text}</div>
@@ -365,7 +365,7 @@ function ActionList({ items, setDrill, ctx }) {
       ))}
       {ctx?.showId && (
         <div style={{ paddingTop: 8, marginTop: 6, borderTop: '1px solid var(--border)', fontSize: 12 }}>
-          <Link to={`/email-intel?showId=${encodeURIComponent(ctx.showId)}`} style={{ color: '#3b82f6' }}>
+          <Link to={`/advancing/email-intel?showId=${encodeURIComponent(ctx.showId)}`} style={{ color: '#3b82f6' }}>
             Review pending AI proposals and approve/reject in Email Intel →
           </Link>
         </div>
@@ -391,7 +391,7 @@ function ProposalList({ items, setDrill, ctx }) {
       ))}
       {ctx?.showId && items.length > 0 && (
         <div style={{ paddingTop: 8, marginTop: 6, borderTop: '1px solid var(--border)', fontSize: 12 }}>
-          <Link to={`/email-intel?showId=${encodeURIComponent(ctx.showId)}`} style={{ color: '#3b82f6' }}>
+          <Link to={`/advancing/email-intel?showId=${encodeURIComponent(ctx.showId)}`} style={{ color: '#3b82f6' }}>
             Open full review in Email Intel →
           </Link>
         </div>
