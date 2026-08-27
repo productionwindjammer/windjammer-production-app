@@ -49,32 +49,36 @@ export default function EmailIntel() {
 
   useEffect(() => { load() }, [])
 
+  async function fetchAll() {
+    const [q, t, i, c] = await Promise.all([
+      api.get('/email-intel/queue?withPreview=1'),
+      api.get('/email-intel/threads'),
+      api.get('/email-intel/issues'),
+      api.get('/ai-changes').catch(() => ({ data: { data: [] } })),
+    ])
+    const rows = q.data.data || []
+    if (rows.length && rows[0]?.fact) {
+      setQueue(rows.map(r => r.fact))
+      const pmap = {}
+      for (const r of rows) if (r.fact) pmap[r.fact.id] = r.preview
+      setPreviews(pmap)
+    } else {
+      setQueue(rows)
+      setPreviews({})
+    }
+    setThreads(t.data.data || [])
+    setIssues(i.data.data  || [])
+    setChanges(c.data.data || [])
+  }
+
   async function load() {
     setLoading(true)
-    try {
-      const [q, t, i, c] = await Promise.all([
-        api.get('/email-intel/queue?withPreview=1'),
-        api.get('/email-intel/threads'),
-        api.get('/email-intel/issues'),
-        api.get('/ai-changes').catch(() => ({ data: { data: [] } })),
-      ])
-      const rows = q.data.data || []
-      // withPreview=1 returns [{fact, preview}, ...]. Older shape returns [fact].
-      if (rows.length && rows[0]?.fact) {
-        setQueue(rows.map(r => r.fact))
-        const pmap = {}
-        for (const r of rows) if (r.fact) pmap[r.fact.id] = r.preview
-        setPreviews(pmap)
-      } else {
-        setQueue(rows)
-        setPreviews({})
-      }
-      setThreads(t.data.data || [])
-      setIssues(i.data.data  || [])
-      setChanges(c.data.data || [])
-      setChecked(new Set())
-    } finally { setLoading(false) }
+    try { await fetchAll(); setChecked(new Set()) }
+    finally { setLoading(false) }
   }
+
+  // Background reconciliation after an optimistic mutation — no spinner.
+  function quietRefresh() { fetchAll().catch(() => {}) }
 
   const filteredQueue = useMemo(() => {
     return queue.filter(f => !filterShowId || f.showId === filterShowId)
@@ -89,8 +93,8 @@ export default function EmailIntel() {
     return g
   }, [filteredQueue])
 
-  // Batch selection: only low-risk + no-conflict + mapped facts can be picked.
-  const batchable = useMemo(() => {
+  // Auto-safe convenience: low-risk, non-conflicting, mapped facts.
+  const autoBatchable = useMemo(() => {
     const set = new Set()
     for (const f of filteredQueue) {
       const p = previews[f.id]
@@ -103,6 +107,13 @@ export default function EmailIntel() {
     return set
   }, [filteredQueue, previews])
 
+  // Any proposed row may be manually selected; server still enforces per-fact eligibility.
+  const checkable = useMemo(() => {
+    const set = new Set()
+    for (const f of filteredQueue) if (f.status === 'proposed') set.add(f.id)
+    return set
+  }, [filteredQueue])
+
   function toggleCheck(id) {
     setChecked(prev => {
       const n = new Set(prev)
@@ -110,27 +121,65 @@ export default function EmailIntel() {
       return n
     })
   }
-  function toggleAllBatch() {
+  function selectAllSafe() {
     setChecked(prev => {
-      const all = [...batchable]
-      const allSelected = all.every(id => prev.has(id))
+      const all = [...autoBatchable]
+      const allSelected = all.length > 0 && all.every(id => prev.has(id))
+      return new Set(allSelected ? [] : all)
+    })
+  }
+  function selectAllShown() {
+    setChecked(prev => {
+      const all = [...checkable]
+      const allSelected = all.length > 0 && all.every(id => prev.has(id))
       return new Set(allSelected ? [] : all)
     })
   }
   async function runBatchApprove() {
     if (checked.size === 0) return
     setBatching(true)
+    const ids = [...checked]
+    // Optimistic: remove them immediately; anything the server refuses gets brought back by the refresh.
+    const backup = queue.filter(f => ids.includes(f.id))
+    setQueue(prev => prev.filter(f => !ids.includes(f.id)))
+    setChecked(new Set())
     try {
-      const { data } = await api.post('/email-intel/facts/batch-approve', { ids: [...checked] })
+      const { data } = await api.post('/email-intel/facts/batch-approve', { ids })
       const failed = (data.data || []).filter(r => !r.ok)
       if (failed.length) {
         alert(`Approved ${(data.data.length - failed.length)}/${data.data.length}. ${failed.length} skipped:\n` +
           failed.map(f => `• ${f.id}: ${f.reason || f.message}`).join('\n'))
+        await fetchAll()
+      } else {
+        quietRefresh()
       }
-      await load()
     } catch (err) {
+      setQueue(prev => [...backup, ...prev])
       alert(err.response?.data?.message || err.message)
     } finally { setBatching(false) }
+  }
+
+  async function approveThread(threadId) {
+    const facts = queue.filter(f => f.threadId === threadId && f.status === 'proposed')
+    if (facts.length === 0) return
+    const ids = facts.map(f => f.id)
+    const backup = [...facts]
+    setQueue(prev => prev.filter(f => !ids.includes(f.id)))
+    setChecked(prev => { const n = new Set(prev); ids.forEach(id => n.delete(id)); return n })
+    try {
+      const { data } = await api.post('/email-intel/facts/batch-approve', { ids })
+      const failed = (data.data || []).filter(r => !r.ok)
+      if (failed.length) {
+        alert(`Approved ${(data.data.length - failed.length)}/${data.data.length}. ${failed.length} skipped (needs individual review):\n` +
+          failed.map(f => `• ${f.reason || f.message}`).join('\n'))
+        await fetchAll()
+      } else {
+        quietRefresh()
+      }
+    } catch (err) {
+      setQueue(prev => [...backup, ...prev])
+      alert(err.response?.data?.message || err.message)
+    }
   }
 
   async function openDetail(fact) {
@@ -142,6 +191,10 @@ export default function EmailIntel() {
   }
 
   async function decide(id, action, opts = {}) {
+    const backup = queue.find(f => f.id === id)
+    // Optimistic remove — row disappears immediately.
+    setQueue(prev => prev.filter(f => f.id !== id))
+    setChecked(prev => { const n = new Set(prev); n.delete(id); return n })
     setDeciding(true)
     try {
       const payload = { note: opts.note || '' }
@@ -152,9 +205,11 @@ export default function EmailIntel() {
       }
       await api.post(`/email-intel/facts/${id}/${action}`, payload)
       setSelected(null)
-      await load()
+      quietRefresh()
     } catch (err) {
+      if (backup) setQueue(prev => [backup, ...prev])
       alert(err.response?.data?.message || err.message)
+      throw err
     } finally { setDeciding(false) }
   }
 
@@ -220,14 +275,17 @@ export default function EmailIntel() {
           threads={threads}
           previews={previews}
           checked={checked}
-          batchable={batchable}
+          autoBatchable={autoBatchable}
+          checkable={checkable}
           canDecide={canDecide}
           onToggleCheck={toggleCheck}
-          onToggleAll={toggleAllBatch}
+          onSelectAllSafe={selectAllSafe}
+          onSelectAllShown={selectAllShown}
           onBatchApprove={runBatchApprove}
           batching={batching}
           onOpen={openDetail}
           onDecide={decide}
+          onApproveThread={approveThread}
         />
       ) : tab === 'threads' ? (
         <ThreadsView threads={threads} />
@@ -294,7 +352,7 @@ export default function EmailIntel() {
 }
 
 // ── Queue grouped by thread ────────────────────────────────────────────────
-function QueueView({ byThread, threads, filterShowId, setFilterShowId, previews, checked, batchable, canDecide, onToggleCheck, onToggleAll, onBatchApprove, batching, onOpen, onDecide }) {
+function QueueView({ byThread, threads, filterShowId, setFilterShowId, previews, checked, autoBatchable, checkable, canDecide, onToggleCheck, onSelectAllSafe, onSelectAllShown, onBatchApprove, batching, onOpen, onDecide, onApproveThread }) {
   const threadIds = Object.keys(byThread)
   if (threadIds.length === 0) return (
     <div className="card">
@@ -307,9 +365,10 @@ function QueueView({ byThread, threads, filterShowId, setFilterShowId, previews,
       </div>
     </div>
   )
+  const highRiskInSelection = [...checked].filter(id => !autoBatchable.has(id)).length
   return (
     <>
-      <div className="flex gap-2 mb-2" style={{ alignItems: 'center' }}>
+      <div className="flex gap-2 mb-2" style={{ alignItems: 'center', flexWrap: 'wrap' }}>
         <select className="input" value={filterShowId} onChange={e => setFilterShowId(e.target.value)}>
           <option value="">All shows</option>
           {threads.filter(t => t.showId).map(t => (
@@ -320,71 +379,91 @@ function QueueView({ byThread, threads, filterShowId, setFilterShowId, previews,
           <>
             <button
               className="btn btn-ghost btn-sm"
-              onClick={onToggleAll}
-              disabled={batchable.size === 0}
-              title={batchable.size === 0 ? 'No low-risk items available' : 'Select all low-risk items'}
+              onClick={onSelectAllSafe}
+              disabled={autoBatchable.size === 0}
+              title="Auto-select low-risk, non-conflicting, mapped facts"
             >
-              Select all low-risk ({batchable.size})
+              🛡 Select safe ({autoBatchable.size})
+            </button>
+            <button
+              className="btn btn-ghost btn-sm"
+              onClick={onSelectAllShown}
+              disabled={checkable.size === 0}
+              title="Select every proposed row currently in view"
+            >
+              Select all shown ({checkable.size})
             </button>
             <button
               className="btn btn-primary btn-sm"
               onClick={onBatchApprove}
               disabled={batching || checked.size === 0}
-              title="Batch approve is only available for low-risk changes. High-risk items must be approved individually."
+              title="Server enforces safety rules per fact — high-risk items are skipped and stay in the queue for individual review."
             >
               {batching ? 'Approving…' : `Approve Selected (${checked.size})`}
             </button>
-            {checked.size > 0 && (
+            {highRiskInSelection > 0 && (
               <span className="text-muted" style={{ fontSize: 12 }}>
-                🔒 High-risk items are excluded from batch approval by design.
+                ⚠ {highRiskInSelection} high-risk item{highRiskInSelection===1?'':'s'} in selection will be skipped
               </span>
             )}
           </>
         )}
       </div>
-      {threadIds.map(tid => (
-        <div key={tid} className="card" style={{ marginBottom: 12 }}>
-          <ThreadHeader thread={threads.find(t => t.id === tid)} tid={tid} count={byThread[tid].length} />
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  {canDecide && <th style={{ width: 30 }}></th>}
-                  <th>Field</th>
-                  <th>Current → Proposed</th>
-                  <th>Source</th>
-                  <th>Confidence</th>
-                  <th>Risk</th>
-                  <th>Status</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {byThread[tid].map(f => (
-                  <QueueRow
-                    key={f.id}
-                    fact={f}
-                    preview={previews?.[f.id]}
-                    canDecide={canDecide}
-                    checked={checked?.has(f.id)}
-                    canCheck={batchable?.has(f.id)}
-                    onToggleCheck={onToggleCheck}
-                    onOpen={onOpen}
-                    onDecide={onDecide}
-                  />
-                ))}
-              </tbody>
-            </table>
+      {threadIds.map(tid => {
+        const proposedInThread = byThread[tid].filter(f => f.status === 'proposed').length
+        return (
+          <div key={tid} className="card" style={{ marginBottom: 12 }}>
+            <ThreadHeader
+              thread={threads.find(t => t.id === tid)}
+              tid={tid}
+              count={byThread[tid].length}
+              proposedCount={proposedInThread}
+              canDecide={canDecide}
+              onApproveThread={onApproveThread}
+            />
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    {canDecide && <th style={{ width: 30 }}></th>}
+                    <th style={{ width: 24 }}></th>
+                    <th>Field</th>
+                    <th>Current → Proposed</th>
+                    <th>Source</th>
+                    <th>Confidence</th>
+                    <th>Risk</th>
+                    <th>Status</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {byThread[tid].map(f => (
+                    <QueueRow
+                      key={f.id}
+                      fact={f}
+                      preview={previews?.[f.id]}
+                      canDecide={canDecide}
+                      checked={checked?.has(f.id)}
+                      canCheck={checkable?.has(f.id)}
+                      autoBatchable={autoBatchable?.has(f.id)}
+                      onToggleCheck={onToggleCheck}
+                      onOpen={onOpen}
+                      onDecide={onDecide}
+                    />
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
-        </div>
-      ))}
+        )
+      })}
     </>
   )
 }
 
-function ThreadHeader({ thread, tid, count }) {
+function ThreadHeader({ thread, tid, count, proposedCount, canDecide, onApproveThread }) {
   return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 8 }}>
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 8, gap: 12 }}>
       <div>
         <div style={{ fontWeight: 600 }}>{thread?.subject || '(no subject)'}</div>
         <div className="text-muted" style={{ fontSize: 12 }}>
@@ -393,13 +472,27 @@ function ThreadHeader({ thread, tid, count }) {
           {thread?.messageCount && <> · {thread.messageCount} messages</>}
         </div>
       </div>
-      <div className="text-muted" style={{ fontSize: 12 }}>{count} proposed change{count===1?'':'s'}</div>
+      <div className="flex gap-2" style={{ alignItems: 'center' }}>
+        <div className="text-muted" style={{ fontSize: 12 }}>{count} proposed change{count===1?'':'s'}</div>
+        {canDecide && proposedCount > 0 && (
+          <button
+            className="btn btn-primary btn-sm"
+            onClick={() => onApproveThread(tid)}
+            title="Batch-approve every proposed change in this thread. High-risk items will be skipped."
+          >
+            ✓ Approve thread ({proposedCount})
+          </button>
+        )}
+      </div>
     </div>
   )
 }
 
-function QueueRow({ fact, preview, canDecide, checked, canCheck, onToggleCheck, onOpen, onDecide }) {
-  const [busy, setBusy] = useState(null) // 'approve' | 'reject' | null
+function QueueRow({ fact, preview, canDecide, checked, canCheck, autoBatchable, onToggleCheck, onOpen, onDecide }) {
+  const [busy, setBusy]           = useState(null)  // 'approve' | 'reject'
+  const [expanded, setExpanded]   = useState(false)
+  const [rejectMode, setRejectMode] = useState(false)
+  const [rejectNote, setRejectNote] = useState('')
   const conflicts = safeJson(fact.conflicts, [])
   const conf = preview?.confidence?.level || fact.kind || 'medium'
   const confBadge = conf === 'high' ? 'confirmed' : conf === 'low' ? 'cancelled' : 'pending'
@@ -410,95 +503,195 @@ function QueueRow({ fact, preview, canDecide, checked, canCheck, onToggleCheck, 
                     : preview?.status === 'unmapped'  ? '❔ Unmapped'
                     : conflicts.length ? '⚡ Conflict' : '● Ready'
   const canQuickDecide = canDecide && fact.status === 'proposed' && typeof onDecide === 'function'
+  const detailColSpan = (canDecide ? 1 : 0) + 8
+
   async function quickApprove(e) {
     e.stopPropagation()
     if (!canQuickDecide || busy) return
     setBusy('approve')
-    try { await onDecide(fact.id, 'approve', {}) } finally { setBusy(null) }
+    try { await onDecide(fact.id, 'approve', {}) }
+    catch { /* parent already surfaced the error */ }
+    finally { setBusy(null) }
   }
-  async function quickReject(e) {
+  function openRejectPanel(e) {
     e.stopPropagation()
-    if (!canQuickDecide || busy) return
-    const note = window.prompt('Reason for rejection (optional):', '') // null = user cancelled
-    if (note === null) return
-    setBusy('reject')
-    try { await onDecide(fact.id, 'reject', { note }) } finally { setBusy(null) }
+    if (!canQuickDecide) return
+    setExpanded(true)
+    setRejectMode(true)
+    setRejectNote('')
   }
+  async function confirmReject() {
+    if (busy) return
+    setBusy('reject')
+    try { await onDecide(fact.id, 'reject', { note: rejectNote }) }
+    catch { /* parent already surfaced the error */ setBusy(null); return }
+    // Row will vanish on success; nothing else to reset.
+  }
+
   return (
-    <tr>
-      {canDecide && (
+    <>
+      <tr>
+        {canDecide && (
+          <td>
+            <input
+              type="checkbox"
+              checked={!!checked}
+              disabled={!canCheck}
+              onChange={() => onToggleCheck(fact.id)}
+              title={autoBatchable ? '🛡 Auto-safe (low-risk, no conflicts)' : 'Manual selection — server enforces per-fact safety'}
+            />
+          </td>
+        )}
         <td>
-          <input
-            type="checkbox"
-            checked={!!checked}
-            disabled={!canCheck}
-            onChange={() => onToggleCheck(fact.id)}
-            title={canCheck ? 'Include in batch approve' : 'Not eligible for batch approve (high-risk, conflict, or unmapped)'}
-          />
+          <button
+            type="button"
+            onClick={() => setExpanded(v => !v)}
+            title={expanded ? 'Collapse details' : 'Show email excerpt and AI reasoning'}
+            style={{ background: 'none', border: 0, cursor: 'pointer', color: 'var(--text-muted)', fontSize: 14, padding: '0 4px' }}
+          >
+            {expanded ? '▾' : '▸'}
+          </button>
         </td>
+        <td>
+          <div style={{ fontFamily: 'monospace', fontSize: 12 }}>
+            {autoBatchable && <span title="Auto-safe" style={{ color: '#22c55e', marginRight: 4 }}>🛡</span>}
+            {preview?.displayLabel || fact.field}
+          </div>
+          <div className="text-muted" style={{ fontSize: 11 }}>{preview?.category || fact.category}</div>
+        </td>
+        <td>
+          <div style={{ fontSize: 13 }}>
+            {preview ? (
+              <>
+                <span className="text-muted">{preview.currentValue ? String(preview.currentValue) : '—'}</span>
+                {' → '}
+                <strong>{preview.proposedValue || safeJson(fact.newValue)}</strong>
+              </>
+            ) : (
+              <>
+                {fact.previousValue && fact.previousValue !== 'null' && fact.previousValue !== '""'
+                  ? <><del className="text-muted">{safeJson(fact.previousValue)}</del> → </>
+                  : null}
+                <strong>{safeJson(fact.newValue)}</strong>
+              </>
+            )}
+          </div>
+        </td>
+        <td className="text-muted" style={{ fontSize: 12 }}>
+          {fact.senderName || fact.senderEmail || fact.sourceFrom}
+          {fact.senderRole && <div style={{ fontSize: 11 }}>{fact.senderRole.replace(/_/g,' ')}</div>}
+        </td>
+        <td>
+          <span className={`badge badge-${confBadge}`}>{conf}</span>
+        </td>
+        <td>
+          <span style={{ color: riskColor, fontWeight: 600, fontSize: 12 }}>
+            {preview?.risk ? preview.risk.toUpperCase() : '—'}
+          </span>
+        </td>
+        <td style={{ fontSize: 12 }}>{statusLabel}</td>
+        <td>
+          <div className="flex gap-1" style={{ justifyContent: 'flex-end' }}>
+            {canQuickDecide && (
+              <>
+                <button
+                  className="btn btn-primary btn-sm"
+                  onClick={quickApprove}
+                  disabled={!!busy}
+                  title="Approve this proposed change"
+                >
+                  {busy === 'approve' ? '…' : '✓ Approve'}
+                </button>
+                <button
+                  className="btn btn-ghost btn-sm"
+                  onClick={openRejectPanel}
+                  disabled={!!busy}
+                  title="Reject this proposed change"
+                  style={{ color: '#e04a4a' }}
+                >
+                  ✕ Reject
+                </button>
+              </>
+            )}
+            <button className="btn btn-ghost btn-sm" onClick={() => onOpen(fact)} disabled={!!busy}>Review</button>
+          </div>
+        </td>
+      </tr>
+      {expanded && (
+        <tr>
+          <td colSpan={detailColSpan} style={{ background: 'rgba(255,255,255,0.03)', padding: 12, borderTop: '1px solid var(--border)' }}>
+            {rejectMode ? (
+              <div style={{ maxWidth: 640 }}>
+                <div style={{ fontWeight: 600, marginBottom: 6 }}>Reject this proposed change</div>
+                <textarea
+                  className="input"
+                  rows={2}
+                  placeholder="Optional — why are you rejecting? (helps improve the bot)"
+                  value={rejectNote}
+                  onChange={e => setRejectNote(e.target.value)}
+                  autoFocus
+                  style={{ fontSize: 13 }}
+                />
+                <div className="flex gap-2" style={{ marginTop: 8 }}>
+                  <button
+                    className="btn btn-primary btn-sm"
+                    onClick={confirmReject}
+                    disabled={!!busy}
+                    style={{ background: '#e04a4a', borderColor: '#e04a4a' }}
+                  >
+                    {busy === 'reject' ? '…' : '✕ Confirm reject'}
+                  </button>
+                  <button
+                    className="btn btn-ghost btn-sm"
+                    onClick={() => { setRejectMode(false); setRejectNote('') }}
+                    disabled={!!busy}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <InlineFactDetail fact={fact} preview={preview} conflicts={conflicts} />
+            )}
+          </td>
+        </tr>
       )}
-      <td>
-        <div style={{ fontFamily: 'monospace', fontSize: 12 }}>{preview?.displayLabel || fact.field}</div>
-        <div className="text-muted" style={{ fontSize: 11 }}>{preview?.category || fact.category}</div>
-      </td>
-      <td>
-        <div style={{ fontSize: 13 }}>
-          {preview ? (
-            <>
-              <span className="text-muted">{preview.currentValue ? String(preview.currentValue) : '—'}</span>
-              {' → '}
-              <strong>{preview.proposedValue || safeJson(fact.newValue)}</strong>
-            </>
-          ) : (
-            <>
-              {fact.previousValue && fact.previousValue !== 'null' && fact.previousValue !== '""'
-                ? <><del className="text-muted">{safeJson(fact.previousValue)}</del> → </>
-                : null}
-              <strong>{safeJson(fact.newValue)}</strong>
-            </>
-          )}
+    </>
+  )
+}
+
+function InlineFactDetail({ fact, preview, conflicts }) {
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 12, fontSize: 12 }}>
+      <div>
+        <div className="text-muted" style={{ fontSize: 11, marginBottom: 2, fontWeight: 600 }}>📧 EMAIL</div>
+        <div className="text-muted" style={{ marginBottom: 4 }}>{fact.sourceFrom || fact.senderEmail}</div>
+        <blockquote style={{ margin: 0, padding: '6px 10px', borderLeft: '3px solid var(--accent, #4a90e2)', background: 'rgba(255,255,255,0.03)', fontSize: 12 }}>
+          {fact.sourceExcerpt || <span className="text-muted">(no excerpt)</span>}
+        </blockquote>
+      </div>
+      {fact.reasoningSummary && (
+        <div>
+          <div className="text-muted" style={{ fontSize: 11, marginBottom: 2, fontWeight: 600 }}>🧠 WHAT AI UNDERSTOOD</div>
+          <div>{fact.reasoningSummary}</div>
         </div>
-      </td>
-      <td className="text-muted" style={{ fontSize: 12 }}>
-        {fact.senderName || fact.senderEmail || fact.sourceFrom}
-        {fact.senderRole && <div style={{ fontSize: 11 }}>{fact.senderRole.replace(/_/g,' ')}</div>}
-      </td>
-      <td>
-        <span className={`badge badge-${confBadge}`}>{conf}</span>
-      </td>
-      <td>
-        <span style={{ color: riskColor, fontWeight: 600, fontSize: 12 }}>
-          {preview?.risk ? preview.risk.toUpperCase() : '—'}
-        </span>
-      </td>
-      <td style={{ fontSize: 12 }}>{statusLabel}</td>
-      <td>
-        <div className="flex gap-1" style={{ justifyContent: 'flex-end' }}>
-          {canQuickDecide && (
-            <>
-              <button
-                className="btn btn-primary btn-sm"
-                onClick={quickApprove}
-                disabled={!!busy}
-                title="Approve this proposed change"
-              >
-                {busy === 'approve' ? '…' : '✓ Approve'}
-              </button>
-              <button
-                className="btn btn-ghost btn-sm"
-                onClick={quickReject}
-                disabled={!!busy}
-                title="Reject this proposed change"
-                style={{ color: '#e04a4a' }}
-              >
-                {busy === 'reject' ? '…' : '✕ Reject'}
-              </button>
-            </>
-          )}
-          <button className="btn btn-ghost btn-sm" onClick={() => onOpen(fact)} disabled={!!busy}>Review</button>
+      )}
+      {(conflicts && conflicts.length > 0) && (
+        <div>
+          <div className="text-muted" style={{ fontSize: 11, marginBottom: 2, fontWeight: 600, color: '#e04a4a' }}>⚡ CONFLICTS</div>
+          <ul style={{ margin: 0, paddingLeft: 18 }}>
+            {conflicts.map((c, i) => <li key={i}>{typeof c === 'string' ? c : JSON.stringify(c)}</li>)}
+          </ul>
         </div>
-      </td>
-    </tr>
+      )}
+      {preview?.risk && (
+        <div>
+          <div className="text-muted" style={{ fontSize: 11, marginBottom: 2, fontWeight: 600 }}>🎯 IMPACT</div>
+          <div>Risk: <strong>{preview.risk}</strong>{preview.status ? ` · Status: ${preview.status}` : ''}</div>
+          {preview.reasoning && <div className="text-muted" style={{ marginTop: 2 }}>{preview.reasoning}</div>}
+        </div>
+      )}
+    </div>
   )
 }
 
