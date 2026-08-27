@@ -190,7 +190,7 @@ export default function Users() {
                       {u.gmailEmail ? (
                         <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                           <span style={{ color: '#86efac' }}>✓ {u.gmailEmail}</span>
-                          {me?.role === 'admin' && (
+                          {(me?.role === 'admin' || me?.role === 'production_manager') && (
                             <button
                               className="btn btn-ghost btn-sm"
                               style={{ fontSize: 10, padding: '2px 6px' }}

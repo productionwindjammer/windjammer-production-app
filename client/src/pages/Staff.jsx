@@ -288,7 +288,7 @@ export default function Staff() {
           }
         >
           <div className="form-grid">
-            {!editing && authUser?.role === 'admin' && (
+            {!editing && (authUser?.role === 'admin' || authUser?.role === 'production_manager') && (
               <div style={{ padding: 10, borderRadius: 6, background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.3)', color: '#93c5fd', fontSize: 13 }}>
                 🔐 If an email is provided, a default login account (role: <strong>crew</strong>) will be created automatically. The temporary password will be shown after save.
               </div>

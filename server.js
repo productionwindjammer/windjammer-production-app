@@ -1252,7 +1252,7 @@ app.put('/api/venue-knowledge/:id', requireAuth, requireRole(...VENUE_WRITE_ROLE
   }
 });
 
-app.delete('/api/venue-knowledge/:id', requireAuth, requireRole('admin'), async (req, res) => {
+app.delete('/api/venue-knowledge/:id', requireAuth, requireRole('admin', 'production_manager'), async (req, res) => {
   try {
     const item = await venueKnowledge.archiveItem(req.params.id, req.user.id, req.query.note || '');
     res.json({ success: true, data: item });
@@ -1288,7 +1288,7 @@ const factMapping = require('./factMapping');
 // Admin-only LLM status. Never returns the API key value — only whether the
 // backend is configured, the provider/model, and a masked preview for
 // human identification.
-app.get('/api/llm/status', requireAuth, requireRole('admin'), (_req, res) => {
+app.get('/api/llm/status', requireAuth, requireRole('admin', 'production_manager'), (_req, res) => {
   try {
     const { publicStatus } = require('./llm/configCheck');
     res.json({ success: true, data: publicStatus() });
@@ -2375,7 +2375,7 @@ app.post('/api/users/:id/invite', requireAuth, requireRole('admin', 'production_
   }
 });
 
-app.put('/api/users/:id', requireAuth, requireRole('admin'), async (req, res) => {
+app.put('/api/users/:id', requireAuth, requireRole('admin', 'production_manager'), async (req, res) => {
   try {
     const updates = { ...req.body };
     if (updates.password) updates.password = await bcrypt.hash(updates.password, 12);
@@ -3582,7 +3582,7 @@ app.post('/api/shows/:id/migrate-attachments-to-artist',
 
 // Admin: migrate every show's folder into its matched artist folder in one shot.
 app.post('/api/admin/migrate-all-show-attachments',
-  requireAuth, requireRole('admin'),
+  requireAuth, requireRole('admin', 'production_manager'),
   async (req, res) => {
     try {
       const [shows, artists] = await Promise.all([
@@ -4276,7 +4276,7 @@ app.post('/api/advancement/:showId/reanalyze-emails', requireAuth, requireShowAc
 // extractor on EVERY (show, thread) pair currently stored. Throttled to be
 // gentle on Anthropic. Admin only. proposeFromAnalysis dedupes so re-running
 // is a safe no-op if nothing changed.
-app.post('/api/email-intel/reanalyze-all', requireAuth, requireRole('admin'), async (req, res) => {
+app.post('/api/email-intel/reanalyze-all', requireAuth, requireRole('admin', 'production_manager'), async (req, res) => {
   try {
     const [shows, allEmails, users] = await Promise.all([
       sheets.getRows(config.googleSheets.sheets.shows),
@@ -4950,7 +4950,7 @@ app.post('/api/gmail/disconnect', requireAuth, async (req, res) => {
 });
 
 // POST /api/gmail/house/:userId — admin sets/unsets the "house" mailbox flag
-app.post('/api/gmail/house/:userId', requireAuth, requireRole('admin'), async (req, res) => {
+app.post('/api/gmail/house/:userId', requireAuth, requireRole('admin', 'production_manager'), async (req, res) => {
   try {
     const { userId } = req.params;
     const { isHouse } = req.body;

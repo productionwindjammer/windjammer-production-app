@@ -160,7 +160,7 @@ export default function Settings() {
 
       {/* ── Admin tools ─────────────────────────────────────────────── */}
       {(user?.role === 'admin' || user?.role === 'production_manager') && <VenueDefaultsCard />}
-      {user?.role === 'admin' && <AdminToolsCard />}
+      {(user?.role === 'admin' || user?.role === 'production_manager') && <AdminToolsCard />}
 
       {/* ── Change password ────────────────────────────────────────────── */}
       <div className="card">
@@ -381,11 +381,20 @@ function NotificationsCard() {
   )
 }
 
-// -- Admin Tools (admin only) ------------------------------------------------
+// -- Admin Tools (admin + production_manager) --------------------------------
 function AdminToolsCard() {
   const [migrating, setMigrating] = useState(false)
   const [result, setResult]       = useState(null)
   const [error, setError]         = useState(null)
+
+  const [reanalyzing, setReanalyzing] = useState(false)
+  const [reanalyzeResult, setReanalyzeResult] = useState(null)
+  const [reanalyzeError,  setReanalyzeError]  = useState(null)
+  const [llmStatus, setLlmStatus] = useState(null)
+
+  useEffect(() => {
+    api.get('/llm/status').then(r => setLlmStatus(r.data?.data || null)).catch(() => {})
+  }, [])
 
   async function migrate() {
     if (!confirm("Move every show folder's attachments into the matched artist folder? This relocates files in Google Drive and records each one in the artist library. Existing artist documents are not duplicated.")) return
@@ -398,10 +407,77 @@ function AdminToolsCard() {
     } finally { setMigrating(false) }
   }
 
+  async function reanalyzeAll() {
+    if (!confirm('Re-run the AI extractor on every (show, thread) pair currently stored. Safe to re-run — pending proposals are deduped. This can take a few minutes and will consume Anthropic tokens.')) return
+    setReanalyzing(true); setReanalyzeResult(null); setReanalyzeError(null)
+    try {
+      const r = await api.post('/email-intel/reanalyze-all')
+      setReanalyzeResult(r.data)
+    } catch (err) {
+      setReanalyzeError(err.response?.data?.message || err.message)
+    } finally { setReanalyzing(false) }
+  }
+
   return (
     <div className="card">
       <div className="card-header"><div className="card-title">Admin tools</div></div>
       <div style={{ display: 'grid', gap: 14 }}>
+        <div>
+          <div style={{ fontWeight: 600, marginBottom: 4 }}>Reanalyze all emails with AI</div>
+          <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 8 }}>
+            Runs the LLM extractor on every stored email thread across every show. New pending
+            proposals appear in <a href="/email-intel">Email Intel</a>. Existing proposals aren't
+            duplicated — safe to re-run. Uses each thread's original mailbox owner's Gmail
+            connection to fetch bodies; threads whose owner is not connected are skipped.
+          </div>
+          {llmStatus && (
+            <div style={{ fontSize: 12, marginBottom: 8, color: 'var(--text-muted)' }}>
+              LLM: <code>{llmStatus.provider}/{llmStatus.model}</code>
+              {' · '}key <code>{llmStatus.keyPreview || 'not set'}</code>
+              {' · '}auto-sync {llmStatus.autoSyncEnabled ? `every ${llmStatus.autoSyncMinutes} min` : 'OFF'}
+              {llmStatus.miscasedKey && (
+                <span style={{ color: 'var(--danger)' }}> · miscased env: {llmStatus.miscasedKey}</span>
+              )}
+            </div>
+          )}
+          <button
+            className="btn btn-primary btn-sm"
+            onClick={reanalyzeAll}
+            disabled={reanalyzing || !llmStatus?.configured}
+            title={!llmStatus?.configured ? 'ANTHROPIC_API_KEY is not set on the server' : ''}
+          >
+            {reanalyzing ? 'Reanalyzing… (this can take a few minutes)' : 'Reanalyze all emails now'}
+          </button>
+          {reanalyzeResult && (
+            <div style={{ marginTop: 10, fontSize: 12 }}>
+              <div style={{ color: 'var(--success)' }}>
+                Analyzed {reanalyzeResult.analyzed || 0} of {reanalyzeResult.threads || 0} thread(s)
+                across {reanalyzeResult.shows || 0} show(s); staged {reanalyzeResult.proposed || 0} new proposal(s).
+              </div>
+              {reanalyzeResult.skipped && (
+                <details style={{ marginTop: 6 }}>
+                  <summary style={{ cursor: 'pointer', color: 'var(--text-muted)' }}>
+                    Skip breakdown
+                  </summary>
+                  <ul style={{ margin: '6px 0 0 18px', color: 'var(--text-muted)' }}>
+                    {Object.entries(reanalyzeResult.skipped).map(([reason, n]) => (
+                      <li key={reason}><code>{reason}</code>: {n}</li>
+                    ))}
+                  </ul>
+                </details>
+              )}
+              {(reanalyzeResult.proposed || 0) > 0 && (
+                <div style={{ marginTop: 6 }}>
+                  → <a href="/email-intel">Review pending proposals</a>
+                </div>
+              )}
+            </div>
+          )}
+          {reanalyzeError && (
+            <div style={{ marginTop: 10, fontSize: 12, color: 'var(--danger)' }}>Error: {reanalyzeError}</div>
+          )}
+        </div>
+
         <div>
           <div style={{ fontWeight: 600, marginBottom: 4 }}>Migrate show attachments to artist folders</div>
           <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 8 }}>
