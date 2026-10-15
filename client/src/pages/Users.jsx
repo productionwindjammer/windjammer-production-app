@@ -11,6 +11,8 @@ const ROLES = [
   { value: 'admin',              label: 'Admin' },
   { value: 'production_manager', label: 'Production Manager' },
   { value: 'stage_manager',      label: 'Stage Manager' },
+  { value: 'lighting_designer',  label: 'Lighting Designer' },
+  { value: 'audio_engineer',     label: 'Audio Engineer' },
   { value: 'venue_management',   label: 'Venue Management' },
   { value: 'promoter',           label: 'Promoter' },
   { value: 'crew',               label: 'Crew' },

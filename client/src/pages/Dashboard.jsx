@@ -73,9 +73,12 @@ export default function Dashboard() {
   const tf = settings.timeFormat || '12h'
   const navigate = useNavigate()
   const role = effectiveRole || user?.role || ''
-  const isCrew         = role === 'crew' || role === 'staff' || role === 'tech'
+  // Audio engineers get the crew schedule dashboard — their day revolves
+  // around calls, not advancing pipelines.
+  const isCrew         = role === 'crew' || role === 'staff' || role === 'tech' || role === 'audio_engineer'
   const isManager      = role === 'admin' || role === 'production_manager'
-  const isStageManager = role === 'stage_manager'
+  // Lighting Designer inherits Stage Manager UI/permissions for now.
+  const isStageManager = role === 'stage_manager' || role === 'lighting_designer'
   const isPromoter     = role === 'promoter'
   const isVenue        = role === 'venue_management'
 

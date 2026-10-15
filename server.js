@@ -145,10 +145,18 @@ app.post('/api/auth/change-password', requireAuth, async (req, res) => {
 });
 
 // ── Generic CRUD factory ──────────────────────────────────────────────────────
+// hooks.readRoles    — optional role allowlist for GET (default: any authed user)
+// hooks.sanitizeRead — optional (rows, req) => rows transform applied to GET
+//                      results, used to strip financial fields per role.
 function crudRoutes(router, path, sheetKey, writeRoles = ['admin','production_manager'], hooks = {}) {
   const deleteRoles = hooks.deleteRoles || writeRoles;
-  router.get(path, requireAuth, async (req, res) => {
-    try { res.json({ success: true, data: await sheets.getRows(config.googleSheets.sheets[sheetKey]) }); }
+  const readGuards  = hooks.readRoles ? [requireRole(...hooks.readRoles)] : [];
+  router.get(path, requireAuth, ...readGuards, async (req, res) => {
+    try {
+      let rows = await sheets.getRows(config.googleSheets.sheets[sheetKey]);
+      if (typeof hooks.sanitizeRead === 'function') rows = hooks.sanitizeRead(rows, req);
+      res.json({ success: true, data: rows });
+    }
     catch (err) { res.status(500).json({ success: false, message: err.message }); }
   });
   router.post(path, requireAuth, requireRole(...writeRoles), async (req, res) => {
@@ -212,6 +220,25 @@ function crudRoutes(router, path, sheetKey, writeRoles = ['admin','production_ma
       res.json({ success: true });
     } catch (err) { res.status(500).json({ success: false, message: err.message }); }
   });
+}
+
+// ── Financial field redaction ────────────────────────────────────────────────
+// Roles that may receive raw dollar fields over the API. Mirrors the client's
+// hasFinancialAccess() plus stage_manager / lighting_designer: those two hide
+// money in their UI but still need raw staff rates so crew-call rows they
+// create get the correct rate/total autofilled. Everyone else (promoter and
+// the employee roles crew/staff/tech/audio_engineer) has money stripped
+// server-side, so "hidden" financials can't be read from the network tab.
+const MONEY_FIELD_ROLES = new Set(['admin', 'production_manager', 'venue_management', 'stage_manager', 'lighting_designer']);
+function stripMoneyFields(...fields) {
+  return (rows, req) => {
+    if (MONEY_FIELD_ROLES.has(req.user?.role)) return rows;
+    return rows.map(row => {
+      const clean = { ...row };
+      for (const f of fields) delete clean[f];
+      return clean;
+    });
+  };
 }
 
 // ── Auto-advancing kickoff for new shows ─────────────────────────────────────
@@ -701,7 +728,7 @@ async function notifyShiftAssigned(record) {
 // production reviews the list when building the crew call (see /labor).
 // Roles allowed to submit: any authed user. A user may only submit on behalf
 // of themselves (or PM+ may submit on behalf of any staff).
-const REQUEST_PM_ROLES = ['admin', 'production_manager', 'stage_manager'];
+const REQUEST_PM_ROLES = ['admin', 'production_manager', 'stage_manager', 'lighting_designer'];
 
 app.get('/api/show-requests', requireAuth, async (req, res) => {
   try {
@@ -787,7 +814,8 @@ app.delete('/api/show-requests/:id', requireAuth, async (req, res) => {
   }
 });
 
-crudRoutes(app, '/api/shows',           'shows',     ['admin','production_manager','stage_manager','promoter'], {
+crudRoutes(app, '/api/shows',           'shows',     ['admin','production_manager','stage_manager','lighting_designer','promoter'], {
+  sanitizeRead: stripMoneyFields('guarantee'),
   // Duplicate guard: reject a manual create that matches an existing show on
   // date + artist (alias-aware via the Artist Registry). Client can retry
   // with ?force=1 after confirming with the user.
@@ -1028,7 +1056,7 @@ app.get('/api/advancing', requireAuth, async (req, res) => {
   }
 });
 
-crudRoutes(app, '/api/advancing',       'advancing', ['admin','production_manager','stage_manager','promoter','venue_management']);
+crudRoutes(app, '/api/advancing',       'advancing', ['admin','production_manager','stage_manager','lighting_designer','promoter','venue_management']);
 
 // Ensure a show's day-sheet has the standard timeline seeded.
 // Idempotent — safe to call on every visit. Backfills shows created before
@@ -1079,7 +1107,12 @@ app.put('/api/settings/venue', requireAuth, requireRole('admin', 'production_man
 });
 
 crudRoutes(app, '/api/schedule',        'schedule',  ['admin','production_manager','venue_management','promoter']);
-crudRoutes(app, '/api/labor',           'labor',     ['admin','production_manager','stage_manager'], { afterCreate: notifyShiftAssigned });
+crudRoutes(app, '/api/labor',           'labor',     ['admin','production_manager','stage_manager','lighting_designer'], {
+  afterCreate: notifyShiftAssigned,
+  // Employees see who's on the call and when, never anyone's pay. Their own
+  // earned pay comes from /api/me/pay.
+  sanitizeRead: stripMoneyFields('rate', 'total'),
+});
 
 // ── Per-show call sheet (contacts) ────────────────────────────────────────
 // A real advance is coordinated across a dozen or more contacts. Standardized
@@ -1100,7 +1133,7 @@ app.get('/api/show-contact-roles', requireAuth, (_req, res) => {
   res.json({ success: true, data: SHOW_CONTACT_ROLES });
 });
 crudRoutes(app, '/api/show-contacts', 'showContacts',
-  ['admin','production_manager','stage_manager','venue_management']);
+  ['admin','production_manager','stage_manager','lighting_designer','venue_management']);
 
 // ── Waiting-on tracker (ShowAsks) ────────────────────────────────────────
 // Explicit, PM-controlled log of "asked X for Y". Rows the PM creates are
@@ -1109,14 +1142,16 @@ crudRoutes(app, '/api/show-contacts', 'showContacts',
 // approval step because they don't touch authoritative rows — but the PM can
 // dismiss or edit any of them at will.
 crudRoutes(app, '/api/show-asks',      'showAsks',
-  ['admin','production_manager','stage_manager','venue_management']);
+  ['admin','production_manager','stage_manager','lighting_designer','venue_management']);
 
-// Stage managers can create/edit maintenance items and project proposals, but
-// only admin / production_manager may approve, reject, or delete them.
+// Stage managers and lighting designers can create/edit maintenance items and
+// project proposals, but only admin / production_manager may approve, reject,
+// or delete them.
 const APPROVAL_STATUSES = new Set(['approved', 'rejected']);
+const MAINTENANCE_SUBMITTER_ROLES = new Set(['stage_manager', 'lighting_designer']);
 app.put('/api/maintenance/:id', requireAuth, (req, res, next) => {
   const role = req.user?.role;
-  if (role === 'stage_manager') {
+  if (MAINTENANCE_SUBMITTER_ROLES.has(role)) {
     if (req.body && APPROVAL_STATUSES.has(req.body.status)) {
       return res.status(403).json({ success: false, message: 'Only admin or production manager can approve or reject.' });
     }
@@ -1126,13 +1161,19 @@ app.put('/api/maintenance/:id', requireAuth, (req, res, next) => {
   }
   next();
 });
-crudRoutes(app, '/api/maintenance',     'maintenance',    ['admin','production_manager','stage_manager'], {
+crudRoutes(app, '/api/maintenance',     'maintenance',    ['admin','production_manager','stage_manager','lighting_designer'], {
   deleteRoles: ['admin','production_manager'],
 });
-crudRoutes(app, '/api/budgets',         'budgets',        ['admin','production_manager']);
+crudRoutes(app, '/api/budgets',         'budgets',        ['admin','production_manager'], {
+  readRoles: ['admin','production_manager','venue_management'],
+});
 crudRoutes(app, '/api/vendors',         'vendors');
-crudRoutes(app, '/api/vendor-bookings', 'vendorBookings');
-crudRoutes(app, '/api/settlement',      'settlement');
+crudRoutes(app, '/api/vendor-bookings', 'vendorBookings', ['admin','production_manager'], {
+  readRoles: ['admin','production_manager','venue_management'],
+});
+crudRoutes(app, '/api/settlement',      'settlement',     ['admin','production_manager'], {
+  readRoles: ['admin','production_manager','venue_management'],
+});
 crudRoutes(app, '/api/unavailability',  'unavailability', ['admin','production_manager']);
 
 // ── Venue Intelligence ──────────────────────────────────────────────────────
@@ -1146,19 +1187,21 @@ const venueKnowledge = require('./venueKnowledge');
 const VENUE_WRITE_ROLES = ['admin','production_manager','venue_management'];
 // Internal-staff roles that may read AI content (email excerpts, audit logs,
 // proposals, briefs). Promoters and crew NEVER see raw AI content.
-const AI_READ_ROLES = ['admin','production_manager','stage_manager','venue_management'];
+const AI_READ_ROLES = ['admin','production_manager','stage_manager','lighting_designer','venue_management'];
 // Roles that may read the AI change-log and correction audit trails.
 const AI_AUDIT_ROLES = ['admin','production_manager'];
 
-// Per-show ACL. Admin/PM/venue_management/stage_manager see every show.
-// Promoters see shows they booked (Shows.promoter matches their name or
-// email). Crew see shows they're scheduled on (Labor row for that show).
+// Per-show ACL. Admin/PM/venue_management/stage_manager/lighting_designer/
+// audio_engineer see every show. Promoters see shows they booked
+// (Shows.promoter matches their name or email). Employees (crew/staff/tech)
+// see shows they're scheduled on (Labor row for that show).
 // Used to gate per-show AI reads so a promoter can view the brief for
 // THEIR show without also seeing every other show in the workspace.
+const EMPLOYEE_ROLES = new Set(['crew', 'staff', 'tech']);
 async function canUserAccessShow(user, showId) {
   if (!user || !showId) return false;
   const role = user.role || '';
-  if (['admin','production_manager','stage_manager','venue_management'].includes(role)) return true;
+  if (['admin','production_manager','stage_manager','lighting_designer','audio_engineer','venue_management'].includes(role)) return true;
   const shows = await sheets.getRows(config.googleSheets.sheets.shows);
   const show = shows.find(s => String(s.id) === String(showId));
   if (!show) return false;
@@ -1170,7 +1213,7 @@ async function canUserAccessShow(user, showId) {
     return (name  && promoterField.includes(name))
         || (email && promoterField.includes(email));
   }
-  if (role === 'crew') {
+  if (EMPLOYEE_ROLES.has(role)) {
     const labor = await sheets.getRows(config.googleSheets.sheets.labor);
     return labor.some(l =>
       String(l.showId) === String(showId) && (
@@ -1343,7 +1386,7 @@ app.post('/api/email-intel/analyze', requireAuth, requireRole(...AI_READ_ROLES),
 });
 
 // Analyze an existing Gmail thread and stage its facts as proposals. PM only.
-app.post('/api/email-intel/analyze-gmail-thread', requireAuth, requireRole('admin','production_manager','stage_manager'), async (req, res) => {
+app.post('/api/email-intel/analyze-gmail-thread', requireAuth, requireRole('admin','production_manager','stage_manager','lighting_designer'), async (req, res) => {
   try {
     const { threadId } = req.body || {};
     if (!threadId) return res.status(400).json({ success: false, message: 'threadId required' });
@@ -1374,7 +1417,7 @@ app.post('/api/email-intel/analyze-gmail-thread', requireAuth, requireRole('admi
 });
 
 // Stage a manually-supplied analysis (or its underlying messages) as proposals.
-app.post('/api/email-intel/propose', requireAuth, requireRole('admin','production_manager','stage_manager'), async (req, res) => {
+app.post('/api/email-intel/propose', requireAuth, requireRole('admin','production_manager','stage_manager','lighting_designer'), async (req, res) => {
   try {
     let { analysis, messages, shows } = req.body || {};
     if (!analysis) {
@@ -1608,7 +1651,7 @@ app.delete('/api/industry/user-rules/:id', requireAuth, requireRole('admin','pro
 // Every PM correction is recorded here. Repeated corrections become
 // candidate knowledge that must be authorized before promotion to VenueKnowledge.
 
-app.post('/api/corrections', requireAuth, requireRole('admin','production_manager','stage_manager'), async (req, res) => {
+app.post('/api/corrections', requireAuth, requireRole('admin','production_manager','stage_manager','lighting_designer'), async (req, res) => {
   try {
     await learning.ensureSheets();
     const row = await learning.logCorrection(req.body || {}, req.user);
@@ -2059,7 +2102,7 @@ function stripArtistStaffNotesForNonStaff(req, res, next) {
 app.post('/api/artists',      requireAuth, stripArtistStaffNotesForNonStaff, (req, res, next) => next());
 app.put('/api/artists/:id',   requireAuth, stripArtistStaffNotesForNonStaff, (req, res, next) => next());
 
-crudRoutes(app, '/api/artists',         'artists',        ['admin','production_manager','stage_manager','promoter'], { afterCreate: (row) => ensureArtistFolder(row.id) });
+crudRoutes(app, '/api/artists',         'artists',        ['admin','production_manager','stage_manager','lighting_designer','promoter'], { afterCreate: (row) => ensureArtistFolder(row.id) });
 // Note: artist-documents writes go through the upload endpoint below (which handles Drive too).
 // We expose only GET via crudRoutes-equivalent below to avoid orphaning Drive files on direct deletes.
 
@@ -2319,7 +2362,13 @@ app.post('/api/onboard/:token', async (req, res) => {
     res.status(500).json({ success: false, message: err.message });
   }
 });
-crudRoutes(app, '/api/staff', 'staff', ['admin','production_manager'], { afterCreate: autoCreateUserForStaff, awaitAfterCreate: true, deleteRoles: ['admin'] });
+crudRoutes(app, '/api/staff', 'staff', ['admin','production_manager'], {
+  afterCreate: autoCreateUserForStaff,
+  awaitAfterCreate: true,
+  deleteRoles: ['admin'],
+  // Employees can see the roster (names/roles for call sheets) but not pay rates.
+  sanitizeRead: stripMoneyFields('rates', 'rate'),
+});
 
 // ── Users (admin + production_manager) ────────────────────────────────────────
 // Production managers can list/create/invite non-admin users but cannot edit
@@ -2663,7 +2712,7 @@ app.get('/api/techpack', requireAuth, async (req, res) => {
   } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 });
 
-app.put('/api/techpack/:stage', requireAuth, requireRole('admin', 'production_manager', 'stage_manager'), async (req, res) => {
+app.put('/api/techpack/:stage', requireAuth, requireRole('admin', 'production_manager', 'stage_manager', 'lighting_designer', 'audio_engineer'), async (req, res) => {
   try {
     const stage = req.params.stage;
     if (!TECHPACK_STAGES.includes(stage))
@@ -2700,7 +2749,7 @@ app.put('/api/techpack/:stage', requireAuth, requireRole('admin', 'production_ma
 // Upload/replace the current PDF for a stage's tech pack. Uploads to Drive,
 // makes it link-shareable, and stores fileId/url/name/type on the TechPack row.
 app.post('/api/techpack/:stage/pdf',
-  requireAuth, requireRole('admin', 'production_manager', 'stage_manager'),
+  requireAuth, requireRole('admin', 'production_manager', 'stage_manager', 'lighting_designer', 'audio_engineer'),
   async (req, res) => {
     try {
       const stage = req.params.stage;
@@ -2758,7 +2807,7 @@ app.post('/api/techpack/:stage/pdf',
 );
 
 app.delete('/api/techpack/:stage/pdf',
-  requireAuth, requireRole('admin', 'production_manager', 'stage_manager'),
+  requireAuth, requireRole('admin', 'production_manager', 'stage_manager', 'lighting_designer', 'audio_engineer'),
   async (req, res) => {
     try {
       const stage = req.params.stage;
@@ -2810,7 +2859,7 @@ app.delete('/api/techpack/:stage/pdf',
 // Note: the SSE fan-out is in-memory and therefore single-process. If the
 // deployment ever scales to multiple app instances this needs a shared
 // pub/sub (Redis, Pusher, etc.).
-const PATCH_WRITE_ROLES = ['admin','production_manager','stage_manager'];
+const PATCH_WRITE_ROLES = ['admin','production_manager','stage_manager','lighting_designer','audio_engineer'];
 
 const patchSubscribers  = new Map(); // patchListId -> Set<res>
 const patchWriteQueues  = new Map(); // patchListId -> Promise chain (serializes writes)
@@ -3209,7 +3258,7 @@ app.post('/api/emails/save-to-drive', requireAuth, async (req, res) => {
 // If artistId is missing but showId is provided, we resolve the artist from
 // the show (same logic used by the email assign handler).
 app.post('/api/emails/save-to-artist',
-  requireAuth, requireRole('admin','production_manager','stage_manager'),
+  requireAuth, requireRole('admin','production_manager','stage_manager','lighting_designer'),
   async (req, res) => {
     try {
       const {
@@ -3324,13 +3373,14 @@ app.get('/api/artists/:id/documents', requireAuth, async (req, res) => {
   }
 });
 
-// Upload a document to an artist's folder (PM+ / Stage Manager)
+// Upload a document to an artist's folder (PM+ / Stage Manager / Lighting
+// Designer / Audio Engineer — audio engineers manage console scene/showfiles)
 // Body: { filename, mimeType, data (base64), type, year, notes, showId, showDate,
 //         console, consoleFirmware, engineerRole }
 // The console-* fields are optional metadata used for console scene/showfiles
 // (e.g. type: 'consoleFile', console: 'Digico SD10', engineerRole: 'FOH').
 app.post('/api/artists/:id/documents',
-  requireAuth, requireRole('admin','production_manager','stage_manager'),
+  requireAuth, requireRole('admin','production_manager','stage_manager','lighting_designer','audio_engineer'),
   async (req, res) => {
     try {
       const {
@@ -3442,9 +3492,10 @@ app.get('/api/artist-documents/:id/download', requireAuth, async (req, res) => {
   }
 });
 
-// Delete a document — removes both the sheet row and the Drive file (PM+ / Stage Manager)
+// Delete a document — removes both the sheet row and the Drive file
+// (PM+ / Stage Manager / Lighting Designer / Audio Engineer)
 app.delete('/api/artist-documents/:id',
-  requireAuth, requireRole('admin','production_manager','stage_manager'),
+  requireAuth, requireRole('admin','production_manager','stage_manager','lighting_designer','audio_engineer'),
   async (req, res) => {
     try {
       const rows = await sheets.getRows(config.googleSheets.sheets.artistDocuments);
@@ -3473,7 +3524,7 @@ app.delete('/api/artist-documents/:id',
 // Body: { advanceId, fields: ['riderNotes','productionNeeds',...] }
 // Only the listed fields are written; anything not in ARTIST_DEFAULT_FIELDS is ignored.
 app.post('/api/artists/:id/promote-from-advance',
-  requireAuth, requireRole('admin','production_manager','stage_manager'),
+  requireAuth, requireRole('admin','production_manager','stage_manager','lighting_designer'),
   async (req, res) => {
     try {
       const { advanceId, fields } = req.body || {};
@@ -3585,7 +3636,7 @@ async function migrateOneShowToArtist(show, artists, drive, uploadedBy) {
 }
 
 app.post('/api/shows/:id/migrate-attachments-to-artist',
-  requireAuth, requireRole('admin','production_manager','stage_manager'),
+  requireAuth, requireRole('admin','production_manager','stage_manager','lighting_designer'),
   async (req, res) => {
     try {
       const [shows, artists] = await Promise.all([
@@ -4070,7 +4121,7 @@ app.get('/api/emails', requireAuth, async (req, res) => {
 // If setAdvanceEmail is true, the email's sender (or recipient if outbound)
 // is also written into the Advancing record's advanceEmail so future syncs
 // pick up the contact automatically.
-app.post('/api/emails/:id/assign', requireAuth, requireRole('admin', 'production_manager', 'stage_manager', 'promoter'), async (req, res) => {
+app.post('/api/emails/:id/assign', requireAuth, requireRole('admin', 'production_manager', 'stage_manager', 'lighting_designer', 'promoter'), async (req, res) => {
   try {
     const { id } = req.params;
     const { showId, artistId: bodyArtistId, setAdvanceEmail } = req.body;
@@ -4200,7 +4251,7 @@ app.post('/api/emails/:id/assign', requireAuth, requireRole('admin', 'production
 // At least one of showId / artistId must be provided. If both are supplied,
 // the show's matched artist is used (body artistId is ignored when showId is set).
 // Returns: { success, showId, showName, artistId, artistName, linked, missing }
-app.post('/api/emails/assign-bulk', requireAuth, requireRole('admin', 'production_manager', 'stage_manager', 'promoter'), async (req, res) => {
+app.post('/api/emails/assign-bulk', requireAuth, requireRole('admin', 'production_manager', 'stage_manager', 'lighting_designer', 'promoter'), async (req, res) => {
   try {
     const { ids, showId, artistId: bodyArtistId } = req.body || {};
     if (!Array.isArray(ids) || ids.length === 0) return res.status(400).json({ success: false, message: 'ids[] required' });
@@ -4318,7 +4369,7 @@ app.post('/api/emails/assign-bulk', requireAuth, requireRole('admin', 'productio
 // emails were linked before auto-analyze-on-assign existed, or when the
 // PM wants to refresh proposals after re-linking. proposeFromAnalysis
 // dedupes so replays never spam duplicates.
-app.post('/api/advancement/:showId/reanalyze-emails', requireAuth, requireShowAccess, requireRole('admin','production_manager','stage_manager'), async (req, res) => {
+app.post('/api/advancement/:showId/reanalyze-emails', requireAuth, requireShowAccess, requireRole('admin','production_manager','stage_manager','lighting_designer'), async (req, res) => {
   try {
     const { showId } = req.params;
     const [shows, allEmails] = await Promise.all([
@@ -4701,7 +4752,7 @@ app.post('/api/emails/sync', requireAuth, async (req, res) => {
 });
 
 // POST /api/emails/sync-all  — sync all open advances (also called by auto-sync)
-app.post('/api/emails/sync-all', requireAuth, requireRole('admin', 'production_manager', 'stage_manager', 'promoter'), async (req, res) => {
+app.post('/api/emails/sync-all', requireAuth, requireRole('admin', 'production_manager', 'stage_manager', 'lighting_designer', 'promoter'), async (req, res) => {
   try {
     const picked = await pickGmailClient(req);
     if (!picked) return res.status(503).json({ success: false, message: 'Gmail not configured.' });

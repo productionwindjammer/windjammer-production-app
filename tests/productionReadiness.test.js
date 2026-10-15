@@ -1071,10 +1071,12 @@ test('HARDENING · canUserAccessShow — promoter sees own show, crew sees sched
   // Promoter path: matches on Shows.promoter.
   assert.ok(/role === 'promoter'/.test(body), 'promoter branch must exist');
   assert.ok(/show\.promoter/.test(body), 'promoter branch must compare to Shows.promoter');
-  // Crew path: matches on Labor.workerName + showId.
-  assert.ok(/role === 'crew'/.test(body), 'crew branch must exist');
+  // Employee path (crew/staff/tech): matches on Labor.workerName + showId.
+  assert.ok(/EMPLOYEE_ROLES\.has\(role\)/.test(body), 'employee branch must exist');
+  assert.ok(/EMPLOYEE_ROLES = new Set\(\['crew', 'staff', 'tech'\]\)/.test(src),
+    'employee roles must cover crew, staff and tech');
   assert.ok(/labor/i.test(body) && /workerName/.test(body),
-    'crew branch must scope on Labor.workerName');
+    'employee branch must scope on Labor.workerName');
   // Default deny.
   assert.ok(/return false;/.test(body), 'default branch must deny');
   // Middleware wrapper exists.

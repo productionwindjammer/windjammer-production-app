@@ -8,6 +8,7 @@ import {
   exportTechPackStageHtml,
   exportTechPackSectionPrint,
 } from '../utils/techpackExport'
+import { canEditTechContent } from '../utils/roles'
 
 const STAGES = [
   { id: 'inside', label: 'Inside Stage', color: '#60aeff' },
@@ -29,7 +30,7 @@ const DEFAULT_SECTIONS = [
 
 export default function TechPack() {
   const { effectiveRole } = useAuth()
-  const canEdit = ['admin', 'production_manager', 'stage_manager'].includes(effectiveRole)
+  const canEdit = canEditTechContent(effectiveRole)
   const [docs, setDocs]       = useState([])       // one per stage: { stage, sections, updatedAt }
   const [loading, setLoading] = useState(true)
   const [stage, setStage]     = useState('inside')

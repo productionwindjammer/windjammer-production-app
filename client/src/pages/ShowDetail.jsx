@@ -9,7 +9,7 @@ import { useAuth } from '../context/AuthContext'
 import { useVenue } from '../context/VenueContext'
 import { formatTime, byTime } from '../utils/time'
 import { getTicketStats } from '../utils/stages'
-import { hasFinancialAccess } from '../utils/roles'
+import { hasFinancialAccess, canEditTechContent } from '../utils/roles'
 import AiProposalsBanner from '../components/AiProposalsBanner'
 
 const DOC_TYPES = [
@@ -90,7 +90,10 @@ export default function ShowDetail() {
   const { settings } = useSettings()
   const { user, effectiveRole } = useAuth()
   const { venue } = useVenue()
-  const canEditDocs      = ['admin', 'production_manager', 'stage_manager'].includes(effectiveRole)
+  const canEditDocs      = ['admin', 'production_manager', 'stage_manager', 'lighting_designer'].includes(effectiveRole)
+  // Audio engineers can edit technical content (patch list, show/console
+  // documents) without the broader manager powers above.
+  const canEditTech      = canEditTechContent(effectiveRole)
   const canSeeFinancials = hasFinancialAccess(effectiveRole)
   const tf = settings.timeFormat || '12h'
 
@@ -1526,10 +1529,12 @@ export default function ShowDetail() {
                 )}
               </div>
             )}
-            <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
-              <button className="btn btn-ghost" onClick={openCrewBuilder}>+ Build Crew</button>
-              <button className="btn btn-primary" onClick={openAddLabor}>+ Add Worker</button>
-            </div>
+            {canEditDocs && (
+              <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+                <button className="btn btn-ghost" onClick={openCrewBuilder}>+ Build Crew</button>
+                <button className="btn btn-primary" onClick={openAddLabor}>+ Add Worker</button>
+              </div>
+            )}
           </div>
           <div className="card">
             {labor.length === 0 ? (
@@ -1562,10 +1567,12 @@ export default function ShowDetail() {
                         {canSeeFinancials && <td><strong style={{ color: '#6ee7b7' }}>{l.total ? `$${l.total}` : '—'}</strong></td>}
                         <td className="text-muted" style={{ maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.notes || '—'}</td>
                         <td>
-                          <div className="actions-cell">
-                            <button className="btn btn-ghost btn-sm" onClick={() => openEditLabor(l)}>Edit</button>
-                            <button className="btn btn-danger btn-sm" onClick={() => handleDeleteLabor(l.id)}>Del</button>
-                          </div>
+                          {canEditDocs && (
+                            <div className="actions-cell">
+                              <button className="btn btn-ghost btn-sm" onClick={() => openEditLabor(l)}>Edit</button>
+                              <button className="btn btn-danger btn-sm" onClick={() => handleDeleteLabor(l.id)}>Del</button>
+                            </div>
+                          )}
                         </td>
                       </tr>
                     ))}
@@ -1585,7 +1592,7 @@ export default function ShowDetail() {
           showId={id}
           artistId={artistId}
           artistName={show.artist || ''}
-          canEdit={canEditDocs}
+          canEdit={canEditTech}
           exportMeta={{
             showTitle: show.artist || show.eventName || '',
             date:      show.date || '',
@@ -1619,7 +1626,7 @@ export default function ShowDetail() {
             </div>
           ) : (
             <>
-              {canEditDocs && (
+              {canEditTech && (
                 <div style={{ padding: 14, background: 'rgba(255,255,255,0.04)', borderRadius: 8, marginBottom: 16 }}>
                   <div className="form-row" style={{ alignItems: 'flex-end', flexWrap: 'wrap' }}>
                     {artistMatches.length > 1 && (
@@ -1739,7 +1746,7 @@ export default function ShowDetail() {
                             {d.uploadedBy && <div style={{ fontSize: 11 }}>{d.uploadedBy}</div>}
                           </td>
                           <td>
-                            {canEditDocs && (
+                            {canEditTech && (
                               <button className="btn btn-danger btn-sm" onClick={() => removeDoc(d)}>Del</button>
                             )}
                             <a className="btn btn-ghost btn-sm" href={docDownloadUrl(d.id)} download={d.name} title="Download original file">↓</a>

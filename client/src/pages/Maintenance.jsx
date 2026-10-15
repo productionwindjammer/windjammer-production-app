@@ -6,10 +6,11 @@ import { useAuth } from '../context/AuthContext'
 import { money } from '../utils/exportHelpers'
 
 // Maintenance — issues (repair/upkeep tickets) + projects (production-head proposals).
-// stage_manager can submit and edit; only admin / production_manager may approve,
+// stage_manager / lighting_designer can submit and edit; only admin / production_manager may approve,
 // reject, or delete. quotes column is a JSON blob (parsed on read, stringified on write).
 
-const ALLOWED_ROLES  = ['admin', 'production_manager', 'stage_manager']
+const ALLOWED_ROLES  = ['admin', 'production_manager', 'stage_manager', 'lighting_designer']
+const SUBMITTER_ROLES = new Set(['stage_manager', 'lighting_designer'])
 const APPROVER_ROLES = ['admin', 'production_manager']
 
 const ITEM_TYPES = [
@@ -247,8 +248,8 @@ export default function Maintenance() {
 
   function canEdit(row) {
     if (canApprove) return true
-    if (role !== 'stage_manager') return false
-    // Stage managers may only edit their own submissions.
+    if (!SUBMITTER_ROLES.has(role)) return false
+    // Submitters (stage manager / lighting designer) may only edit their own submissions.
     const owner = (row.proposedBy || row.reportedBy || '').trim().toLowerCase()
     return owner && owner === myIdentity.toLowerCase()
   }

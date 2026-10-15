@@ -13,6 +13,8 @@ const ROLE_LABELS = {
   admin: 'Admin',
   production_manager: 'Production Manager',
   stage_manager: 'Stage Manager',
+  lighting_designer: 'Lighting Designer',
+  audio_engineer: 'Audio Engineer',
   crew: 'Crew',
   staff: 'Crew',
   tech: 'Crew',
